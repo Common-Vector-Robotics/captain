@@ -450,34 +450,3 @@ launchctl unload ~/Library/LaunchAgents/com.intermode.captain-sentry-bridge.plis
 # Load the service so it runs on its schedule.
 launchctl load ~/Library/LaunchAgents/com.intermode.captain-sentry-bridge.plist
 ```
-
-## OpenClaw Slack DM read hotfix
-
-OpenClaw 2026.7.1 incorrectly applies Slack's group-channel policy to DM read targets. Captain's reviewed hotfix and exact compatible versions are recorded in`config/openclaw-slack-dm-read-hotfix.json`.
-
-Preview or deploy the hotfix on the Captain host:
-
-```bash
-# Preview the hotfix without changing the installed OpenClaw files.
-python3 scripts/deploy_openclaw_slack_dm_read_hotfix.py --dry-run
-
-# Apply the hotfix after reviewing the preview.
-python3 scripts/deploy_openclaw_slack_dm_read_hotfix.py
-```
-
-The deployment only authorizes DM channel IDs already present in Captain's weekly check-in state. It also updates the weekly cron instruction to read the stored `D...` conversation ID through the Captain account; OpenClaw 2026.7.1 cannot resolve a `user:...` read target to an approved DM. Unlisted DMs and group/channel reads remain blocked, and Captain's account-level DM disable controls remain authoritative. The script backs up the installed Slack runtime, OpenClaw config, and original cron message before applying the patch. Deployment uses an exclusive lock, phase journal, checksummed postconditions, and compensating rollback before recording a local audit event.
-
-To restore the exact pre-hotfix runtime and channel entries:
-
-```bash
-# Restore the files and settings saved before the hotfix was applied.
-python3 scripts/deploy_openclaw_slack_dm_read_hotfix.py --rollback
-```
-
-The live Slack DM authorization regression test is opt-in because it requires
-Captain's local Slack credentials and mutable status state:
-
-```bash
-# Run the optional live Slack DM test using Captain's local credentials.
-CAPTAIN_LIVE_SLACK_TEST=1 python3 tests/test_openclaw_slack_dm_reads.py
-```
