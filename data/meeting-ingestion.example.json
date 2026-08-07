@@ -1,0 +1,13 @@
+{
+  "google_cli": "gog",
+  "google_account": "captain@example.com",
+  "sender": "gemini-notes@google.com",
+  "subject_prefixes": ["Notes:"],
+  "meeting_title_patterns": [
+    "Daily Standup",
+    "Weekly Standup",
+    "EOW Standup"
+  ],
+  "lookback_days": 10,
+  "local_summary_directory": null
+}

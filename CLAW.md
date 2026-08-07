@@ -30,6 +30,8 @@ workspace:
       path: data/captain-channels.example.json
     - source: data/critical-path-overrides.example.json
       path: data/critical-path-overrides.example.json
+    - source: data/meeting-ingestion.example.json
+      path: data/meeting-ingestion.example.json
     - source: cron-prompts/daily-morning-cycle.md
       path: cron-prompts/daily-morning-cycle.md
     - source: cron-prompts/daily-blocker-chase.md
@@ -38,6 +40,8 @@ workspace:
       path: cron-prompts/daily-bench-truth-watch.md
     - source: cron-prompts/daily-eod-wrap.md
       path: cron-prompts/daily-eod-wrap.md
+    - source: cron-prompts/meeting-transcript-clickup-reconciliation.md
+      path: cron-prompts/meeting-transcript-clickup-reconciliation.md
     - source: scripts/blocker_ledger.py
       path: scripts/blocker_ledger.py
     - source: scripts/captain_db.py
@@ -91,6 +95,15 @@ cronJobs:
     delivery:
       mode: none
     message: Read cron-prompts/daily-blocker-chase.md and follow it exactly. Final response must be NO_REPLY.
+  - id: meeting-transcript-reconciliation
+    name: Captain meeting transcript reconciliation
+    schedule:
+      cron: "0 14 * * 1-5"
+      timezone: America/Detroit
+    session: isolated
+    delivery:
+      mode: none
+    message: Read cron-prompts/meeting-transcript-clickup-reconciliation.md and follow it exactly. Final response must be NO_REPLY.
   - id: bench-truth-watch
     name: Captain daily bench truth and channel watch
     schedule:

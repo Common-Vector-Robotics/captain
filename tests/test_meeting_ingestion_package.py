@@ -1,0 +1,98 @@
+import json
+import re
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+PRIVATE_PATTERNS = (
+    r"/Users/[^/\s]+/",
+    r"\b[\w.+-]+@intermode\.io\b",
+    r"\bU[A-Z0-9]{8,}\b",
+)
+
+
+def _cron_block(cron_id):
+    manifest = (ROOT / "CLAW.md").read_text(encoding="utf-8")
+    match = re.search(
+        rf"(?ms)^  - id: {re.escape(cron_id)}\n(?P<body>.*?)(?=^  - id:|^---$)",
+        manifest,
+    )
+    assert match is not None, f"missing Claw cron {cron_id}"
+    return match.group("body")
+
+
+def test_ingestion_dependencies_are_packaged():
+    manifest = (ROOT / "CLAW.md").read_text(encoding="utf-8")
+    package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    for path in (
+        "data/meeting-ingestion.example.json",
+        "cron-prompts/meeting-transcript-clickup-reconciliation.md",
+    ):
+        assert f"    - source: {path}\n      path: {path}\n" in manifest
+        assert path in package["files"]
+
+
+def test_ingestion_cron_contract():
+    block = _cron_block("meeting-transcript-reconciliation")
+    assert "    name: Captain meeting transcript reconciliation\n" in block
+    assert '      cron: "0 14 * * 1-5"\n' in block
+    assert "      timezone: America/Detroit\n" in block
+    assert "    session: isolated\n" in block
+    assert "      mode: none\n" in block
+    assert "meeting-transcript-clickup-reconciliation.md" in block
+    assert "Final response must be NO_REPLY." in block
+
+
+def test_example_config_is_safe_and_complete():
+    config = json.loads(
+        (ROOT / "data" / "meeting-ingestion.example.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert config == {
+        "google_cli": "gog",
+        "google_account": "captain@example.com",
+        "sender": "gemini-notes@google.com",
+        "subject_prefixes": ["Notes:"],
+        "meeting_title_patterns": [
+            "Daily Standup",
+            "Weekly Standup",
+            "EOW Standup",
+        ],
+        "lookback_days": 10,
+        "local_summary_directory": None,
+    }
+
+
+def test_prompt_keeps_the_runtime_safety_contract():
+    prompt = (
+        ROOT / "cron-prompts" / "meeting-transcript-clickup-reconciliation.md"
+    ).read_text(encoding="utf-8")
+    required = (
+        "data/meeting-ingestion.json",
+        "data/captain-channels.json",
+        "data/captain-modes.json",
+        "Transcript first",
+        "Notes",
+        "partial",
+        "scripts/clickup_write.py",
+        "audit-log.jsonl",
+        "shadow_recipient",
+        "program_channel",
+        "slack_account",
+        "excluded_user_ids",
+        "NO_REPLY",
+        "30",
+    )
+    for value in required:
+        assert value in prompt
+
+
+def test_ingestion_artifacts_exclude_private_deployment_data():
+    paths = (
+        ROOT / "data" / "meeting-ingestion.example.json",
+        ROOT / "cron-prompts" / "meeting-transcript-clickup-reconciliation.md",
+    )
+    combined = "".join(path.read_text(encoding="utf-8") for path in paths)
+    for pattern in PRIVATE_PATTERNS:
+        assert re.search(pattern, combined) is None
