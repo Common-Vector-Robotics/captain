@@ -120,9 +120,7 @@ python3 scripts/fetch_clickup_tasks.py --out /tmp/captain-clickup-smoke.json
 
 ### 4. Connect Captain to Slack
 
-Captain requires a dedicated Slack app and bot. Follow the maintained
-[OpenClaw Slack setup guide](https://docs.openclaw.ai/channels/slack) to create the app,
-configure its scopes and events, install the Slack plugin, and store its tokens securely.
+Captain requires a dedicated Slack app and bot. Follow the maintained [OpenClaw Slack setup guide](https://docs.openclaw.ai/channels/slack) to create the app, configure its scopes and events, install the Slack plugin, and store its tokens securely.
 
 For Captain specifically:
 
@@ -133,6 +131,17 @@ For Captain specifically:
 - Keep `"slack_account": "captain"` in `data/captain-channels.json` aligned with the
   OpenClaw account name. A mismatched account or missing channel membership can surface as
   a misleading `channel_not_found` error.
+
+Recommended channels:
+
+- `#captains-quarters` — the team-facing program channel for morning briefs, blocker and
+  bench digests, end-of-day wraps, and incident threads. Use it as `program_channel`.
+- `#dry-dock` — a private operator channel for shadow-mode previews and Captain's daily
+  activity report. Use it as `shadow_recipient` and, unless you want a separate reporting
+  channel, `activity_digest_channel`.
+
+Also invite Captain to the team's existing project and operations channels that it should
+monitor; those channels do not need Captain-specific names.
 
 Verify the connection before configuring Captain's routing:
 
