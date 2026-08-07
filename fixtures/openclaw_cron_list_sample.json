@@ -1,0 +1,23 @@
+{
+  "jobs": [
+    {
+      "id": "job-cognify",
+      "name": "Nightly Cognee cognify",
+      "schedule": "30 1 * * *",
+      "state": {"errors": 46, "lastError": "cognify timeout after 300s"}
+    },
+    {
+      "id": "job-checkins",
+      "name": "Thursday employee check-ins",
+      "schedule": "0 9 * * 4",
+      "errorCount": 0
+    },
+    {
+      "id": "job-stale",
+      "name": "Friday stale-task briefing",
+      "schedule": "0 8 * * 5",
+      "consecutiveErrors": 2,
+      "lastError": "message tool: channel not found"
+    }
+  ]
+}

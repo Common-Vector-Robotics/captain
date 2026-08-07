@@ -18,6 +18,12 @@ workspace:
   files:
     - source: requirements.txt
       path: requirements.txt
+    - source: launchd/com.intermode.captain-sentry-bridge.plist
+      path: launchd/com.intermode.captain-sentry-bridge.plist
+    - source: fixtures/openclaw_cron_list_sample.json
+      path: fixtures/openclaw_cron_list_sample.json
+    - source: tests/test_openclaw_cron_sentry_bridge.py
+      path: tests/test_openclaw_cron_sentry_bridge.py
     - source: data/captain-modes.json
       path: data/captain-modes.json
     - source: data/captain-channels.example.json
@@ -40,6 +46,8 @@ workspace:
       path: scripts/captain_modes.py
     - source: scripts/captain_telemetry.py
       path: scripts/captain_telemetry.py
+    - source: scripts/openclaw_cron_sentry_bridge.py
+      path: scripts/openclaw_cron_sentry_bridge.py
     - source: scripts/clickup_credentials.py
       path: scripts/clickup_credentials.py
     - source: scripts/clickup_write.py
