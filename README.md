@@ -4,7 +4,7 @@ Captain is an openclaw-based project manager for technical teams. Captain automa
 
 ## Install and set up
 
-Captain is packaged as an OpenClaw Claw (note that .claw packages are still ). It installs Captain as a new agent with four weekday daily-loop jobs plus daily reporting in every`DailyLoop` mode, including `off`. The four operational jobs remain off until you configure them locally.
+Captain is packaged as an OpenClaw Claw (note: .claw packages are still experimental). It installs Captain as a new agent with four weekday daily-loop jobs plus daily reporting in every`DailyLoop` mode, including `off`. The four operational jobs remain off until you configure them locally.
 
 ### Prerequisites
 
