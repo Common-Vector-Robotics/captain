@@ -148,35 +148,11 @@ Excluded from git by design:
 
 Runtime state remains on the Captain host unless explicitly exported through a reviewed process.
 
-## OpenClaw Slack DM read hotfix
-
-OpenClaw 2026.7.1 incorrectly applies Slack's group-channel policy to DM read targets. Captain's reviewed hotfix and exact compatible versions are recorded in`config/openclaw-slack-dm-read-hotfix.json`.
-
-Preview or deploy the hotfix on the Captain host:
-
-```bash
-python3 scripts/deploy_openclaw_slack_dm_read_hotfix.py --dry-run
-python3 scripts/deploy_openclaw_slack_dm_read_hotfix.py
-```
-
-The deployment only authorizes DM channel IDs already present in Captain's weekly check-in state. It also updates the weekly cron instruction to read the stored `D...` conversation ID through the Captain account; OpenClaw 2026.7.1 cannot resolve a `user:...` read target to an approved DM. Unlisted DMs and group/channel reads remain blocked, and Captain's account-level DM disable controls remain authoritative. The script backs up the installed Slack runtime, OpenClaw config, and original cron message before applying the patch. Deployment uses an exclusive lock, phase journal, checksummed postconditions, and compensating rollback before recording a local audit event.
-
-To restore the exact pre-hotfix runtime and channel entries:
-
-```bash
-python3 scripts/deploy_openclaw_slack_dm_read_hotfix.py --rollback
-```
-
-The live Slack DM authorization regression test is opt-in because it requires
-Captain's local Slack credentials and mutable status state:
-
-```bash
-CAPTAIN_LIVE_SLACK_TEST=1 python3 tests/test_openclaw_slack_dm_reads.py
-```
+# Extras
 
 ## Sentry telemetry
 
-Captain reports hard failures (script crashes, session-report server errors, OpenClaw cron job failures) to Sentry. Design: `docs/superpowers/specs/2026-07-27-captain-sentry-integration-design.md`.
+Captain can report hard failures (script crashes, session-report server errors, OpenClaw cron job failures) to Sentry.
 
 The cron bridge runs every 10 minutes via launchd on the Captain host, diffs `openclaw cron list --json` error counters, and heartbeats the `captain-openclaw-bridge` Sentry monitor (dead-man's switch — a missed check-in means the host, OpenClaw, or the bridge is down).
 
@@ -235,3 +211,29 @@ launchctl load ~/Library/LaunchAgents/com.intermode.captain-sentry-bridge.plist
 ```
 
 Telemetry is inert without `.secrets/sentry.env` (never committed).
+
+## OpenClaw Slack DM read hotfix
+
+OpenClaw 2026.7.1 incorrectly applies Slack's group-channel policy to DM read targets. Captain's reviewed hotfix and exact compatible versions are recorded in`config/openclaw-slack-dm-read-hotfix.json`.
+
+Preview or deploy the hotfix on the Captain host:
+
+```bash
+python3 scripts/deploy_openclaw_slack_dm_read_hotfix.py --dry-run
+python3 scripts/deploy_openclaw_slack_dm_read_hotfix.py
+```
+
+The deployment only authorizes DM channel IDs already present in Captain's weekly check-in state. It also updates the weekly cron instruction to read the stored `D...` conversation ID through the Captain account; OpenClaw 2026.7.1 cannot resolve a `user:...` read target to an approved DM. Unlisted DMs and group/channel reads remain blocked, and Captain's account-level DM disable controls remain authoritative. The script backs up the installed Slack runtime, OpenClaw config, and original cron message before applying the patch. Deployment uses an exclusive lock, phase journal, checksummed postconditions, and compensating rollback before recording a local audit event.
+
+To restore the exact pre-hotfix runtime and channel entries:
+
+```bash
+python3 scripts/deploy_openclaw_slack_dm_read_hotfix.py --rollback
+```
+
+The live Slack DM authorization regression test is opt-in because it requires
+Captain's local Slack credentials and mutable status state:
+
+```bash
+CAPTAIN_LIVE_SLACK_TEST=1 python3 tests/test_openclaw_slack_dm_reads.py
+```
