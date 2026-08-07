@@ -15,11 +15,25 @@ Captain is packaged as an OpenClaw Claw (note: .claw packages are still experime
 
 ### 1. Install the Claw
 
-Run these commands from this package directory (the directory containing `CLAW.md`). Before creating the install plan, set `AUTHORIZED_TOGGLE_USERS` to the Slack user IDs and names allowed to switch Captain between `off`, `shadow`, and `live`:
+Clone this repository outside of your openclaw folder:
+
+```Shell
+# Make a directory (or choose your own)
+mkdir -p ~/src
+
+# Clone captain repository
+cd ~/src
+git clone <repository-url> captain
+
+# Change wd to captain's folder
+cd captain
+```
+
+Run these commands from this package directory (the directory containing `CLAW.md`). Before installing, set `AUTHORIZED_TOGGLE_USERS` to the Slack user IDs and names allowed to switch Captain between `off`, `shadow`, and `live`:
 
 ```bash
-# Open the list of users who can change Captain's operating mode.
-${EDITOR:-vi} scripts/captain_modes.py
+# Set authorized users in captain_modes.py (Slack User IDs)
+nano scripts/captain_modes.py
 ```
 
 Then inspect and preview the package:
@@ -40,9 +54,7 @@ Replace `SHA256_FROM_DRY_RUN` below with that value, then apply the exact plan:
 
 ```bash
 # Install the exact package plan you just reviewed.
-openclaw claws add . \
-  --yes \
-  --plan-integrity SHA256_FROM_DRY_RUN
+openclaw claws add . --yes --plan-integrity SHA256_FROM_DRY_RUN
 ```
 
 `--yes` alone is intentionally insufficient. OpenClaw rejects the install if the package, destination, or live configuration changed after the dry run.
@@ -59,7 +71,7 @@ openclaw doctor
 
 The default workspace is `~/.openclaw/workspace-captain`. If the install plan reported a different path, use that path in the remaining commands.
 
-### 2. Install the Python dependency
+### 2. Install Python dependencies
 
 ```bash
 # Move into Captain's installed workspace.
@@ -101,8 +113,7 @@ Verify the credentials with a read-only board fetch:
 
 ```bash
 # Test the ClickUp connection and save the results to a temporary file.
-python3 scripts/fetch_clickup_tasks.py \
-  --out /tmp/captain-clickup-smoke.json
+python3 scripts/fetch_clickup_tasks.py --out /tmp/captain-clickup-smoke.json
 ```
 
 ### 4. Configure Slack routing and operators
@@ -112,7 +123,7 @@ python3 scripts/fetch_clickup_tasks.py \
 cp data/captain-channels.example.json data/captain-channels.json
 
 # Open the local configuration and replace its placeholder values.
-${EDITOR:-vi} data/captain-channels.json
+nano data/captain-channels.json
 
 # Check that the edited file contains valid JSON.
 python3 -m json.tool data/captain-channels.json >/dev/null
@@ -189,7 +200,7 @@ Runtime state remains on the Captain host unless explicitly exported through a r
 
 Captain can report hard failures (script crashes, session-report server errors, OpenClaw cron job failures) to Sentry.
 
-The cron bridge runs every 10 minutes via launchd on the Captain host, diffs `openclaw cron list --json` error counters, and heartbeats the `captain-openclaw-bridge` Sentry monitor (dead-man's switch — a missed check-in means the host, OpenClaw, or the bridge is down).
+The cron bridge runs every 10 minutes via launchd on the Captain host, diffs `openclaw cron list --json` error counters, and heartbeats the `captain-openclaw-bridge` Sentry monitor (dead-man's switch: a missed check-in means the host, OpenClaw, or the bridge is down).
 
 Deploy/refresh on the Captain host:
 
