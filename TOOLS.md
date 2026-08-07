@@ -23,6 +23,23 @@ Optional pilot filters:
 - `CAPTAIN_CLICKUP_LIST_IDS` comma-separated list IDs
 - `CAPTAIN_CLICKUP_SPACE_IDS` comma-separated space IDs
 
+## Google meeting ingestion
+
+The weekday `meeting-transcript-reconciliation` cron reads
+`cron-prompts/meeting-transcript-clickup-reconciliation.md`. It discovers configured
+Gemini meeting-note emails through an authenticated `gog` CLI, analyzes the Google Docs
+Transcript first and Notes second, then reconciles only unambiguous changes into ClickUp.
+
+- Example configuration: `data/meeting-ingestion.example.json`
+- Local configuration: `data/meeting-ingestion.json` (never commit)
+- Runtime state: `data/meeting-transcript-clickup-reconciliation-state.json`
+- Required Google scopes: Gmail, Drive, and Docs for the configured account
+- Default schedule: weekdays at 14:00 `America/Detroit`, editable in `CLAW.md` before install
+
+The configuration stores discovery settings, not credentials. Never store raw email,
+Transcript, or Notes content in tracked files, audit logs, or Slack; the prompt uses short
+timestamped paraphrases as evidence.
+
 ## Storage
 
 - SQLite DB: `data/captain.sqlite`

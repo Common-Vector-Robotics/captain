@@ -2,7 +2,7 @@
 
 ![Captain Logo](image/README/captain_logo_2.png)
 
-Captain is an openclaw-based project manager for technical teams. Captain automatically manages Clickup tasks, checks in with team members over Slack to receive status updates, infers critical paths, and coordinates team members to remove blockers and prioritize important tasks. Captain also reads and infers tasks based on meeting transcripts sent to his configured email address.
+Captain is an OpenClaw-based project manager for technical teams. Captain automatically manages ClickUp tasks, checks in with team members over Slack, infers critical paths, and coordinates owners to remove blockers and prioritize important work. Captain can also reconcile Gemini meeting notes received in Gmail and stored in Google Docs. Other transcript providers and arbitrary email attachments are not currently supported.
 
 ## What Captain does
 
@@ -51,14 +51,15 @@ Captain is an openclaw-based project manager for technical teams. Captain automa
 
 ## Install and set up
 
-Captain is packaged as an OpenClaw Claw (note: .claw packages are still experimental). It installs Captain as a new agent with four weekday daily-loop jobs plus daily reporting in every`DailyLoop` mode, including `off`. The four operational jobs remain off until you configure them locally.
+Captain is packaged as an OpenClaw Claw (note: `.claw` packages are still experimental). It installs Captain as a new agent with five weekday operational jobs plus daily reporting in every `DailyLoop` mode, including `off`. The five operational jobs remain off until you configure them locally.
 
 ### Prerequisites
 
 - A working [OpenClaw installation](https://docs.openclaw.ai/) with its Gateway and Slack channel configured
 - Python 3
 - A ClickUp API key and ClickUp team ID
-- A Slack account dedicated to Captain, plus the user and channel IDs used in`data/captain-channels.json`
+- A Slack account dedicated to Captain, plus the user and channel IDs used in `data/captain-channels.json`
+- The `gog` Google CLI, authenticated to a Gmail account with Gmail, Drive, and Docs access
 
 ### 1. Install the Claw
 
@@ -163,7 +164,41 @@ Verify the credentials with a read-only board fetch:
 python3 scripts/fetch_clickup_tasks.py --out /tmp/captain-clickup-smoke.json
 ```
 
-### 4. Connect Captain to Slack
+### 4. Configure meeting ingestion
+
+Captain supports Gemini meeting-note emails in Gmail whose links open Notes and Transcript
+sections in Google Docs. Copy the example, then replace the sample account and meeting-title
+patterns with values for your team:
+
+```bash
+# Create the local ingestion configuration in Captain's installed workspace.
+cd ~/.openclaw/workspace-captain
+cp data/meeting-ingestion.example.json data/meeting-ingestion.json
+nano data/meeting-ingestion.json
+
+# Confirm that the configuration is valid JSON.
+python3 -m json.tool data/meeting-ingestion.json >/dev/null
+```
+
+The configured `google_cli` defaults to `gog`. Authenticate `google_account` for Gmail,
+Drive, and Docs using the command supported by your installed `gog` version; a typical
+setup is:
+
+```bash
+gog auth add captain@example.com
+```
+
+Do not put a password, OAuth token, or client secret in `meeting-ingestion.json`. The
+scheduled job never starts an interactive OAuth flow. `sender`, `subject_prefixes`, and
+`meeting_title_patterns` control discovery; `lookback_days` controls partial-note retries;
+`local_summary_directory` may be a readable local directory or `null`.
+
+The default reconciliation schedule is 14:00 on weekdays in `America/Detroit`. It should
+run after Gemini has produced the Transcript. To use another cadence or timezone, edit the
+`meeting-transcript-reconciliation` entry in `CLAW.md` before inspecting and installing the
+package.
+
+### 5. Connect Captain to Slack
 
 Captain requires a dedicated Slack app and bot. Follow the maintained [OpenClaw Slack setup guide](https://docs.openclaw.ai/channels/slack) to create the app, configure its scopes and events, install the Slack plugin, and store its tokens securely.
 
@@ -181,9 +216,6 @@ Recommended channels:
 - `#dry-dock` — a private operator channel for shadow-mode previews and Captain's daily
   activity report. Use it as `shadow_recipient` and, unless you want a separate reporting
   channel, `activity_digest_channel`.
-
-
-
 - Keep `"slack_account": "captain"` in `data/captain-channels.json` aligned with the
   OpenClaw account name. A mismatched account or missing channel membership can surface as
   a misleading `channel_not_found` error.
@@ -198,7 +230,7 @@ Verify the connection before configuring Captain's routing:
 openclaw channels status --probe --json
 ```
 
-### 5. Configure Slack routing and operators
+### 6. Configure Slack routing and operators
 
 ```bash
 # Copy the example Slack settings into a local configuration file.
@@ -213,7 +245,7 @@ python3 -m json.tool data/captain-channels.json >/dev/null
 
 Replace every placeholder in `data/captain-channels.json`. Keep configured files local and do not commit credentials or live routing details.
 
-### 6. Validate in shadow mode
+### 7. Validate in shadow mode
 
 Confirm that Captain starts in `off`, then enable `shadow` using an authorized Slack user ID:
 
@@ -231,16 +263,20 @@ python3 scripts/captain_modes.py dailyloop \
 openclaw cron list --agent captain
 ```
 
-To test immediately, copy one Captain job ID from the cron list and run it:
+To test ingestion immediately, copy the job ID shown for
+`Captain meeting transcript reconciliation` and run it:
 
 ```bash
-# Run one Captain job now. Replace CAPTAIN_CRON_JOB_ID with an ID from the list.
-openclaw cron run CAPTAIN_CRON_JOB_ID \
+# Run the meeting reconciliation job now. Replace MEETING_CRON_JOB_ID.
+openclaw cron run MEETING_CRON_JOB_ID \
   --wait \
   --wait-timeout 10m
 ```
 
-Inspect the configured shadow destination. Confirm that Captain uses the right ClickUp workspace, Slack account, recipients, and program channel before enabling live actions:
+Inspect the configured shadow destination. Confirm that the meeting job read both Transcript
+and Notes, sent output only to `shadow_recipient`, used the intended Google account and
+ClickUp board, and made no ClickUp changes. Then confirm the remaining Captain jobs use the
+right Slack account, recipients, and program channel before enabling live actions:
 
 ```bash
 # Enable Captain's real Slack and ClickUp actions after checking shadow mode.
@@ -262,7 +298,8 @@ python3 scripts/captain_modes.py dailyloop \
 
 See [`BOOTSTRAP.md`](BOOTSTRAP.md) for the setup checklist and safety model.
 
-The package intentionally excludes credentials, configured Slack routing, runtime state, ClickUp exports, audit logs, and local reports.
+The package intentionally excludes credentials, configured Slack and mailbox routing,
+runtime state, ClickUp exports, audit logs, local reports, and raw meeting content.
 
 This repository contains Captain's source prompts, persona files, scripts, and non-sensitive fixtures.
 
@@ -271,7 +308,7 @@ Excluded from git by design:
 - secrets and environment files
 - local OpenClaw runtime state
 - SQLite databases and mutable cron state
-- raw transcripts, screenshots, generated reports, and ClickUp exports
+- raw emails, transcripts, meeting summaries, screenshots, generated reports, and ClickUp exports
 - audit and approval queues that may contain live operational details
 
 Runtime state remains on the Captain host unless explicitly exported through a reviewed process.
