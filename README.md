@@ -395,7 +395,7 @@ EOF
 mkdir -p logs
 ```
 
-`launchd` may use a different Python installation than the one where you installed `sentry-sdk`. Because the bridge silently continues when the SDK is unavailable, it may appear healthy while sending no Sentry events or check-ins. Before loading the plist, verify that `sentry-sdk` is installed for the exact Python interpreter selected by the plist’s `PATH`.
+`launchd` may use a different Python installation than the one where you installed `sentry-sdk`. Because the bridge silently continues when the SDK is unavailable, it may appear healthy while sending no Sentry events or check-ins. Before loading the plist, verify that `sentry-sdk` is installed for the exact Python interpreter selected by the plist’s `PATH`:
 
 ```bash
 # Confirm that launchd's Python can import the Sentry package.
