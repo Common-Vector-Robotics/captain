@@ -42,17 +42,38 @@ Captain is an openclaw-based project manager for technical teams. Captain automa
 ## A day with Captain
 
 ```mermaid
-flowchart LR
-    ALIGN["<b>07:30 - Align</b><br/>- Read ClickUp and overnight Slack<br/>- Rank the highest-leverage work<br/><b>Result:</b> Team top 3 + each owner's top 2"]
-    RECONCILE["<b>14:00 - Reconcile</b><br/>- Read configured meeting evidence<br/>- Audit every clear ClickUp change<br/><b>Result:</b> Updated tasks, blockers + digest"]
-    UNBLOCK["<b>15:15 - Unblock</b><br/>- Match and recheck every blocker<br/>- Chase its owner or escalate the decision<br/><b>Result:</b> No blocker ends the day unowned"]
-    VERIFY["<b>15:45 - Verify</b><br/>- Watch supply, QA, test, and design signals<br/>- Reconcile bench truth with the board<br/><b>Result:</b> Hidden delivery risk surfaced"]
-    CLOSE["<b>17:45 - Close</b><br/>- Sync final evidence-backed changes<br/>- Check milestones and draft replan options<br/><b>Result:</b> EOD wrap + tomorrow's top 3"]
-    REPORT["<b>18:30 - Report</b><br/>- Read audit, state, and job history<br/>- Surface missing or degraded runs<br/><b>Result:</b> Read-only proof-of-life report"]
-    MONITOR["<b>Hourly overnight - Monitor</b><br/>- Scan Slack and assess safety signals<br/>- Page the responsible lead when genuine<br/><b>Result:</b> Escalate immediately or stay silent"]
+flowchart TB
+    ALIGN["`**07:30 - Align**
+- Read ClickUp and overnight Slack
+- Rank the highest-leverage work
+- Result: Team top 3 + each owner's top 2`"]
+    RECONCILE["`**14:00 - Reconcile**
+- Read configured meeting evidence
+- Audit every clear ClickUp change
+- Result: Updated tasks, blockers + digest`"]
+    UNBLOCK["`**15:15 - Unblock**
+- Match and recheck every blocker
+- Chase its owner or escalate the decision
+- Result: No blocker ends the day unowned`"]
+    VERIFY["`**15:45 - Verify**
+- Watch supply, QA, test, and design signals
+- Reconcile bench truth with the board
+- Result: Hidden delivery risk surfaced`"]
+    CLOSE["`**17:45 - Close**
+- Sync final evidence-backed changes
+- Check milestones and draft replan options
+- Result: EOD wrap + tomorrow's top 3`"]
+    REPORT["`**18:30 - Report**
+- Read audit, state, and job history
+- Surface missing or degraded runs
+- Result: Read-only proof-of-life report`"]
+    MONITOR["`**Hourly overnight - Monitor**
+- Scan Slack and assess safety signals
+- Page the responsible lead when genuine
+- Result: Escalate immediately or stay silent`"]
 
     ALIGN --> RECONCILE --> UNBLOCK --> VERIFY --> CLOSE --> REPORT --> MONITOR
-    MONITOR -. "Overnight evidence feeds the next 07:30 alignment" .-> ALIGN
+    MONITOR -. "Feeds the next 07:30 alignment" .-> ALIGN
 
     classDef weekday fill:#eff6ff,stroke:#2563eb,color:#0f172a
     classDef daily fill:#f5f3ff,stroke:#7c3aed,color:#0f172a
