@@ -118,7 +118,30 @@ Verify the credentials with a read-only board fetch:
 python3 scripts/fetch_clickup_tasks.py --out /tmp/captain-clickup-smoke.json
 ```
 
-### 4. Configure Slack routing and operators
+### 4. Connect Captain to Slack
+
+Captain requires a dedicated Slack app and bot. Follow the maintained
+[OpenClaw Slack setup guide](https://docs.openclaw.ai/channels/slack) to create the app,
+configure its scopes and events, install the Slack plugin, and store its tokens securely.
+
+For Captain specifically:
+
+- Name the OpenClaw Slack account `captain` (`channels.slack.accounts.captain`).
+- Enable DMs so Captain can send owner check-ins and receive replies.
+- Invite the bot to the program channel, shadow destination, reporting destination, and
+  every channel Captain should monitor. Captain can only see channels the bot has joined.
+- Keep `"slack_account": "captain"` in `data/captain-channels.json` aligned with the
+  OpenClaw account name. A mismatched account or missing channel membership can surface as
+  a misleading `channel_not_found` error.
+
+Verify the connection before configuring Captain's routing:
+
+```bash
+# Confirm that OpenClaw can authenticate the Captain Slack account.
+openclaw channels status --probe --json
+```
+
+### 5. Configure Slack routing and operators
 
 ```bash
 # Copy the example Slack settings into a local configuration file.
@@ -133,7 +156,7 @@ python3 -m json.tool data/captain-channels.json >/dev/null
 
 Replace every placeholder in `data/captain-channels.json`. Keep configured files local and do not commit credentials or live routing details.
 
-### 5. Validate in shadow mode
+### 6. Validate in shadow mode
 
 Confirm that Captain starts in `off`, then enable `shadow` using an authorized Slack user ID:
 
