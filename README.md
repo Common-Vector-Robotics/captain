@@ -4,6 +4,51 @@
 
 Captain is an openclaw-based project manager for technical teams. Captain automatically manages Clickup tasks, checks in with team members over Slack to receive status updates, infers critical paths, and coordinates team members to remove blockers and prioritize important tasks. Captain also reads and infers tasks based on meeting transcripts sent to his configured email address.
 
+## What Captain does
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      🎯 <strong>Sets the day's priorities</strong><br>
+      Turns ClickUp, Slack, and critical-path context into a focused morning brief.
+    </td>
+    <td width="50%" valign="top">
+      👤 <strong>Gives everyone a personal top two</strong><br>
+      Sends each owner the two highest-leverage tasks for their day.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      🚧 <strong>Drives blockers to resolution</strong><br>
+      Finds stuck work, follows up with the right owner, and escalates unresolved risks.
+    </td>
+    <td width="50%" valign="top">
+      ✅ <strong>Keeps ClickUp honest</strong><br>
+      Creates and updates tasks only when the evidence is clear—and audits every write.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      📡 <strong>Surfaces delivery risk</strong><br>
+      Watches project signals, bench results, dependencies, and milestone health.
+    </td>
+    <td width="50%" valign="top">
+      🛟 <strong>Rolls out safely</strong><br>
+      Moves from <code>off</code> to <code>shadow</code> to <code>live</code> with visible action reporting.
+    </td>
+  </tr>
+</table>
+
+## A day with Captain
+
+<p align="center">
+  <strong>07:30 Align</strong> →
+  <strong>14:00 Reconcile</strong> →
+  <strong>15:15 Unblock</strong> →
+  <strong>15:45 Verify</strong> →
+  <strong>17:45 Close</strong>
+</p>
+
 ## Install and set up
 
 Captain is packaged as an OpenClaw Claw (note: .claw packages are still experimental). It installs Captain as a new agent with four weekday daily-loop jobs plus daily reporting in every`DailyLoop` mode, including `off`. The four operational jobs remain off until you configure them locally.
