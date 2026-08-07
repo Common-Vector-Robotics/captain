@@ -41,13 +41,26 @@ Captain is an openclaw-based project manager for technical teams. Captain automa
 
 ## A day with Captain
 
-<p align="center">
-  <strong>07:30 Align</strong> →
-  <strong>14:00 Reconcile</strong> →
-  <strong>15:15 Unblock</strong> →
-  <strong>15:45 Verify</strong> →
-  <strong>17:45 Close</strong>
-</p>
+```mermaid
+flowchart LR
+    ALIGN["<b>07:30 - Align</b><br/>- Read ClickUp and overnight Slack<br/>- Rank the highest-leverage work<br/><b>Result:</b> Team top 3 + each owner's top 2"]
+    RECONCILE["<b>14:00 - Reconcile</b><br/>- Read configured meeting evidence<br/>- Audit every clear ClickUp change<br/><b>Result:</b> Updated tasks, blockers + digest"]
+    UNBLOCK["<b>15:15 - Unblock</b><br/>- Match and recheck every blocker<br/>- Chase its owner or escalate the decision<br/><b>Result:</b> No blocker ends the day unowned"]
+    VERIFY["<b>15:45 - Verify</b><br/>- Watch supply, QA, test, and design signals<br/>- Reconcile bench truth with the board<br/><b>Result:</b> Hidden delivery risk surfaced"]
+    CLOSE["<b>17:45 - Close</b><br/>- Sync final evidence-backed changes<br/>- Check milestones and draft replan options<br/><b>Result:</b> EOD wrap + tomorrow's top 3"]
+    REPORT["<b>18:30 - Report</b><br/>- Read audit, state, and job history<br/>- Surface missing or degraded runs<br/><b>Result:</b> Read-only proof-of-life report"]
+    MONITOR["<b>Hourly overnight - Monitor</b><br/>- Scan Slack and assess safety signals<br/>- Page the responsible lead when genuine<br/><b>Result:</b> Escalate immediately or stay silent"]
+
+    ALIGN --> RECONCILE --> UNBLOCK --> VERIFY --> CLOSE --> REPORT --> MONITOR
+    MONITOR -. "Overnight evidence feeds the next 07:30 alignment" .-> ALIGN
+
+    classDef weekday fill:#eff6ff,stroke:#2563eb,color:#0f172a
+    classDef daily fill:#f5f3ff,stroke:#7c3aed,color:#0f172a
+    classDef hourly fill:#fff7ed,stroke:#ea580c,color:#0f172a
+    class ALIGN,RECONCILE,UNBLOCK,VERIFY,CLOSE weekday
+    class REPORT daily
+    class MONITOR hourly
+```
 
 ## Install and set up
 
