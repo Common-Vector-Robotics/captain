@@ -1,5 +1,7 @@
 # Captain
 
+![1786130464841](image/README/1786130464841.png)
+
 Captain is an openclaw-based project manager for technical teams. Captain automatically manages Clickup tasks, checks in with team members over Slack to receive status updates, infers critical paths, and coordinates team members to remove blockers and prioritize important tasks. Captain also reads and infers tasks based on meeting transcripts sent to his configured email address.
 
 ## Install and set up
@@ -229,32 +231,53 @@ cat > .secrets/sentry.env <<'EOF'
 SENTRY_DSN=<your project's Sentry DSN>
 # SENTRY_ENVIRONMENT=captain-host   # optional, defaults to captain-host
 EOF
-```
 
-`SENTRY_DSN` is required. Use the real DSN from the Sentry project settings — do not paste a placeholder that looks like a real one into any committed file.
-
-```bash
 # Create the local log folder required by the launchd service.
 mkdir -p logs
 ```
 
-launchd runs the bridge via `/usr/bin/env python3` with`PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`, so `python3` there resolves to whichever interpreter is first on that PATH — not necessarily the one you just installed `sentry-sdk` for. If they differ, the bridge still runs (the SDK import is lazy and no-ops on failure) but silently sends no events or check-ins, and the dead-man's-switch monitor will report the bridge as down. Verify with the same interpreter resolution launchd uses before (or alongside) loading the plist:
+`launchd` may use a different Python installation than the one where you installed `sentry-sdk`. Because the bridge silently continues when the SDK is unavailable, it may appear healthy while sending no Sentry events or check-ins. Before loading the plist, verify that `sentry-sdk` is installed for the exact Python interpreter selected by the plist’s `PATH`.
 
 ```bash
 # Confirm that launchd's Python can import the Sentry package.
 PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin /usr/bin/env python3 -c "import sentry_sdk; print(sentry_sdk.VERSION)"
 ```
 
-If this fails with `ModuleNotFoundError`, install the dependency for that specific interpreter (rerun the pip command above using that same PATH) — installing it for your interactive shell's `python3` is not enough.
+If this fails with `ModuleNotFoundError`, install the dependencies for that specific interpreter:
 
-Before enabling the timer, run the bridge against the real, installed`openclaw` on this host and confirm the cron JSON field names actually parse:
+```Shell
+PYTHON_PATH="$(PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin /usr/bin/env python3 -c 'import sys; print(sys.executable)')"
+"$PYTHON_PATH" -m pip install --user -r requirements.txt
+```
+
+Before enabling scheduled Sentry checks, test the Sentry-to-OpenClaw connection on this computer. Confirm that OpenClaw accepts the scheduling settings without errors:
 
 ```bash
 # Test the Sentry bridge without sending telemetry or changing cron jobs.
 python3 scripts/openclaw_cron_sentry_bridge.py --dry-run
 ```
 
-Check the output: `jobs` should be greater than 0 and `counters_missing` should be `[]`. If every job shows up in `counters_missing`, OpenClaw's field names don't match what `job_view()` looks for, and the bridge will silently report zero failures forever while the dead-man's-switch still says it's healthy — fix the field mapping in `scripts/openclaw_cron_sentry_bridge.py` before loading the plist, not after.
+Check the output: `jobs` should be greater than 0 and `counters_missing` should be `[]`.
+
+If every job shows up in `counters_missing`, OpenClaw's field names don't match what `job_view()` looks for, and the bridge will silently report zero failures forever while the dead-man's-switch still says it's healthy! Fix the field mapping in `scripts/openclaw_cron_sentry_bridge.py` before loading the plist:
+
+```Shell
+# Inspect the actual counter and error fields returned by OpenClaw.
+openclaw cron list --json |
+  jq '.jobs[] | {
+    name,
+    top_level_keys: keys,
+    state_keys: (.state // {} | keys),
+    state: .state
+  }'
+  
+# Update job_view() to match the error fields returned by `openclaw cron list --json`.
+nano scripts/openclaw_cron_sentry_bridge.py
+
+# Re-verify
+python3 -m pytest tests/test_openclaw_cron_sentry_bridge.py -v
+python3 scripts/openclaw_cron_sentry_bridge.py --dry-run
+```
 
 `launchd/com.intermode.captain-sentry-bridge.plist` hardcodes `WorkingDirectory` and both `StandardOutPath`/`StandardErrorPath` to `/Users/owen/.openclaw/workspace-captain`. If you are deploying from a different clone or a different user's home directory, edit those three paths in the plist before copying it in.
 
@@ -268,8 +291,6 @@ launchctl unload ~/Library/LaunchAgents/com.intermode.captain-sentry-bridge.plis
 # Load the service so it runs on its schedule.
 launchctl load ~/Library/LaunchAgents/com.intermode.captain-sentry-bridge.plist
 ```
-
-Telemetry is inert without `.secrets/sentry.env` (never committed).
 
 ## OpenClaw Slack DM read hotfix
 
