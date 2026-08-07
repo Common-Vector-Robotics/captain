@@ -128,9 +128,6 @@ For Captain specifically:
 - Enable DMs so Captain can send owner check-ins and receive replies.
 - Invite the bot to the program channel, shadow destination, reporting destination, and
   every channel Captain should monitor. Captain can only see channels the bot has joined.
-- Keep `"slack_account": "captain"` in `data/captain-channels.json` aligned with the
-  OpenClaw account name. A mismatched account or missing channel membership can surface as
-  a misleading `channel_not_found` error.
 
 Recommended channels:
 
@@ -139,6 +136,12 @@ Recommended channels:
 - `#dry-dock` — a private operator channel for shadow-mode previews and Captain's daily
   activity report. Use it as `shadow_recipient` and, unless you want a separate reporting
   channel, `activity_digest_channel`.
+
+
+
+- Keep `"slack_account": "captain"` in `data/captain-channels.json` aligned with the
+  OpenClaw account name. A mismatched account or missing channel membership can surface as
+  a misleading `channel_not_found` error.
 
 Also invite Captain to the team's existing project and operations channels that it should
 monitor; those channels do not need Captain-specific names.
