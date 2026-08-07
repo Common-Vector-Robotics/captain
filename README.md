@@ -2,9 +2,34 @@
 
 Captain is an openclaw-based project manager for technical teams. Captain automatically manages Clickup tasks, checks in with team members over Slack to receive status updates, infers critical paths, and coordinates team members to remove blockers and prioritize important tasks. Captain also reads and infers tasks based on meeting transcripts sent to his configured email address.
 
-## Install as an OpenClaw Claw
+## Install and set up
 
-Captain is packaged as a .claw. It installs Captain as a new agent with four weekday daily-loop jobs plus daily reporting in every `DailyLoop` mode, including `off`. The four operational jobs remain off until you configure them locally.
+Captain is packaged as an experimental OpenClaw Claw. It installs Captain as a
+new agent with four weekday daily-loop jobs plus daily reporting in every
+`DailyLoop` mode, including `off`. The four operational jobs remain off until
+you configure them locally.
+
+### Prerequisites
+
+- A working [OpenClaw installation](https://docs.openclaw.ai/) with its Gateway
+  and Slack channel configured
+- Python 3
+- A ClickUp API key and ClickUp team ID
+- A Slack account dedicated to Captain, plus the user and channel IDs used in
+  `data/captain-channels.json`
+
+### 1. Install the Claw
+
+Run these commands from this package directory (the directory containing
+`CLAW.md`). Before creating the install plan, set `AUTHORIZED_TOGGLE_USERS` to
+the Slack user IDs and names allowed to switch Captain between `off`, `shadow`,
+and `live`:
+
+```bash
+${EDITOR:-vi} scripts/captain_modes.py
+```
+
+Then inspect and preview the package:
 
 ```bash
 export OPENCLAW_EXPERIMENTAL_CLAWS=1
@@ -12,11 +37,118 @@ openclaw claws inspect .
 openclaw claws add . --dry-run --json
 ```
 
-Review the resulting plan and its `planIntegrity` value, then add the package
-with OpenClaw's explicit consent flow. On first run, complete
-[`BOOTSTRAP.md`](BOOTSTRAP.md): configure ClickUp credentials, create a local
-`data/captain-channels.json` from the included example, and validate shadow
-mode before enabling live actions.
+Review every action in the dry-run output and copy its `planIntegrity` value.
+Replace `SHA256_FROM_DRY_RUN` below with that value, then apply the exact plan:
+
+```bash
+openclaw claws add . \
+  --yes \
+  --plan-integrity SHA256_FROM_DRY_RUN
+```
+
+`--yes` alone is intentionally insufficient. OpenClaw rejects the install if
+the package, destination, or live configuration changed after the dry run.
+
+Confirm the installed agent and note the workspace path reported by OpenClaw:
+
+```bash
+openclaw claws status captain --json
+openclaw doctor
+```
+
+The default workspace is `~/.openclaw/workspace-captain`. If the install plan
+reported a different path, use that path in the remaining commands.
+
+### 2. Install the Python dependency
+
+```bash
+cd ~/.openclaw/workspace-captain
+python3 -m pip install --user -r requirements.txt
+```
+
+Homebrew-managed Python may reject that command with
+`error: externally-managed-environment`. In that case, install into its user
+site explicitly:
+
+```bash
+python3 -m pip install --user --break-system-packages -r requirements.txt
+```
+
+### 3. Configure ClickUp
+
+Create a local secrets file without committing it:
+
+```bash
+mkdir -p .secrets
+chmod 700 .secrets
+cat > .secrets/clickup.env <<'EOF'
+CLICKUP_API_KEY=replace-with-your-clickup-api-key
+CLICKUP_TEAM_ID=replace-with-your-clickup-team-id
+EOF
+chmod 600 .secrets/clickup.env
+```
+
+Verify the credentials with a read-only board fetch:
+
+```bash
+python3 scripts/fetch_clickup_tasks.py \
+  --out /tmp/captain-clickup-smoke.json
+```
+
+### 4. Configure Slack routing and operators
+
+```bash
+cp data/captain-channels.example.json data/captain-channels.json
+${EDITOR:-vi} data/captain-channels.json
+python3 -m json.tool data/captain-channels.json >/dev/null
+```
+
+Replace every placeholder in `data/captain-channels.json`. Keep configured
+files local and do not commit credentials or live routing details.
+
+### 5. Validate in shadow mode
+
+Confirm that Captain starts in `off`, then enable `shadow` using an authorized
+Slack user ID:
+
+```bash
+python3 scripts/captain_modes.py status
+python3 scripts/captain_modes.py dailyloop \
+  --audience shadow \
+  --user-id U0123456789 \
+  --source initial-setup
+openclaw cron list --agent captain
+```
+
+To test immediately, copy one Captain job ID from the cron list and run it:
+
+```bash
+openclaw cron run CAPTAIN_CRON_JOB_ID \
+  --wait \
+  --wait-timeout 10m
+```
+
+Inspect the configured shadow destination. Confirm that Captain uses the right
+ClickUp workspace, Slack account, recipients, and program channel before
+enabling live actions:
+
+```bash
+python3 scripts/captain_modes.py dailyloop \
+  --audience live \
+  --user-id U0123456789 \
+  --source initial-setup
+```
+
+To stop operational actions while keeping the daily read-only activity report:
+
+```bash
+python3 scripts/captain_modes.py dailyloop \
+  --audience off \
+  --user-id U0123456789 \
+  --source manual-stop
+```
+
+See [`BOOTSTRAP.md`](BOOTSTRAP.md) for the setup checklist and safety model.
 
 The package intentionally excludes credentials, configured Slack routing,
 runtime state, ClickUp exports, audit logs, and local reports.
