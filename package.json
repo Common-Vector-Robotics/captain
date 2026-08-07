@@ -1,0 +1,43 @@
+{
+  "name": "captain-workspace",
+  "version": "0.1.0",
+  "description": "An evidence-driven OpenClaw project-management agent for keeping ClickUp and team reality aligned.",
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "CLAW.md",
+    "BOOTSTRAP.md",
+    "LICENSE",
+    "profiles/openclaw.yml",
+    "README.md",
+    "AGENTS.md",
+    "HEARTBEAT.md",
+    "TOOLS.md",
+    "requirements.txt",
+    "cron-prompts/daily-morning-cycle.md",
+    "cron-prompts/daily-blocker-chase.md",
+    "cron-prompts/daily-bench-truth-watch.md",
+    "cron-prompts/daily-eod-wrap.md",
+    "data/captain-modes.json",
+    "data/captain-channels.example.json",
+    "data/critical-path-overrides.example.json",
+    "scripts/blocker_ledger.py",
+    "scripts/captain_db.py",
+    "scripts/captain_modes.py",
+    "scripts/captain_telemetry.py",
+    "scripts/clickup_credentials.py",
+    "scripts/clickup_write.py",
+    "scripts/critical_paths.py",
+    "scripts/captain_activity.py",
+    "scripts/daily_activity_digest.py",
+    "scripts/daily_context.py",
+    "scripts/daily_cycle.py",
+    "scripts/daily_wrap.py",
+    "scripts/fetch_clickup_tasks.py",
+    "scripts/personal_top2.py",
+    "scripts/slack_user_names.py"
+  ],
+  "openclaw": {
+    "claw": "CLAW.md"
+  }
+}

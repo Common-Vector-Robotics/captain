@@ -1,0 +1,14 @@
+{
+  "force_include_task_ids": [],
+  "force_exclude_task_ids": [],
+  "paths": [
+    {
+      "id": "example-critical-path",
+      "name": "Example critical path",
+      "priority": "critical",
+      "target_date": "2026-06-30",
+      "task_ids": [],
+      "score_boost": 100
+    }
+  ]
+}

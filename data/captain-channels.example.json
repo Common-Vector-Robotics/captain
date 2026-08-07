@@ -1,0 +1,58 @@
+{
+  "_comment": "Copy this file to captain-channels.json and replace every placeholder before enabling DailyLoop. Keep the configured file local.",
+  "admin_recipients": {
+    "Operations lead": "U0123456789"
+  },
+  "shadow_recipient": "channel:C0123456789",
+  "activity_digest_channel": "channel:C0123456789",
+  "slack_account": "captain",
+  "program_channel": {
+    "name": "captains-quarters",
+    "id": "C0123456789"
+  },
+  "eng_leads": [],
+  "excluded_user_ids": [],
+  "watch": {
+    "mode": "all_except",
+    "exclude_names": ["random"],
+    "exclude_ids": [],
+    "fallback_include_ids": []
+  },
+  "safety_keywords": [
+    "safety",
+    "injury",
+    "injured",
+    "fire",
+    "smoke",
+    "burning",
+    "estop",
+    "e-stop",
+    "emergency stop",
+    "runaway",
+    "collision",
+    "crash",
+    "thermal runaway",
+    "battery swelling",
+    "short circuit",
+    "sparks",
+    "unattended motion",
+    "lockout",
+    "tagout"
+  ],
+  "urgent_keywords": [
+    "blocked",
+    "blocker",
+    "down",
+    "broken",
+    "failed",
+    "failure",
+    "urgent",
+    "asap",
+    "critical",
+    "deadline slip",
+    "line down",
+    "cannot test",
+    "missed shipment",
+    "backorder"
+  ]
+}
