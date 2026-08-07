@@ -90,6 +90,7 @@ class Event(tuple):
     # `kind`/`raw` there instead.
 
     def __new__(cls, ts, line, kind, raw):
+        """Create one feed item with both readable text and its original details."""
         obj = super().__new__(cls, (ts, line))
         obj.kind = kind
         obj.raw = raw
@@ -149,6 +150,7 @@ def _parse_ts(value):
 
 
 def _first_parsed_ts(d, keys):
+    """Return the first usable timestamp found under the preferred field names."""
     if not isinstance(d, dict):
         return None
     for key in keys:
@@ -160,6 +162,7 @@ def _first_parsed_ts(d, keys):
 
 
 def _duration_seconds(run):
+    """Work out how many seconds a scheduled run took, when the data allows it."""
     for key in ("durationSeconds", "duration_seconds"):
         val = run.get(key)
         if isinstance(val, (int, float)) and not isinstance(val, bool):
@@ -176,6 +179,7 @@ def _duration_seconds(run):
 
 
 def _extract_runs(payload):
+    """Find the list of scheduled-run records in several supported response shapes."""
     if isinstance(payload, dict):
         for key in ("entries", "runs", "data", "items"):
             val = payload.get(key)
@@ -188,6 +192,7 @@ def _extract_runs(payload):
 
 
 def _state_name(path):
+    """Turn a state filename into the short name shown in the activity feed."""
     stem = path.stem
     if stem.endswith("-state"):
         return stem[: -len("-state")]
@@ -195,6 +200,7 @@ def _state_name(path):
 
 
 def _local(ts):
+    """Format a timestamp in the computer's local time for display."""
     return ts.astimezone().strftime(TIME_FORMAT)
 
 
@@ -228,13 +234,17 @@ def run_openclaw(args, openclaw_bin="openclaw", timeout=30):
 
 
 def _default_cron_list_fn(openclaw_bin):
+    """Build the function used to ask OpenClaw for its scheduled jobs."""
     def fn():
+        """Request and return OpenClaw's current scheduled-job list."""
         return run_openclaw(["cron", "list", "--json"], openclaw_bin=openclaw_bin)
     return fn
 
 
 def _default_cron_runs_fn(openclaw_bin):
+    """Build the function used to ask OpenClaw for a job's run history."""
     def fn(job_id):
+        """Request and return the run history for one scheduled job."""
         return run_openclaw(
             ["cron", "runs", "--id", str(job_id)], openclaw_bin=openclaw_bin
         )
@@ -268,6 +278,7 @@ def list_captain_jobs(cron_list_fn):
 
 
 def collect_cron_events(cutoff, cron_list_fn, cron_runs_fn):
+    """Collect recent scheduled-job runs and warnings for the activity feed."""
     events = []
     captain_jobs, warnings = list_captain_jobs(cron_list_fn)
     for job in captain_jobs:
@@ -301,6 +312,7 @@ def collect_cron_events(cutoff, cron_list_fn, cron_runs_fn):
 
 
 def collect_state_events(cutoff, data_dir):
+    """Collect recent decisions and warning flags saved in Captain's state files."""
     events = []
     warnings = []
     try:
@@ -374,6 +386,7 @@ def collect_state_events(cutoff, data_dir):
 
 
 def collect_audit_events(cutoff, path):
+    """Collect recent real actions from Captain's audit log."""
     events = []
     warnings = []
     if not path.exists():
@@ -418,6 +431,7 @@ def collect_audit_events(cutoff, path):
 
 
 def build_report(hours, root=None, cron_list_fn=None, cron_runs_fn=None, now=None):
+    """Combine scheduled runs, saved decisions, and audited actions into one timeline."""
     root = root or ROOT
     now = now or datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=hours)
@@ -457,6 +471,7 @@ def _parse_hours_argument(argv):
 
 def main(argv=None, root=None, cron_list_fn=None, cron_runs_fn=None,
          now=None, stdout=None, stderr=None):
+    """Print Captain's recent activity as a readable command-line report."""
     argv = sys.argv[1:] if argv is None else list(argv)
     stdout = stdout or sys.stdout
     stderr = stderr or sys.stderr

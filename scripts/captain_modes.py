@@ -20,16 +20,19 @@ AUTHORIZED_TOGGLE_USERS = {
 
 
 def now_iso():
+    """Return the current time in a standard, timezone-aware text format."""
     return datetime.now(timezone.utc).isoformat()
 
 
 def load_modes():
+    """Read Captain's saved operating modes, or return an empty setup."""
     if MODE_PATH.exists():
         return json.loads(MODE_PATH.read_text(encoding="utf-8"))
     return {}
 
 
 def save_modes(modes):
+    """Safely replace the saved operating-mode file with new settings."""
     MODE_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = MODE_PATH.with_suffix(".tmp")
     tmp.write_text(json.dumps(modes, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -40,6 +43,7 @@ DAILYLOOP_AUDIENCES = ("off", "shadow", "live")
 
 
 def set_dailyloop(audience, user_id, source):
+    """Set the daily loop to off, preview-only, or live for an authorized user."""
     if audience not in DAILYLOOP_AUDIENCES:
         raise SystemExit("Invalid DailyLoop audience: %s (choose from %s)"
                          % (audience, ", ".join(DAILYLOOP_AUDIENCES)))
@@ -60,6 +64,7 @@ def set_dailyloop(audience, user_id, source):
 
 
 def main():
+    """Show the current modes or apply a requested daily-loop mode change."""
     ap = argparse.ArgumentParser(description="Read or update persisted Captain modes")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status")

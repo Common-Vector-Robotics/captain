@@ -80,6 +80,7 @@ _BOUND = 240  # max chars for any free-text field folded into the digest
 
 
 def _bounded(text, limit=_BOUND):
+    """Shorten text to a safe report length while clearly marking the cut."""
     text = str(text or "")
     return text if len(text) <= limit else text[: limit - len("...[truncated]")] + "...[truncated]"
 
@@ -118,6 +119,7 @@ _CRON_SUMMARY_BOUND = 200
 
 
 def _bounded_cron_summary(text, limit=_CRON_SUMMARY_BOUND):
+    """Shorten a scheduled-job summary and remove repeated spacing and line breaks."""
     text = " ".join(str(text or "").split())
     return text if len(text) <= limit else text[: limit - len("...[truncated]")] + "...[truncated]"
 
@@ -160,6 +162,7 @@ def read_dailyloop_audience(modes_path):
 
 
 def read_channels_config(channels_path):
+    """Read Captain's Slack channel settings from JSON."""
     try:
         data = json.loads(Path(channels_path).read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
@@ -168,11 +171,13 @@ def read_channels_config(channels_path):
 
 
 def resolve_activity_digest_channel(channels_cfg):
+    """Choose the Slack channel where the activity digest should be posted."""
     target = channels_cfg.get("activity_digest_channel")
     return target if isinstance(target, str) and target else DEFAULT_ACTIVITY_DIGEST_CHANNEL
 
 
 def resolve_slack_account(channels_cfg):
+    """Return the configured Slack account Captain must use for the digest."""
     # Same key data/captain-channels.json's other Slack sends already read;
     # see that file's `_comment_slack_account` for why omitting it fails
     # with a misleading `channel_not_found`.
@@ -202,6 +207,7 @@ def _default_send_fn(openclaw_bin):
     the real host before being trusted."""
 
     def fn(text, target, account, timeout=30):
+        """Ask OpenClaw to send one digest message to Slack."""
         try:
             result = subprocess.run(
                 [openclaw_bin, "message", "send", "--channel", "slack",
@@ -263,6 +269,7 @@ def _attribute_source(source):
 
 
 def _count_by_attribution(events):
+    """Count activity events by the Captain source that produced them."""
     counts = {"daily_loop": 0, "other": 0, "unattributed": 0}
     for e in events:
         counts[_attribute_source(e.raw.get("source"))] += 1
@@ -312,6 +319,7 @@ def _cron_due_but_absent(job, now):
 
 def build_digest(hours, root=None, cron_list_fn=None, cron_runs_fn=None, now=None,
                  modes_path=None, channels_cfg=None):
+    """Build a summary of Captain's recent work and missing scheduled runs."""
     root = root or ROOT
     events, warnings, now = ca.build_report(
         hours, root=root, cron_list_fn=cron_list_fn, cron_runs_fn=cron_runs_fn, now=now,
@@ -583,6 +591,7 @@ def render_mrkdwn(digest):
 # --------------------------------------------------------------------------
 
 def build_arg_parser():
+    """Define the command-line options accepted by the digest tool."""
     ap = argparse.ArgumentParser(
         description=(
             "Mechanically-generated summary of what Captain did in the last "
@@ -610,6 +619,7 @@ def build_arg_parser():
 
 def main(argv=None, root=None, cron_list_fn=None, cron_runs_fn=None, send_fn=None,
          now=None, stdout=None, stderr=None):
+    """Print or send Captain's recent-activity digest based on command-line choices."""
     argv = sys.argv[1:] if argv is None else list(argv)
     root = root or ROOT
     stdout = stdout or sys.stdout

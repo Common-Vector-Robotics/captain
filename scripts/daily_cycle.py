@@ -36,10 +36,12 @@ PHASES = ("morning", "eod")
 
 
 def _now():
+    """Return the current time in a standard, timezone-aware text format."""
     return datetime.now(timezone.utc).isoformat()
 
 
 def _ensure(db_path):
+    """Create or safely update the daily-cycle table when needed."""
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(db_path)) as c:
         c.executescript(SCHEMA)
@@ -53,6 +55,7 @@ def _ensure(db_path):
 
 
 def _upsert(db_path, date_str, **updates):
+    """Create a day's record if needed, then save the supplied changes."""
     _ensure(db_path)
     t = _now()
     with sqlite3.connect(str(db_path)) as c:
@@ -67,12 +70,14 @@ def _upsert(db_path, date_str, **updates):
 
 
 def set_top3(db_path, date_str, items):
+    """Save the three priorities selected for the current day."""
     out = _upsert(db_path, date_str, top3=json.dumps(list(items)))
     audit("daily_cycle_top3_set", date=date_str, count=len(items))
     return out
 
 
 def set_tomorrow_top3(db_path, date_str, items):
+    """Save the three priorities selected for the following day."""
     out = _upsert(db_path, date_str, tomorrow_top3=json.dumps(list(items)))
     audit("daily_cycle_tomorrow_top3_set", date=date_str, count=len(items))
     return out
@@ -93,6 +98,7 @@ def set_personal_top2(db_path, date_str, items):
 
 
 def stamp(db_path, date_str, phase):
+    """Record when the morning or end-of-day phase finished."""
     if phase not in PHASES:
         raise ValueError("invalid phase: %s (choose from %s)" % (phase, ",".join(PHASES)))
     out = _upsert(db_path, date_str, **{phase + "_done_at": _now()})
@@ -101,6 +107,7 @@ def stamp(db_path, date_str, phase):
 
 
 def get_cycle(db_path, date_str):
+    """Return the saved daily-cycle record for a date, if one exists."""
     _ensure(db_path)
     with sqlite3.connect(str(db_path)) as c:
         row = c.execute(
@@ -117,6 +124,7 @@ def get_cycle(db_path, date_str):
 
 
 def main():
+    """Handle command-line requests to read or update the daily cycle."""
     ap = argparse.ArgumentParser(description="Captain daily cycle store")
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("set-top3", "set-tomorrow"):

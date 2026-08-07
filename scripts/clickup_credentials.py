@@ -8,10 +8,13 @@ KNOWN_KEYS = frozenset(("CLICKUP_API_KEY", "CLICKUP_TEAM_ID"))
 
 
 class MissingClickUpCredentials(RuntimeError):
+    """Explain that Captain cannot connect because required ClickUp details are missing."""
+
     pass
 
 
 def _read_known_values(path):
+    """Read only the recognized ClickUp settings from a local settings file."""
     try:
         lines = Path(path).read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -41,6 +44,7 @@ def _read_known_values(path):
 
 
 def load_clickup_credentials(required_keys, environ=None, env_path=None):
+    """Find the required ClickUp settings in the environment or local settings file."""
     environ = os.environ if environ is None else environ
     required_keys = tuple(required_keys)
     file_values = {}

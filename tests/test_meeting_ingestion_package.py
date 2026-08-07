@@ -12,6 +12,7 @@ PRIVATE_PATTERNS = (
 
 
 def _cron_block(cron_id):
+    """Find one scheduled-job section in the public package description."""
     manifest = (ROOT / "CLAW.md").read_text(encoding="utf-8")
     match = re.search(
         rf"(?ms)^  - id: {re.escape(cron_id)}\n(?P<body>.*?)(?=^  - id:|^---$)",
@@ -22,6 +23,7 @@ def _cron_block(cron_id):
 
 
 def test_ingestion_dependencies_are_packaged():
+    """Confirm the meeting settings and instructions ship with the package."""
     manifest = (ROOT / "CLAW.md").read_text(encoding="utf-8")
     package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
     for path in (
@@ -33,6 +35,7 @@ def test_ingestion_dependencies_are_packaged():
 
 
 def test_ingestion_cron_contract():
+    """Confirm the packaged meeting job keeps its expected schedule and safeguards."""
     block = _cron_block("meeting-transcript-reconciliation")
     assert "    name: Captain meeting transcript reconciliation\n" in block
     assert '      cron: "0 14 * * 1-5"\n' in block
@@ -44,6 +47,7 @@ def test_ingestion_cron_contract():
 
 
 def test_example_config_is_safe_and_complete():
+    """Confirm the example settings are complete and use placeholder information."""
     config = json.loads(
         (ROOT / "data" / "meeting-ingestion.example.json").read_text(
             encoding="utf-8"
@@ -65,6 +69,7 @@ def test_example_config_is_safe_and_complete():
 
 
 def test_prompt_keeps_the_runtime_safety_contract():
+    """Confirm the meeting instructions retain every required safety rule."""
     prompt = (
         ROOT / "cron-prompts" / "meeting-transcript-clickup-reconciliation.md"
     ).read_text(encoding="utf-8")
@@ -89,6 +94,7 @@ def test_prompt_keeps_the_runtime_safety_contract():
 
 
 def test_ingestion_artifacts_exclude_private_deployment_data():
+    """Confirm public meeting files contain no private paths, emails, or Slack IDs."""
     paths = (
         ROOT / "data" / "meeting-ingestion.example.json",
         ROOT / "cron-prompts" / "meeting-transcript-clickup-reconciliation.md",

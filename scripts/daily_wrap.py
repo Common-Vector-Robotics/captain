@@ -20,6 +20,7 @@ NON_PROGRESS = {"to do", "backlog", "not started", "intake", "open"}
 
 
 def _tasks(path):
+    """Read tasks from either a plain list or a ClickUp-style JSON file."""
     data = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
     if isinstance(data, list):
         return data
@@ -27,6 +28,7 @@ def _tasks(path):
 
 
 def _audit_counts(audit_path, date_str):
+    """Count the task and blocker actions recorded during the chosen local day."""
     # "Today" here is defined as the full America/Detroit local calendar day
     # (00:00 to the next 00:00) — this must agree with `_blocker_day` below, which
     # compares `_local_date(...)` (a local calendar date) against `date_str` with no
@@ -75,6 +77,7 @@ def _local_date(iso_ts):
 
 
 def _blocker_day(db_path, date_str):
+    """Summarize blockers opened, cleared, escalated, or still open that day."""
     out = {"opened_today": 0, "cleared_today": 0, "escalated_open": 0, "still_open": 0}
     if not Path(db_path).exists():
         return out
@@ -107,6 +110,7 @@ def _blocker_day(db_path, date_str):
 
 
 def _milestone_risk(eod_tasks, critical_paths_path, today):
+    """Find important work at risk because it is late, idle, or has no owner."""
     if not critical_paths_path or not Path(critical_paths_path).exists():
         return {"at_risk_paths": []}
     cfg = json.loads(Path(critical_paths_path).read_text(encoding="utf-8"))
@@ -133,6 +137,7 @@ def _milestone_risk(eod_tasks, critical_paths_path, today):
 
 def build_wrap(morning_snapshot_path, eod_clickup_path, audit_path, db_path,
                date_str, critical_paths_path):
+    """Compare morning and evening data to build the end-of-day summary."""
     today = datetime.strptime(date_str, "%Y-%m-%d").date()
     morning = _tasks(morning_snapshot_path)
     eod = _tasks(eod_clickup_path)
@@ -158,6 +163,7 @@ def build_wrap(morning_snapshot_path, eod_clickup_path, audit_path, db_path,
 
 
 def main():
+    """Read command-line options, build the daily wrap, and print it as JSON."""
     ap = argparse.ArgumentParser(description="Captain EOD wrap builder")
     ap.add_argument("--morning", required=True)
     ap.add_argument("--eod", required=True)

@@ -22,6 +22,7 @@ CLOSED_TYPES = {"done", "closed"}
 
 
 def status_of(task):
+    """Return a task's status name and status category in a consistent form."""
     s = task.get("status")
     if isinstance(s, dict):
         return (s.get("status") or "").lower(), (s.get("type") or "").lower()
@@ -29,11 +30,13 @@ def status_of(task):
 
 
 def is_open(task):
+    """Tell whether a task still needs work rather than being finished or closed."""
     name, typ = status_of(task)
     return name not in CLOSED_NAMES and typ not in CLOSED_TYPES
 
 
 def due_local_date(task):
+    """Convert a task's due time into its calendar date in Detroit."""
     raw = task.get("due_date")
     if not raw:
         return None
@@ -44,6 +47,7 @@ def due_local_date(task):
 
 
 def slim(task):
+    """Keep only the task details needed in a concise daily report."""
     name, _ = status_of(task)
     assignees = []
     for a in task.get("assignees") or []:
@@ -56,6 +60,7 @@ def slim(task):
 
 def build_context(clickup_path, db_path, date_str, critical_paths_path,
                   snapshot_out=None):
+    """Build the morning summary from ClickUp tasks and Captain's local records."""
     data = json.loads(Path(clickup_path).expanduser().read_text(encoding="utf-8"))
     tasks = data if isinstance(data, list) else data.get("tasks", [])
     today = datetime.strptime(date_str, "%Y-%m-%d").date()
@@ -88,6 +93,7 @@ def build_context(clickup_path, db_path, date_str, critical_paths_path,
 
 
 def main():
+    """Read command-line options, build the morning summary, and print it as JSON."""
     ap = argparse.ArgumentParser(description="Captain morning context builder")
     ap.add_argument("--clickup", required=True)
     ap.add_argument("--db", default=str(DEFAULT_DB))

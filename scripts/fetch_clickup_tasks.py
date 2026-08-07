@@ -8,11 +8,13 @@ from clickup_credentials import MissingClickUpCredentials, load_clickup_credenti
 API="https://api.clickup.com/api/v2"
 
 def req(url, token):
+    """Request one page of task data from ClickUp and decode its response."""
     r=urllib.request.Request(url, headers={"Authorization": token})
     with urllib.request.urlopen(r, timeout=30) as resp:
         return json.loads(resp.read().decode())
 
 def main():
+    """Download all requested ClickUp tasks and save them to a JSON file."""
     ap=argparse.ArgumentParser(description="Fetch ClickUp tasks read-only, always including subtasks and pagination")
     ap.add_argument("--out", required=True)
     ap.add_argument("--include-closed", action="store_true")

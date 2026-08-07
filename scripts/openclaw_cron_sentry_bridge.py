@@ -40,10 +40,13 @@ _LAST_ERROR_FIELDS = ("lastError", "last_error")
 
 
 class OpenClawCronListError(RuntimeError):
+    """Explain why Captain could not read OpenClaw's scheduled-job list."""
+
     pass
 
 
 def run_openclaw_cron_list(openclaw_bin):
+    """Ask OpenClaw for its scheduled jobs and validate the returned information."""
     try:
         result = subprocess.run(
             [openclaw_bin, "cron", "list", "--json"],
@@ -84,6 +87,7 @@ def extract_jobs(raw):
 
 
 def _int_or_none(value):
+    """Convert a whole-number value to an integer, or return nothing if invalid."""
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
@@ -94,6 +98,7 @@ def _int_or_none(value):
 
 
 def job_view(job):
+    """Reduce one scheduled job to the details needed for failure monitoring."""
     state = job.get("state") if isinstance(job.get("state"), dict) else {}
     counters = []
     for source in (job, state):
@@ -121,6 +126,7 @@ def job_view(job):
 
 
 def build_state(views):
+    """Build the small snapshot saved between monitoring runs."""
     return {
         "jobs": {
             view["key"]: {
@@ -134,6 +140,7 @@ def build_state(views):
 
 
 def diff_failures(prev_state, views):
+    """Find jobs whose failure count increased since the previous snapshot."""
     prev_jobs = prev_state.get("jobs", {}) if isinstance(prev_state, dict) else {}
     if not prev_jobs:
         return []  # first run seeds state; alert only on new increases
@@ -155,6 +162,7 @@ def diff_failures(prev_state, views):
 
 
 def _load_state(path):
+    """Read the previous monitoring snapshot, or start empty if unavailable."""
     try:
         return json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -163,6 +171,7 @@ def _load_state(path):
 
 def main(argv=None, run_list=None, capture_message_fn=None,
          capture_exception_fn=None, checkin_fn=None, init_fn=None):
+    """Check scheduled jobs, report new failures, and save the latest snapshot."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", default=str(DEFAULT_STATE_PATH))
     parser.add_argument(

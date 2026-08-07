@@ -73,17 +73,20 @@ def shadow_write_block_message(force=False):
 
 
 def now():
+    """Return the current time in a standard, timezone-aware text format."""
     return datetime.now(timezone.utc).isoformat()
 
 
 class ClickUpRequestError(Exception):
     def __init__(self, http_status, clickup_message, path):
+        """Remember the details of a request that ClickUp rejected."""
         super().__init__(clickup_message)
         self.http_status = http_status
         self.clickup_message = clickup_message
         self.path = path
 
     def as_error(self, task_name):
+        """Return the rejection details in a form suitable for a report."""
         return {
             "http_status": self.http_status,
             "clickup_message": self.clickup_message,
@@ -94,15 +97,18 @@ class ClickUpRequestError(Exception):
 
 class ClickUpUnavailableError(Exception):
     def __init__(self, message, path):
+        """Remember why ClickUp could not be reached for this request."""
         super().__init__(message)
         self.message = message
         self.path = path
 
     def as_error(self):
+        """Return the connection failure in a form suitable for a report."""
         return {"message": self.message, "path": self.path}
 
 
 def clickup_error_message(error):
+    """Extract ClickUp's most useful explanation from an error response."""
     try:
         raw = error.read().decode("utf-8", errors="replace")
         body = json.loads(raw) if raw else {}
@@ -117,6 +123,7 @@ def clickup_error_message(error):
 
 
 def request(method, path, token, payload=None):
+    """Send one authenticated ClickUp request and translate failures clearly."""
     body = None if payload is None else json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         API + path,
@@ -138,6 +145,7 @@ def request(method, path, token, payload=None):
 
 
 def verify_due_date(token, task_id, expected_due_date_ms, request_fn=request):
+    """Read a task back from ClickUp to confirm its due date was saved correctly."""
     if expected_due_date_ms is None:
         return {"checked": False}
     task = request_fn("GET", f"/task/{task_id}", token)
@@ -154,10 +162,12 @@ def verify_due_date(token, task_id, expected_due_date_ms, request_fn=request):
 
 
 def clean_payload(values):
+    """Remove blank values so Captain sends ClickUp only intentional changes."""
     return {key: value for key, value in values.items() if value is not None and value != []}
 
 
 def parse_assignees(raw):
+    """Validate assignee identifiers and convert them to ClickUp's numeric form."""
     values = []
     for item in raw or []:
         item = str(item).strip()
@@ -211,19 +221,23 @@ OWNER_LABEL_PALETTE = ["#2ecd6f", "#1bbc9c", "#3398dc", "#9b59b6", "#e67e22", "#
 
 
 def owner_label_color(owner_name):
+    """Choose the same label color each time a particular owner name is used."""
     idx = int(hashlib.sha1((owner_name or "Owner").encode("utf-8")).hexdigest()[:2], 16) % len(OWNER_LABEL_PALETTE)
     return OWNER_LABEL_PALETTE[idx]
 
 
 def normalize_label_text(value):
+    """Simplify label text so similar owner names can be compared reliably."""
     return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
 
 def clickup_list_fields(list_id, token, request_fn):
+    """Return the custom fields configured for one ClickUp list."""
     return (request_fn("GET", "/list/{}/field".format(list_id), token) or {}).get("fields") or []
 
 
 def find_owners_field(fields):
+    """Find the custom field named Owners, if the list has one."""
     for field in fields:
         if normalize_label_text(field.get("name")) == "owners":
             return field
@@ -231,6 +245,7 @@ def find_owners_field(fields):
 
 
 def owners_label_option(field, owner_name):
+    """Find the label option that matches a person's name."""
     want = normalize_label_text(owner_name)
     for opt in ((field.get("type_config") or {}).get("options") or []):
         if normalize_label_text(opt.get("label") or opt.get("name")) == want:
@@ -376,6 +391,7 @@ def owner_field_existing_value(existing_custom_fields, field_id):
 
 
 def dedupe_preserve_order(values):
+    """Remove repeated values while keeping their original order."""
     seen = set()
     result = []
     for value in values:
@@ -386,11 +402,13 @@ def dedupe_preserve_order(values):
 
 
 def allowed_statuses(token, list_id, request_fn=request):
+    """Return the workflow statuses allowed by a ClickUp list."""
     result = request_fn("GET", f"/list/{list_id}", token)
     return [item.get("status") for item in result.get("statuses", []) if item.get("status")]
 
 
 def resolve_status(requested_status, statuses):
+    """Match a requested status to an allowed one or explain why it cannot be used."""
     if requested_status is None:
         return {"applied": None, "requested": None, "mapped": False}
     normalized = str(requested_status).strip().casefold()
@@ -416,6 +434,7 @@ def resolve_status(requested_status, statuses):
 
 
 def add_status_note(description, resolution):
+    """Explain in the task description when a requested Blocked status is unavailable."""
     if not resolution.get("needs_blocked_status"):
         return description
     note = ("Requested workflow state: Blocked — this list has no Blocked status yet. "
@@ -426,6 +445,7 @@ def add_status_note(description, resolution):
 
 
 def operation_fields(operation):
+    """Validate an operation and identify the ClickUp request it requires."""
     command = operation.get("command")
     if command == "create-task":
         list_id = operation.get("list_id")
@@ -519,6 +539,7 @@ def operation_payload(operation, resolution, existing_description=None, custom_f
 
 
 def prepare_operation(operation, token, request_fn, status_cache, audit_fn=audit):
+    """Check one proposed change and assemble everything needed to perform it safely."""
     fields = operation_fields(operation)
     command = operation.get("command")
     requested_status = operation.get("status")
@@ -595,6 +616,7 @@ def resolve_audited_task_id(fields, result):
 
 
 def execute_prepared_operation(operation, fields, payload, resolution, token, request_fn, audit_fn):
+    """Perform one checked ClickUp change, verify it, and record the result."""
     result = request_fn(fields["method"], fields["path"], token, payload)
     task_id = resolve_audited_task_id(fields, result)
     due_date_verification = {"checked": False}
@@ -790,6 +812,7 @@ def execute_batch(operations, token, request_fn=request, audit_fn=audit):
 
 
 def parse_operations_file(path):
+    """Read a batch of ClickUp changes from a JSON file or standard input."""
     raw = sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8")
     data = json.loads(raw)
     operations = data.get("operations") if isinstance(data, dict) else data
@@ -799,6 +822,7 @@ def parse_operations_file(path):
 
 
 def operation_from_args(args):
+    """Turn command-line choices into the standard operation record used internally."""
     common = {"operation_id": "single", "command": args.command, "source": args.source, "evidence": args.evidence}
     if args.command == "create-task":
         return dict(common, list_id=args.list_id, name=args.name, description=args.description, status=args.status,
@@ -810,6 +834,7 @@ def operation_from_args(args):
 
 
 def main():
+    """Preview or execute audited ClickUp task changes requested on the command line."""
     parser = argparse.ArgumentParser(description="Audited Captain ClickUp writes. Use only for explicit human requests or approved proposals.")
     parser.add_argument("--execute", action="store_true", help="Actually mutate ClickUp. Without this, prints the planned request only.")
     parser.add_argument("--force-live-write", action="store_true",

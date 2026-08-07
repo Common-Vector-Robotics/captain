@@ -38,21 +38,25 @@ CREATE TABLE IF NOT EXISTS blockers (
 
 
 def _now():
+    """Return the current time in a standard, timezone-aware text format."""
     return datetime.now(timezone.utc).isoformat()
 
 
 def ensure_schema(db_path):
+    """Create the blocker database and table if they do not exist yet."""
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(db_path)) as c:
         c.executescript(SCHEMA)
 
 
 def _row_to_dict(row):
+    """Turn one database row into a record labeled with readable field names."""
     return dict(zip(COLS, row))
 
 
 def add_blocker(db_path, text, source, source_ref=None, owner=None,
                 clickup_task_id=None, evidence=None):
+    """Record a new blocker, or refresh the matching blocker already on file."""
     ensure_schema(db_path)
     bid = "captain_blk_" + hashlib.sha1(
         ("%s:%s" % (source, text)).encode("utf-8")).hexdigest()[:12]
@@ -75,6 +79,7 @@ def add_blocker(db_path, text, source, source_ref=None, owner=None,
 
 def update_blocker(db_path, blocker_id, status=None, action_note=None,
                    owner=None, clickup_task_id=None):
+    """Update the status, owner, task link, or latest action for a blocker."""
     if status is not None and status not in STATUSES:
         raise ValueError("invalid status: %s (choose from %s)" % (status, ",".join(STATUSES)))
     ensure_schema(db_path)
@@ -103,6 +108,7 @@ def update_blocker(db_path, blocker_id, status=None, action_note=None,
 
 
 def open_blockers(db_path):
+    """Return every blocker that has not been marked as cleared."""
     ensure_schema(db_path)
     with sqlite3.connect(str(db_path)) as c:
         rows = c.execute(
@@ -112,6 +118,7 @@ def open_blockers(db_path):
 
 
 def main():
+    """Read the command-line request and add, update, or list blockers."""
     ap = argparse.ArgumentParser(description="Captain blocker ledger")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p_add = sub.add_parser("add")

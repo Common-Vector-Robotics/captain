@@ -29,14 +29,17 @@ from captain_db import audit  # noqa: E402
 
 
 def now_iso():
+    """Return the current time in a standard, timezone-aware text format."""
     return datetime.now(timezone.utc).isoformat()
 
 
 def normalize(s):
+    """Simplify text so names can be compared without punctuation or capitalization."""
     return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
 
 
 def load_env_file(path):
+    """Load missing settings from a simple local environment file."""
     p = Path(path).expanduser()
     if not p.exists():
         return
@@ -49,6 +52,7 @@ def load_env_file(path):
 
 
 def get_clickup_credentials():
+    """Find the ClickUp connection details or stop with a clear missing-setting message."""
     load_env_file(ROOT / ".secrets" / "clickup.env")
     token = os.environ.get("CLICKUP_API_KEY")
     team = os.environ.get("CLICKUP_TEAM_ID")
@@ -63,6 +67,7 @@ def get_clickup_credentials():
 
 
 def http_json(method, url, headers=None, payload=None, timeout=45):
+    """Send a web request and return the JSON information from its response."""
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, method=method, headers=headers or {})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -71,6 +76,7 @@ def http_json(method, url, headers=None, payload=None, timeout=45):
 
 
 def clickup_req(token, method, path, payload=None):
+    """Send an authenticated request to a ClickUp API path."""
     return http_json(
         method,
         API_CLICKUP + path,
@@ -80,22 +86,26 @@ def clickup_req(token, method, path, payload=None):
 
 
 def status_name(task):
+    """Return the human-readable status name for a task."""
     status = task.get("status") or {}
     return status.get("status") if isinstance(status, dict) else str(status)
 
 
 def status_type(task):
+    """Return ClickUp's broader status category for a task."""
     status = task.get("status") or {}
     return status.get("type") if isinstance(status, dict) else ""
 
 
 def is_open_task(task):
+    """Tell whether a ClickUp task still needs work."""
     stype = (status_type(task) or "").lower()
     sname = (status_name(task) or "").lower()
     return stype not in {"closed", "done", "complete"} and sname not in {"closed", "complete", "completed", "done"}
 
 
 def fetch_clickup_tasks(token, team_id):
+    """Download every open task, including subtasks and additional pages."""
     list_ids = [x.strip() for x in os.environ.get("CAPTAIN_CLICKUP_LIST_IDS", "").split(",") if x.strip()]
     bases = [f"/list/{lid}/task" for lid in list_ids] if list_ids else [f"/team/{team_id}/task"]
     tasks = []
@@ -113,6 +123,7 @@ def fetch_clickup_tasks(token, team_id):
 
 
 def due_dt(task):
+    """Convert a task's ClickUp due date into a usable date and time."""
     due = task.get("due_date")
     if not due:
         return None
@@ -123,6 +134,7 @@ def due_dt(task):
 
 
 def priority_name(task):
+    """Return a task's priority name in a consistent lowercase form."""
     pri = task.get("priority") or {}
     if isinstance(pri, dict):
         return (pri.get("priority") or pri.get("name") or "").lower()
@@ -130,26 +142,31 @@ def priority_name(task):
 
 
 def task_list_id(task):
+    """Return the ClickUp list identifier that contains the task."""
     li = task.get("list") or {}
     return str(li.get("id") or task.get("list_id") or "")
 
 
 def task_list_name(task):
+    """Return the name of the ClickUp list that contains the task."""
     li = task.get("list") or {}
     return li.get("name") or "Unlisted"
 
 
 def task_space_id(task):
+    """Return the ClickUp space identifier that contains the task."""
     sp = task.get("space") or {}
     return str(sp.get("id") or "")
 
 
 def task_space_name(task):
+    """Return the name of the ClickUp space that contains the task."""
     sp = task.get("space") or {}
     return sp.get("name") or "Unknown space"
 
 
 def task_project_key(task):
+    """Choose a stable project grouping and readable label for a task."""
     parent = task.get("top_level_parent") or task.get("parent")
     if parent:
         return f"parent:{parent}", f"Parent {parent}"
@@ -160,6 +177,7 @@ def task_project_key(task):
 
 
 def task_risk_signals(task, now):
+    """Score a task's delivery risk and list the facts that raised the score."""
     signals = []
     score = 0
     due = due_dt(task)
@@ -192,6 +210,7 @@ def task_risk_signals(task, now):
 
 
 def load_overrides(path=OVERRIDES_PATH):
+    """Read optional human choices that include, exclude, or regroup tasks."""
     if not path.exists():
         return {"force_include_task_ids": [], "force_exclude_task_ids": [], "paths": []}
     try:
@@ -207,6 +226,7 @@ def load_overrides(path=OVERRIDES_PATH):
 
 
 def discover_paths(tasks, max_paths=5, overrides=None):
+    """Group risky tasks into the most important delivery paths to watch."""
     overrides = overrides or {}
     now = datetime.now(timezone.utc)
     by_id = {str(t.get("id")): t for t in tasks if t.get("id")}
@@ -290,6 +310,7 @@ def discover_paths(tasks, max_paths=5, overrides=None):
 
 
 def write_state(state):
+    """Save the discovered critical paths and record that the state changed."""
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = STATE_PATH.with_suffix(".tmp")
     tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
@@ -297,10 +318,12 @@ def write_state(state):
 
 
 def print_summary(state):
+    """Print a short human-readable summary of the discovered paths."""
     print(json.dumps(state, indent=2, sort_keys=True))
 
 
 def main():
+    """Fetch or load tasks, discover critical paths, and print or save the result."""
     ap = argparse.ArgumentParser(description="Discover Captain critical paths from ClickUp")
     ap.add_argument("command", choices=["discover", "score", "write-state"])
     ap.add_argument("--max-paths", type=int, default=int(os.environ.get("CAPTAIN_MAX_CRITICAL_PATHS", "5")))

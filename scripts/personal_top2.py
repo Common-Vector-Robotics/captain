@@ -189,6 +189,7 @@ def overdue_days(task, today):
 
 
 def _days_phrase(days):
+    """Describe how many days late a task is using natural singular or plural wording."""
     return "1 day past due" if days == 1 else "%d days past due" % days
 
 
@@ -278,6 +279,7 @@ def rank_person(person, today, path_index, blocked_ids):
 
 
 def _load_tasks(clickup_path):
+    """Read tasks from either a plain list or a ClickUp-style JSON file."""
     data = json.loads(Path(clickup_path).expanduser().read_text(encoding="utf-8"))
     return data if isinstance(data, list) else data.get("tasks", [])
 
@@ -323,6 +325,7 @@ def build_rank(clickup_path, db_path, critical_paths_path, date_str):
 
 
 def main():
+    """Rank, save, or retrieve each person's two most important tasks."""
     ap = argparse.ArgumentParser(description="Captain per-person top-2 ranking")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p_rank = sub.add_parser("rank", help="print per-person candidates; writes nothing")

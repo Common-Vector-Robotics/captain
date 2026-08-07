@@ -38,10 +38,13 @@ _STATE = {"active": False, "component": None, "scrub_values": ()}
 
 
 class MissingSentryCredentials(RuntimeError):
+    """Explain that error reporting cannot start because a required setting is missing."""
+
     pass
 
 
 def _read_known_values(path):
+    """Read recognized error-reporting settings from a local settings file."""
     try:
         lines = Path(path).read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -66,6 +69,7 @@ def _read_known_values(path):
 
 
 def load_sentry_env(required_keys=(), environ=None, env_path=None):
+    """Find error-reporting settings in the environment or local settings file."""
     environ = os.environ if environ is None else environ
     keys = tuple(required_keys) or tuple(KNOWN_KEYS)
     file_values = {}
@@ -83,6 +87,7 @@ def load_sentry_env(required_keys=(), environ=None, env_path=None):
 
 
 def _collect_secret_values(environ):
+    """Collect likely secret values so they can be removed from error reports."""
     values = []
     for name, value in environ.items():
         if not isinstance(value, str) or len(value) < _MIN_SECRET_LENGTH:
@@ -175,10 +180,12 @@ def _current_scrub_values():
 
 
 def _set_scrub_values_for_tests(values):
+    """Replace the secret list during tests without changing real settings."""
     _STATE["scrub_values"] = tuple(values)
 
 
 def _scrub_text(text, values):
+    """Replace known secret values in text with a safe placeholder."""
     for value in values:
         if value and value in text:
             text = text.replace(value, "[redacted]")
@@ -186,6 +193,7 @@ def _scrub_text(text, values):
 
 
 def _scrub_obj(obj, values):
+    """Remove known secrets throughout a nested error-report record."""
     if isinstance(obj, str):
         return _scrub_text(obj, values)
     if isinstance(obj, dict):
@@ -196,6 +204,7 @@ def _scrub_obj(obj, values):
 
 
 def scrub_event(event, hint):
+    """Return a safely redacted error event, or drop it if redaction cannot finish."""
     try:
         values = _current_scrub_values()
         return _scrub_obj(event, values)
@@ -209,12 +218,14 @@ def scrub_event(event, hint):
 
 
 def _import_sdk():
+    """Load the Sentry error-reporting library only when it is needed."""
     import sentry_sdk
 
     return sentry_sdk
 
 
 def _git_release():
+    """Describe the current code version for error reports when Git is available."""
     try:
         out = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -228,10 +239,12 @@ def _git_release():
 
 
 def is_active():
+    """Tell whether error reporting started successfully for this process."""
     return bool(_STATE["active"])
 
 
 def _reset_for_tests():
+    """Return error-reporting state to a clean, inactive state for tests."""
     if _STATE["active"]:
         try:
             _import_sdk().init()  # re-init with no DSN disables the client
@@ -243,6 +256,7 @@ def _reset_for_tests():
 
 
 def init_telemetry(component, environ=None, env_path=None, _sdk_options=None):
+    """Start safe error reporting for one Captain script when settings allow it."""
     environ = os.environ if environ is None else environ
     _STATE["active"] = False
     _STATE["component"] = component
@@ -304,6 +318,7 @@ def init_telemetry(component, environ=None, env_path=None, _sdk_options=None):
 
 
 def capture_message(message, level="error", fingerprint=None, extra=None):
+    """Send a plain diagnostic message when error reporting is active."""
     if not _STATE["active"]:
         return False
     try:
@@ -371,6 +386,7 @@ def summarize_argv(argv):
 
 
 def capture_exception(exc, component=None):
+    """Report an unexpected failure without exposing command-line values."""
     if not _STATE["active"]:
         return False
     try:
@@ -400,6 +416,7 @@ def capture_exception(exc, component=None):
 
 
 def capture_checkin(monitor_slug, status, monitor_config=None):
+    """Tell the monitoring service that a scheduled process is healthy or failed."""
     if not _STATE["active"]:
         return False
     try:
@@ -443,12 +460,14 @@ def _is_interactive():
 
 class guard(ContextDecorator):
     def __init__(self, component, environ=None, env_path=None, _sdk_options=None):
+        """Prepare automatic error reporting around a block of work."""
         self.component = component
         self._environ = environ
         self._env_path = env_path
         self._sdk_options = _sdk_options
 
     def __enter__(self):
+        """Start error reporting before the protected work begins."""
         try:
             init_telemetry(
                 self.component,
@@ -461,6 +480,7 @@ class guard(ContextDecorator):
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        """Report unexpected failures, then allow the original failure to continue."""
         # A SystemExit chained from an underlying error (`raise SystemExit(...)
         # from err`) is a CLI turning a real failure into a clean one-line
         # message for a human. The message is for the human; the cause is
@@ -496,6 +516,7 @@ class guard(ContextDecorator):
 
 
 def _self_test():
+    """Send a harmless test message to confirm error reporting works."""
     active = init_telemetry("telemetry-self-test")
     if not active:
         print(json.dumps({"ok": False, "error": "telemetry inactive "

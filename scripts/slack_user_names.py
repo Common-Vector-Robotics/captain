@@ -89,6 +89,7 @@ class SlackNameResolver:
     invents one. See module docstring for the precedence order."""
 
     def __init__(self, channels_cfg=None, cache_path=None, root=None):
+        """Load known names from Captain's channel settings and local name cache."""
         root = root or ROOT
         self._admin_by_id = invert_admin_recipients(channels_cfg or {})
         self._cache = load_user_cache(cache_path or (root / "data" / "slack-user-cache.json"))

@@ -52,13 +52,17 @@ CREATE TABLE IF NOT EXISTS proposals (
 );
 """
 
-def now(): return datetime.now(timezone.utc).isoformat()
+def now():
+    """Return the current time in a standard, timezone-aware text format."""
+    return datetime.now(timezone.utc).isoformat()
 
 def conn():
+    """Open Captain's local database, creating its folder when needed."""
     DB.parent.mkdir(parents=True, exist_ok=True)
     return sqlite3.connect(DB)
 
 def init_db():
+    """Create Captain's database tables and tracking files if they are missing."""
     with conn() as c:
         c.executescript(SCHEMA)
     for p in [AUDIT, APPROVALS]:
@@ -67,18 +71,21 @@ def init_db():
     print(f"initialized {DB}")
 
 def audit(event, **fields):
+    """Add one timestamped action to Captain's permanent audit log."""
     rec = {"ts": now(), "event": event, **fields}
     AUDIT.parent.mkdir(parents=True, exist_ok=True)
     with AUDIT.open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False, sort_keys=True) + "\n")
 
 def queue_approval(proposal):
+    """Save a proposal that needs a person to review or approve it."""
     APPROVALS.parent.mkdir(parents=True, exist_ok=True)
     with APPROVALS.open("a", encoding="utf-8") as f:
         f.write(json.dumps(proposal, ensure_ascii=False, sort_keys=True) + "\n")
     audit("approval_queued", proposal_id=proposal.get("id"), type=proposal.get("type"))
 
 def main():
+    """Run the requested database setup or show basic record counts."""
     ap = argparse.ArgumentParser()
     ap.add_argument("command", choices=["init", "stats"])
     args = ap.parse_args()

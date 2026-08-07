@@ -16,33 +16,40 @@ FIXTURE = json.loads(
 
 class JobViewTests(unittest.TestCase):
     def test_nested_state_errors(self):
+        """Confirm failure details can be read from a job's nested state."""
         view = bridge.job_view(FIXTURE["jobs"][0])
         self.assertEqual(view["name"], "Nightly Cognee cognify")
         self.assertEqual(view["errors"], 46)
         self.assertEqual(view["last_error"], "cognify timeout after 300s")
 
     def test_flat_error_count(self):
+        """Confirm a top-level failure count is read correctly."""
         view = bridge.job_view(FIXTURE["jobs"][1])
         self.assertEqual(view["errors"], 0)
 
     def test_consecutive_errors(self):
+        """Confirm OpenClaw's consecutive-failure field is supported."""
         view = bridge.job_view(FIXTURE["jobs"][2])
         self.assertEqual(view["errors"], 2)
 
     def test_no_counter_fields_yields_none(self):
+        """Confirm a job without failure counters is marked as unknown."""
         view = bridge.job_view({"id": "x", "name": "bare job"})
         self.assertIsNone(view["errors"])
 
 
 class DiffTests(unittest.TestCase):
     def _views(self):
+        """Return the simplified monitoring view of every example job."""
         return [bridge.job_view(job) for job in FIXTURE["jobs"]]
 
     def test_first_run_seeds_without_failures(self):
+        """Confirm the first run creates a baseline without raising old alerts."""
         failures = bridge.diff_failures({}, self._views())
         self.assertEqual(failures, [])
 
     def test_error_increase_reports_failure(self):
+        """Confirm a rising failure count creates exactly one new alert."""
         prev = bridge.build_state(self._views())
         bumped = json.loads(json.dumps(FIXTURE))
         bumped["jobs"][0]["state"]["errors"] = 47
@@ -54,11 +61,13 @@ class DiffTests(unittest.TestCase):
         self.assertEqual(failures[0]["current"], 47)
 
     def test_unchanged_and_recovered_report_nothing(self):
+        """Confirm unchanged or improved jobs do not create alerts."""
         prev = bridge.build_state(self._views())
         failures = bridge.diff_failures(prev, self._views())
         self.assertEqual(failures, [])
 
     def test_counter_reset_reports_nothing_then_resumes_tracking(self):
+        """Confirm a reset is harmless and later failures are still detected."""
         # Prior state has the job at 46 errors.
         prev = bridge.build_state(self._views())
 
@@ -94,6 +103,7 @@ class DiffTests(unittest.TestCase):
                 self.assertEqual(resumed_failures[0]["current"], reset_value + 1)
 
     def test_vanished_job_reports_nothing_and_drops_from_state(self):
+        """Confirm a removed job quietly leaves the saved monitoring state."""
         prev = bridge.build_state(self._views())
 
         # New poll only returns two of the three jobs; "job-stale" vanishes.
@@ -114,6 +124,7 @@ class DiffTests(unittest.TestCase):
         self.assertNotIn("job-stale", new_state["jobs"])
 
     def test_new_job_with_nonzero_counter_reports_immediately(self):
+        """Confirm a newly discovered failing job is reported immediately."""
         # Prior state is non-empty (not the first-run seeding path) but
         # does not contain the new job.
         prev = bridge.build_state(self._views())
@@ -137,10 +148,12 @@ class DiffTests(unittest.TestCase):
 
 class MainTests(unittest.TestCase):
     def setUp(self):
+        """Start each command test with empty captured messages and check-ins."""
         self.messages = []
         self.checkins = []
 
     def _run(self, tmp_path, run_list, dry_run=False):
+        """Run the monitoring command with temporary files and captured outputs."""
         state = tmp_path / "state.json"
         argv = ["--state", str(state)]
         if dry_run:
@@ -162,6 +175,7 @@ class MainTests(unittest.TestCase):
         return code, state
 
     def test_two_runs_report_new_failure_and_checkin_ok(self):
+        """Confirm a later failure is reported while healthy monitor check-ins continue."""
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
@@ -184,9 +198,11 @@ class MainTests(unittest.TestCase):
         )
 
     def test_cron_list_failure_sends_error_checkin(self):
+        """Confirm a failed job-list request produces an error check-in."""
         import tempfile
 
         def broken(bin_):
+            """Simulate OpenClaw being unable to return its scheduled jobs."""
             raise bridge.OpenClawCronListError("openclaw exited 1: not running")
 
         with tempfile.TemporaryDirectory() as d:
@@ -196,6 +212,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual(self.messages[0][0], "EXC:OpenClawCronListError")
 
     def test_dry_run_sends_nothing_and_writes_no_state(self):
+        """Confirm preview mode sends no alerts and saves no state."""
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             code, state = self._run(
@@ -206,6 +223,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual(self.checkins, [])
 
     def test_no_counters_warning_fires_even_with_prior_state(self):
+        """Confirm missing failure counters remain visible on every run."""
         # Regression: the "no job exposes any counter field" warning used to
         # be gated on `not prev_state`, making it effectively one-shot. If
         # `openclaw cron list --json` field names never match our candidates,
@@ -245,6 +263,7 @@ class MainTests(unittest.TestCase):
             )
 
     def test_state_write_is_atomic_no_tmp_file_left_behind(self):
+        """Confirm the saved state is complete and leaves no temporary file."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as d:
@@ -309,6 +328,7 @@ class RealHostShapeTests(unittest.TestCase):
     the bridge reports zero cron failures forever."""
 
     def test_job_view_parses_real_host_shape(self):
+        """Confirm the real OpenClaw response shape produces the expected job view."""
         views = [bridge.job_view(j) for j in REAL_SHAPE_LISTING["jobs"]]
         self.assertEqual(views[0]["key"], "job-a")
         self.assertEqual(views[0]["name"], "Nightly cognify")
@@ -317,17 +337,20 @@ class RealHostShapeTests(unittest.TestCase):
         self.assertEqual(views[1]["errors"], 0)
 
     def test_no_job_is_counter_blind_on_real_shape(self):
+        """Confirm every real-shaped job exposes a readable failure counter."""
         views = [bridge.job_view(j) for j in REAL_SHAPE_LISTING["jobs"]]
         self.assertEqual([v["name"] for v in views if v["errors"] is None], [])
 
 
 class ExtractJobsTests(unittest.TestCase):
     def test_envelope_not_truncated(self):
+        """Confirm a complete job-list response is not marked as cut off."""
         jobs, truncated = bridge.extract_jobs(REAL_SHAPE_LISTING)
         self.assertEqual(len(jobs), 2)
         self.assertFalse(truncated)
 
     def test_envelope_truncated_when_has_more(self):
+        """Confirm OpenClaw's has-more signal marks a response as cut off."""
         listing = dict(REAL_SHAPE_LISTING)
         listing["hasMore"] = True
         jobs, truncated = bridge.extract_jobs(listing)
@@ -335,21 +358,25 @@ class ExtractJobsTests(unittest.TestCase):
         self.assertTrue(truncated)
 
     def test_bare_list_is_never_truncated(self):
+        """Confirm a plain job list is treated as complete."""
         jobs, truncated = bridge.extract_jobs(FIXTURE["jobs"])
         self.assertEqual(len(jobs), len(FIXTURE["jobs"]))
         self.assertFalse(truncated)
 
     def test_missing_or_empty_payloads(self):
+        """Confirm empty job-list responses safely produce no jobs."""
         self.assertEqual(bridge.extract_jobs({}), ([], False))
         self.assertEqual(bridge.extract_jobs([]), ([], False))
 
 
 class TruncationReportingTests(unittest.TestCase):
     def setUp(self):
+        """Start each reporting test with empty captured messages and check-ins."""
         self.messages = []
         self.checkins = []
 
     def _run_listing(self, listing):
+        """Run the monitor once with a supplied job-list response."""
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             state = Path(d) / "state.json"
@@ -368,12 +395,14 @@ class TruncationReportingTests(unittest.TestCase):
         return code
 
     def _truncation_messages(self):
+        """Return only captured alerts about an incomplete job listing."""
         return [
             m for m in self.messages
             if m[1].get("fingerprint") == ["openclaw-cron-bridge", "truncated-listing"]
         ]
 
     def test_truncated_listing_is_reported(self):
+        """Confirm an incomplete listing produces one clear warning."""
         listing = dict(REAL_SHAPE_LISTING)
         listing["hasMore"] = True
         self.assertEqual(self._run_listing(listing), 0)
@@ -383,6 +412,7 @@ class TruncationReportingTests(unittest.TestCase):
         self.assertEqual(reported[0][1]["extra"]["jobs_seen"], 2)
 
     def test_untruncated_listing_reports_nothing(self):
+        """Confirm a complete listing produces no truncation warning."""
         self.assertEqual(self._run_listing(REAL_SHAPE_LISTING), 0)
         self.assertEqual(self._truncation_messages(), [])
 
