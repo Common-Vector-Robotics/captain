@@ -41,6 +41,14 @@ Captain is an openclaw-based project manager for technical teams. Captain automa
 
 ## A day with Captain
 
+<p align="center">
+  <strong>07:30 Align</strong> →
+  <strong>14:00 Reconcile</strong> →
+  <strong>15:15 Unblock</strong> →
+  <strong>15:45 Verify</strong> →
+  <strong>17:45 Close</strong>
+</p>
+
 ```mermaid
 flowchart TB
     ALIGN["`**07:30 - Align**
