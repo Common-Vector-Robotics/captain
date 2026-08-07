@@ -2,7 +2,7 @@
 
 ![Captain Logo](image/README/captain_logo_2.png)
 
-Captain is an OpenClaw-based project manager for technical teams. Captain automatically manages ClickUp tasks, checks in with team members over Slack, infers critical paths, and coordinates owners to remove blockers and prioritize important work. Captain can also reconcile Gemini meeting notes received in Gmail and stored in Google Docs. Other transcript providers and arbitrary email attachments are not currently supported.
+Captain is an openclaw-based project manager for technical teams. Captain automatically manages Clickup tasks, checks in with team members over Slack to receive status updates, infers critical paths, and coordinates team members to remove blockers and prioritize important tasks. Captain also reads and infers tasks based on meeting transcripts sent to his configured email address.
 
 ## What Captain does
 
