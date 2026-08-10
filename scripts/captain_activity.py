@@ -13,10 +13,9 @@ three sources of truth that individually cannot answer it:
              standup-reconciliation state file is the model this was built
              from). This is where no-ops surface: `action: "no_op"` plus a
              `reason` is durable proof a cron ran and chose to do nothing.
-  STATE   -- state files with no `runs[]` array (last-run-only style): falls
-             back to `last_run_at` plus any boolean flags currently `True`,
-             so a degraded run (e.g. `channel_enumeration_unavailable`) is
-             still visible even without per-run history.
+  STATE   -- top-level boolean flags currently `True`, even when the file also
+             has `runs[]`. A last-run-only file falls back to `last_run_at`,
+             so degraded or legacy state remains visible without run history.
   ACTED   -- `data/audit-log.jsonl`: durable record of material (real)
              actions. A no-op leaves no trace here -- that gap is exactly
              why the DECIDED/STATE lines above exist.
@@ -30,8 +29,8 @@ This is a read-only diagnostic tool. It never writes to `data/` (or
 anywhere else), and every external call (openclaw subprocess, state file
 reads, audit log read) degrades to a visible `WARN` line or a silent skip
 rather than a traceback -- a typo or a flaky host must never be the thing
-that breaks this script. See docs/daily-loop.md's "Seeing what Captain did"
-section for example output and a walkthrough of each line kind.
+that breaks this script. The four source descriptions above define each output
+line kind and the evidence behind it.
 """
 
 from __future__ import annotations
@@ -61,27 +60,21 @@ _RUN_START_KEYS = ("startedAt", "started_at")
 _RUN_END_KEYS = ("finishedAt", "finished_at", "endedAt", "ended_at")
 
 
+# Feed data model
+
 class BadHoursArgument(ValueError):
-    """Raised for a bad HOURS argument; always caught inside main()."""
+    """Identify an invalid ``HOURS`` value for ``main`` to report cleanly."""
 
 
 class Event(tuple):
-    """A single activity-feed entry.
+    """Store one feed entry as readable text plus structured details.
 
-    Behaves as the plain `(timestamp, rendered_line)` 2-tuple every existing
-    call site already unpacks (`for ts, line in events`, `_, line =
-    events[0]`) -- every one of those unpack sites, in this module and in
-    tests/test_captain_activity.py, keeps working unchanged. On top of that
-    it carries `.kind` (one of "CRON"/"DECIDED"/"STATE"/"ACTED") and `.raw`
-    (the structured fields the line was rendered from -- e.g. a DECIDED
-    event's `.raw` has `name`/`action`/`audience`/`reason`; an ACTED event's
-    `.raw` is the full parsed audit-log row).
+    ``Event`` behaves like the existing ``(timestamp, rendered_line)`` tuple,
+    so callers can keep unpacking it normally. It also exposes ``kind`` and
+    ``raw`` attributes for consumers that need structured counts or grouping.
 
-    This exists so a downstream reuser (scripts/daily_activity_digest.py)
-    can compute counts/flags/groupings directly from structured data instead
-    of re-parsing the rendered text back into fields -- reuse without
-    duplicating the collection logic above, and without changing this
-    module's own CLI output or breaking any existing 2-tuple unpack.
+    This lets ``daily_activity_digest.py`` reuse collection results without
+    parsing the human-readable line or duplicating collection logic.
     """
 
     # No `__slots__` here (deliberately): CPython does not allow a non-empty
@@ -90,29 +83,34 @@ class Event(tuple):
     # `kind`/`raw` there instead.
 
     def __new__(cls, ts, line, kind, raw):
-        """Create one feed item with both readable text and its original details."""
+        """Create a tuple-compatible feed item with structured metadata."""
         obj = super().__new__(cls, (ts, line))
         obj.kind = kind
         obj.raw = raw
+
         return obj
 
 
-# --------------------------------------------------------------------------
-# Small, defensive parsing helpers -- every one of these is written to
-# degrade (return None / skip) rather than raise, since malformed input from
-# openclaw, state files, or the audit log is the expected steady state this
-# tool exists to survive.
-# --------------------------------------------------------------------------
+# Defensive parsing helpers
+#
+# Malformed OpenClaw output, state files, and audit rows are expected inputs.
+# These helpers return ``None`` or skip unusable data instead of raising.
 
 def _first_json_object(text):
-    """openclaw commands may print banner/log text before the JSON payload;
-    find the first `{` and parse from there. Returns None on any failure
-    (no `{`, or the text from `{` onward still isn't valid JSON)."""
+    """Parse the first JSON object after any OpenClaw banner text.
+
+    Missing or invalid JSON returns ``None``.
+    """
+    # Only string output can contain the expected JSON object.
     if not isinstance(text, str):
         return None
+
+    # OpenClaw may place log or banner text before the first opening brace.
     idx = text.find("{")
     if idx == -1:
         return None
+
+    # Treat malformed command output as unavailable diagnostic data.
     try:
         return json.loads(text[idx:])
     except (json.JSONDecodeError, ValueError):
@@ -120,13 +118,17 @@ def _first_json_object(text):
 
 
 def _parse_ts(value):
-    """Parse a timestamp of unknown shape into an aware UTC datetime, or
-    None if it cannot be parsed. Accepts an ISO-8601 string (with or without
-    a trailing 'Z') or a numeric epoch (seconds or milliseconds). Any other
-    type (None, dict, list, bool, ...) yields None rather than raising --
-    this is the guard against inconsistent `ts` types in the audit log."""
+    """Parse a supported timestamp into an aware UTC datetime.
+
+    Accepted values are ISO-8601 strings and numeric epochs in seconds or
+    milliseconds. Unsupported or invalid values return ``None``; notably,
+    booleans are not accepted as numeric epochs.
+    """
+    # ``bool`` is a subclass of ``int`` but is never a meaningful timestamp.
     if isinstance(value, bool):
         return None
+
+    # Normalize ISO-8601 text, including the common trailing ``Z`` form.
     if isinstance(value, str):
         text = value.strip()
         if not text:
@@ -137,57 +139,77 @@ def _parse_ts(value):
             dt = datetime.fromisoformat(text)
         except ValueError:
             return None
+
+        # Naive timestamps use UTC so every returned value is comparable.
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
+
         return dt
+
+    # Detect millisecond epochs by magnitude before converting to UTC.
     if isinstance(value, (int, float)):
         try:
             seconds = value / 1000.0 if abs(value) >= 1_000_000_000_000 else value
             return datetime.fromtimestamp(seconds, tz=timezone.utc)
         except (OverflowError, OSError, ValueError):
             return None
+
     return None
 
 
 def _first_parsed_ts(d, keys):
-    """Return the first usable timestamp found under the preferred field names."""
+    """Return the first usable timestamp under the preferred field names."""
     if not isinstance(d, dict):
         return None
+
+    # Field order matters because upstream payloads may carry several clocks.
     for key in keys:
         if key in d:
             ts = _parse_ts(d.get(key))
             if ts is not None:
                 return ts
+
     return None
 
 
 def _duration_seconds(run):
-    """Work out how many seconds a scheduled run took, when the data allows it."""
+    """Return a scheduled run's duration in seconds, when available."""
+    # Prefer fields already expressed in seconds.
     for key in ("durationSeconds", "duration_seconds"):
         val = run.get(key)
         if isinstance(val, (int, float)) and not isinstance(val, bool):
             return float(val)
+
+    # Convert the millisecond fields used by current OpenClaw responses.
     for key in ("durationMs", "duration_ms", "duration"):
         val = run.get(key)
         if isinstance(val, (int, float)) and not isinstance(val, bool):
             return float(val) / 1000.0
+
+    # Fall back to the difference between explicit start and end timestamps.
     start = _first_parsed_ts(run, _RUN_START_KEYS)
     end = _first_parsed_ts(run, _RUN_END_KEYS)
     if start is not None and end is not None:
         return (end - start).total_seconds()
+
     return None
 
 
 def _extract_runs(payload):
-    """Find the list of scheduled-run records in several supported response shapes."""
+    """Extract scheduled-run objects from supported response shapes."""
+    # Different OpenClaw versions have used several top-level collection names.
     if isinstance(payload, dict):
         for key in ("entries", "runs", "data", "items"):
             val = payload.get(key)
             if isinstance(val, list):
                 return [r for r in val if isinstance(r, dict)]
+
         return []
+
+    # Tests and defensive callers may provide the records as a bare list.
     if isinstance(payload, list):
         return [r for r in payload if isinstance(r, dict)]
+
     return []
 
 
@@ -196,6 +218,7 @@ def _state_name(path):
     stem = path.stem
     if stem.endswith("-state"):
         return stem[: -len("-state")]
+
     return stem
 
 
@@ -204,16 +227,19 @@ def _local(ts):
     return ts.astimezone().strftime(TIME_FORMAT)
 
 
-# --------------------------------------------------------------------------
-# openclaw subprocess boundary -- isolated so tests never invoke a real
-# subprocess (they inject fakes matching this (payload_or_None, error_or_None)
-# calling convention instead).
-# --------------------------------------------------------------------------
+# OpenClaw subprocess boundary
+#
+# Tests replace these functions with fakes that use the same
+# ``(payload_or_none, error_or_none)`` return convention.
 
 def run_openclaw(args, openclaw_bin="openclaw", timeout=30):
-    """Run an openclaw subcommand. Returns (parsed_json, None) on success or
-    (None, error_message) on any failure -- missing binary, non-zero exit,
-    timeout, or unparseable JSON. Never raises."""
+    """Run an OpenClaw subcommand and return parsed JSON or an error.
+
+    Success returns ``(parsed_json, None)``. A missing binary, timeout,
+    non-zero exit, or malformed response returns ``(None, error_message)``.
+    Expected command failures never propagate as exceptions.
+    """
+    # Capture the command so errors become feed warnings instead of tracebacks.
     try:
         result = subprocess.run(
             [openclaw_bin] + list(args),
@@ -223,57 +249,70 @@ def run_openclaw(args, openclaw_bin="openclaw", timeout=30):
         return None, "openclaw binary not found (%s)" % openclaw_bin
     except (OSError, subprocess.TimeoutExpired) as exc:
         return None, str(exc)
+
+    # Preserve a bounded stderr excerpt when OpenClaw reports a failure.
     if result.returncode != 0:
         return None, "exit %s: %s" % (
             result.returncode, (result.stderr or "").strip()[:300]
         )
+
+    # Parse around any non-JSON banner text emitted before the payload.
     parsed = _first_json_object(result.stdout)
     if parsed is None:
         return None, "unparseable JSON output"
+
     return parsed, None
 
 
 def _default_cron_list_fn(openclaw_bin):
-    """Build the function used to ask OpenClaw for its scheduled jobs."""
+    """Build a zero-argument function that lists scheduled jobs."""
+
     def fn():
         """Request and return OpenClaw's current scheduled-job list."""
         return run_openclaw(["cron", "list", "--json"], openclaw_bin=openclaw_bin)
+
     return fn
 
 
 def _default_cron_runs_fn(openclaw_bin):
-    """Build the function used to ask OpenClaw for a job's run history."""
+    """Build a function that fetches one scheduled job's run history."""
+
     def fn(job_id):
         """Request and return the run history for one scheduled job."""
         return run_openclaw(
             ["cron", "runs", "--id", str(job_id)], openclaw_bin=openclaw_bin
         )
+
     return fn
 
 
-# --------------------------------------------------------------------------
-# Collectors -- each returns (events, warnings) where events is a list of
-# (aware_datetime, rendered_line) tuples restricted to the requested window.
-# --------------------------------------------------------------------------
+# Activity collectors
+#
+# Collection helpers return data plus warnings: the job-list helper returns
+# ``(jobs, warnings)`` and event collectors return ``(events, warnings)``.
 
 def list_captain_jobs(cron_list_fn):
-    """Return (jobs, warnings): every job from `openclaw cron list --json`
-    with `agentId == "captain"`, regardless of whether it has any run
-    history at all -- extracted out of collect_cron_events so a caller that
-    needs the full registered set (e.g. daily_activity_digest.py, to notice
-    a job that is registered but did not run at all in the window) doesn't
-    have to re-run or re-parse the listing itself. collect_cron_events alone
-    cannot answer that: it only ever emits an event for a run it found, so a
-    job with zero runs in the window is silently invisible to it."""
+    """Return all registered Captain jobs and any listing warnings.
+
+    Jobs are returned even when they have no run history. That distinction lets
+    ``daily_activity_digest.py`` detect registered jobs that did not run;
+    ``collect_cron_events`` alone cannot represent them.
+    """
+    # Fetch the listing through an injectable boundary for deterministic tests.
     listing, err = cron_list_fn()
     if err is not None:
         return [], ["openclaw cron list --json: %s" % err]
+
+    # Accept both the current object shape and a defensive bare-list shape.
     if isinstance(listing, dict):
         jobs = listing.get("jobs")
     else:
         jobs = listing
+
     if not isinstance(jobs, list):
         return [], ["openclaw cron list --json: unexpected shape (no jobs array)"]
+
+    # Ignore other agents' scheduled work and malformed entries.
     return [j for j in jobs if isinstance(j, dict) and j.get("agentId") == "captain"], []
 
 
@@ -281,22 +320,31 @@ def collect_cron_events(cutoff, cron_list_fn, cron_runs_fn):
     """Collect recent scheduled-job runs and warnings for the activity feed."""
     events = []
     captain_jobs, warnings = list_captain_jobs(cron_list_fn)
+
+    # Fetch and render each Captain job's run history independently.
     for job in captain_jobs:
         job_id = job.get("id")
         name = str(job.get("name") or job_id or "unknown-job")
+
+        # A job without an ID cannot be used in the run-history command.
         if not job_id:
             warnings.append("cron job %r has no id; skipping run history" % name)
             continue
+
         runs_payload, err = cron_runs_fn(job_id)
         if err is not None:
             warnings.append(
                 "openclaw cron runs --id %s (%s): %s" % (job_id, name, err)
             )
             continue
+
+        # Keep only parseable runs inside the requested time window.
         for run in _extract_runs(runs_payload):
             ts = _first_parsed_ts(run, _RUN_TS_KEYS)
             if ts is None or ts < cutoff:
                 continue
+
+            # Render the available run fields without requiring optional data.
             status = run.get("status") or run.get("lastRunStatus") or "unknown"
             summary = run.get("summary") or run.get("output") or ""
             duration = _duration_seconds(run)
@@ -308,6 +356,7 @@ def collect_cron_events(cutoff, cron_list_fn, cron_runs_fn):
                 "name": name, "job_id": job_id, "status": status,
                 "summary": summary, "duration": duration,
             }))
+
     return events, warnings
 
 
@@ -315,11 +364,15 @@ def collect_state_events(cutoff, data_dir):
     """Collect recent decisions and warning flags saved in Captain's state files."""
     events = []
     warnings = []
+
+    # Discover every state-file variant without assuming a fixed inventory.
     try:
         paths = sorted(data_dir.glob("*state*.json"))
     except OSError as exc:
         warnings.append("data/: could not list state files (%s)" % exc)
         return events, warnings
+
+    # Parse files independently so one invalid file cannot hide the rest.
     for path in paths:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -329,8 +382,11 @@ def collect_state_events(cutoff, data_dir):
         if not isinstance(payload, dict):
             warnings.append("%s: not a JSON object, skipped" % path.name)
             continue
+
         name = _state_name(path)
         runs = payload.get("runs")
+
+        # History-style files expose each recorded decision, including no-ops.
         if isinstance(runs, list):
             for entry in runs:
                 if not isinstance(entry, dict):
@@ -341,9 +397,12 @@ def collect_state_events(cutoff, data_dir):
                 action = entry.get("action", "unknown")
                 audience = entry.get("audience", "-")
                 reason = entry.get("reason")
+
+                # Older entries may carry counts instead of a reason string.
                 if not reason:
                     counts = entry.get("counts")
                     reason = "counts=%s" % (counts,) if counts is not None else ""
+
                 reason_part = " | %s" % reason if reason else ""
                 line = "DECIDED %s | %s | action=%s | audience=%s%s" % (
                     _local(ts), name, action, audience, reason_part,
@@ -352,16 +411,10 @@ def collect_state_events(cutoff, data_dir):
                     "name": name, "action": action, "audience": audience,
                     "reason": reason, "entry": dict(entry),
                 }))
-        # A `runs[]` history array and top-level boolean flags are NOT
-        # mutually exclusive: every real daily-loop state file (see
-        # docs/daily-loop.md's State-file inventory) carries both `runs[]`
-        # *and* top-level flags like `channel_enumeration_unavailable`
-        # alongside it. Checking flags only in an `else` branch here would
-        # make those flags silently invisible for every file that also has
-        # run history -- backwards for a tool whose whole point is
-        # surfacing degraded conditions nobody would otherwise notice. So
-        # this check always runs, independent of whether the `runs[]`
-        # branch above also fired for this same file.
+
+        # History and top-level warning flags are independent. Real daily-loop
+        # state files carry both, so checking flags only when ``runs`` is absent
+        # would hide degraded conditions from the activity feed.
         flags = sorted(k for k, v in payload.items() if v is True)
         if flags:
             ts = _first_parsed_ts(payload, ("last_run_at",))
@@ -373,8 +426,8 @@ def collect_state_events(cutoff, data_dir):
                     "name": name, "flags": flags, "payload": dict(payload),
                 }))
         elif not isinstance(runs, list):
-            # No `runs[]` and no true flags: the pre-existing last-run-only
-            # shape, rendered exactly as before (no `flags=` suffix at all).
+            # Last-run-only files retain their existing output without a flags
+            # suffix when no warning flag is active.
             ts = _first_parsed_ts(payload, ("last_run_at",))
             if ts is None or ts < cutoff:
                 continue
@@ -382,6 +435,7 @@ def collect_state_events(cutoff, data_dir):
             events.append(Event(ts, line, "STATE", {
                 "name": name, "flags": [], "payload": dict(payload),
             }))
+
     return events, warnings
 
 
@@ -389,14 +443,21 @@ def collect_audit_events(cutoff, path):
     """Collect recent real actions from Captain's audit log."""
     events = []
     warnings = []
+
+    # A missing audit log means there are no durable actions to show.
     if not path.exists():
         return events, warnings
+
+    # Read once so malformed lines can be counted without aborting the file.
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
         warnings.append("%s: unreadable, skipped (%s)" % (path.name, exc))
         return events, warnings
+
     skipped = 0
+
+    # Parse the JSONL stream one independent row at a time.
     for raw_line in text.splitlines():
         raw_line = raw_line.strip()
         if not raw_line:
@@ -409,13 +470,14 @@ def collect_audit_events(cutoff, path):
         if not isinstance(row, dict):
             skipped += 1
             continue
-        # `ts` in this file is not reliably a string across every writer --
-        # _parse_ts guards every type it sees, so a non-string value here
-        # can never raise; it is simply treated as unparseable if it isn't
-        # a recognized string/epoch shape.
+
+        # Audit writers do not all use the same timestamp type. The shared
+        # parser safely rejects unrecognized values.
         ts = _first_parsed_ts(row, ("ts",))
         if ts is None or ts < cutoff:
             continue
+
+        # Render the stable core fields and retain the complete row in ``raw``.
         event = row.get("event", "unknown")
         task_id = row.get("task_id") or row.get("blocker_id") or "-"
         source = row.get("source", "-")
@@ -423,15 +485,21 @@ def collect_audit_events(cutoff, path):
             _local(ts), event, task_id, source,
         )
         events.append(Event(ts, line, "ACTED", dict(row)))
+
+    # Report malformed rows once instead of emitting repetitive warnings.
     if skipped:
         warnings.append(
             "data/audit-log.jsonl: skipped %d malformed line(s)" % skipped
         )
+
     return events, warnings
 
 
+# Report assembly
+
 def build_report(hours, root=None, cron_list_fn=None, cron_runs_fn=None, now=None):
-    """Combine scheduled runs, saved decisions, and audited actions into one timeline."""
+    """Combine scheduled runs, saved decisions, and actions into one timeline."""
+    # Resolve injectable dependencies and the requested time window.
     root = root or ROOT
     now = now or datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=hours)
@@ -439,6 +507,7 @@ def build_report(hours, root=None, cron_list_fn=None, cron_runs_fn=None, now=Non
     cron_list_fn = cron_list_fn or _default_cron_list_fn(openclaw_bin)
     cron_runs_fn = cron_runs_fn or _default_cron_runs_fn(openclaw_bin)
 
+    # Merge all three sources while preserving every non-fatal warning.
     events = []
     warnings = []
     for collect_events, collect_warnings in (
@@ -449,38 +518,52 @@ def build_report(hours, root=None, cron_list_fn=None, cron_runs_fn=None, now=Non
         events.extend(collect_events)
         warnings.extend(collect_warnings)
 
+    # Present different event kinds together in one chronological feed.
     events.sort(key=lambda pair: pair[0])
     return events, warnings, now
 
 
+# Command-line interface
+
 def _parse_hours_argument(argv):
-    """Returns a positive int hours value. Raises BadHoursArgument (never a
-    bare ValueError/IndexError) on anything else, so main() can convert a
-    typo'd argument into a clean exit instead of a traceback."""
+    """Return a positive hours value or raise ``BadHoursArgument``.
+
+    The dedicated exception lets ``main`` turn invalid user input into a clean
+    command error instead of an incident traceback.
+    """
+    # An omitted argument uses the documented 24-hour window.
     if not argv:
         return DEFAULT_HOURS
+
+    # Parse only the first positional value, matching the existing CLI contract.
     raw = argv[0]
     try:
         hours = int(raw)
     except (TypeError, ValueError):
         raise BadHoursArgument("HOURS must be an integer, got %r" % (raw,))
+
+    # Zero and negative windows cannot describe recent activity.
     if hours <= 0:
         raise BadHoursArgument("HOURS must be positive, got %r" % (raw,))
+
     return hours
 
 
 def main(argv=None, root=None, cron_list_fn=None, cron_runs_fn=None,
          now=None, stdout=None, stderr=None):
     """Print Captain's recent activity as a readable command-line report."""
+    # Use real command-line streams by default while keeping tests injectable.
     argv = sys.argv[1:] if argv is None else list(argv)
     stdout = stdout or sys.stdout
     stderr = stderr or sys.stderr
 
+    # The module docstring is the canonical long-form CLI help text.
     if argv and argv[0] in ("-h", "--help"):
         print(__doc__.strip() if __doc__ else "usage: captain_activity.py [HOURS]",
               file=stdout)
         return 0
 
+    # Validate user input before entering the telemetry incident path.
     try:
         hours = _parse_hours_argument(argv)
     except BadHoursArgument as exc:
@@ -490,23 +573,29 @@ def main(argv=None, root=None, cron_list_fn=None, cron_runs_fn=None,
         print("captain_activity: %s" % exc, file=stderr)
         return 2
 
+    # Collect every source for the same time window.
     events, warnings, now = build_report(
         hours, root=root, cron_list_fn=cron_list_fn,
         cron_runs_fn=cron_runs_fn, now=now,
     )
 
+    # Print a stable header, then warnings and chronological feed entries.
     print(
         "Captain activity -- last %d hour(s), as of %s (%d event%s)" % (
             hours, _local(now), len(events), "" if len(events) == 1 else "s",
         ),
         file=stdout,
     )
+
     for warning in warnings:
         print("WARN    %s" % warning, file=stdout)
+
     if not events:
         print("(nothing in window)", file=stdout)
+
     for _, line in events:
         print(line, file=stdout)
+
     return 0
 
 

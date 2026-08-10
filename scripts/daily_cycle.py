@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-"""Captain daily cycle store: per-date top-3 and phase stamps."""
+"""Store the small amount of state that connects Captain's daily phases.
+
+Each date can hold the team's current top three priorities, tomorrow's top
+three, the per-person top two that were sent or previewed, and timestamps for
+the completed morning and end-of-day phases. The module exposes the same
+operations as Python helpers and as a compact command-line interface.
+
+Every public state-update helper also writes to Captain's local audit log.
+"""
+
 import argparse
 import json
 import sqlite3
@@ -10,6 +19,8 @@ from pathlib import Path
 import captain_telemetry
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# Allow direct script execution to import the neighboring database helper.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from captain_db import DB as DEFAULT_DB, audit  # noqa: E402
 
@@ -24,98 +35,142 @@ CREATE TABLE IF NOT EXISTS daily_cycle (
   personal_top2 TEXT NOT NULL DEFAULT '[]'
 );
 """
-# Columns added after this table's original six. `CREATE TABLE IF NOT EXISTS`
-# above is a no-op against the database already live on the OpenClaw host, so a
-# new column has to be ALTERed in. Listed last in SCHEMA deliberately, so a
-# freshly created database and a migrated one end up with identical column
-# order. `get_cycle` selects by name, so order is not load-bearing either way.
+
+# ``CREATE TABLE IF NOT EXISTS`` cannot add columns to an existing host
+# database. Keep post-launch columns here so ``_ensure`` can migrate old
+# databases. They also appear last in ``SCHEMA`` so fresh and migrated tables
+# have the same layout, although ``get_cycle`` safely selects columns by name.
 ADDED_COLUMNS = (
     ("personal_top2", "TEXT NOT NULL DEFAULT '[]'"),
 )
+
+# Only these phase names map to timestamp columns in the table.
 PHASES = ("morning", "eod")
 
 
 def _now():
-    """Return the current time in a standard, timezone-aware text format."""
+    """Return the current UTC time as an ISO 8601 string."""
     return datetime.now(timezone.utc).isoformat()
 
 
 def _ensure(db_path):
-    """Create or safely update the daily-cycle table when needed."""
+    """Create the daily-cycle table and apply any additive migrations.
+
+    Calling this repeatedly is safe. It lets every public helper work with a
+    new database as well as one created before later columns were introduced.
+    """
+    # SQLite cannot create the database until its parent directory exists.
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+
     with sqlite3.connect(str(db_path)) as c:
+        # Create the complete current schema for a new database.
         c.executescript(SCHEMA)
+
+        # Add any newer columns missing from an older database.
         existing = {row[1] for row in c.execute("PRAGMA table_info(daily_cycle)")}
         for name, decl in ADDED_COLUMNS:
             if name in existing:
                 continue
-            # name/decl come from the ADDED_COLUMNS literal above, never user
-            # input -- same reasoning as the interpolated UPDATE in _upsert.
+
+            # SQL identifiers cannot use parameter placeholders. Both values
+            # come from ``ADDED_COLUMNS`` above, never from user input.
             c.execute("ALTER TABLE daily_cycle ADD COLUMN %s %s" % (name, decl))
 
 
 def _upsert(db_path, date_str, **updates):
-    """Create a day's record if needed, then save the supplied changes."""
+    """Create one date's row if needed, then apply the requested fields.
+
+    Example input: ``_upsert(db, "2026-08-10", top3='["Ship"]')``
+    Example output: the complete deserialized cycle mapping for that date.
+    """
+    # Ensure both the table and any additive migrations are present.
     _ensure(db_path)
     t = _now()
+
     with sqlite3.connect(str(db_path)) as c:
+        # Insert the day's base row once; later calls reuse it.
         c.execute("INSERT INTO daily_cycle(date, updated_at) VALUES(?, ?) "
                   "ON CONFLICT(date) DO NOTHING", (date_str, t))
+
+        # Apply each supplied field while sharing one update timestamp.
         for k, v in updates.items():
-            # k is always from fixed internal literals (top3, tomorrow_top3,
-            # personal_top2, morning_done_at, eod_done_at); never user input
+            # SQL identifiers cannot use placeholders. ``k`` always comes from
+            # fixed internal field names, never directly from user input.
             c.execute("UPDATE daily_cycle SET %s=?, updated_at=? WHERE date=?" % k,
                       (v, t, date_str))
+
+    # Read through the public path so callers always receive the full row shape.
     return get_cycle(db_path, date_str)
 
 
 def set_top3(db_path, date_str, items):
-    """Save the three priorities selected for the current day."""
+    """Save today's selected priorities and return the full daily cycle."""
+    # Lists are stored as JSON so item order is preserved in one SQLite field.
     out = _upsert(db_path, date_str, top3=json.dumps(list(items)))
+
+    # Audit local state changes independently from the database transaction.
     audit("daily_cycle_top3_set", date=date_str, count=len(items))
     return out
 
 
 def set_tomorrow_top3(db_path, date_str, items):
-    """Save the three priorities selected for the following day."""
+    """Save tomorrow's selected priorities and return the full daily cycle."""
+    # Lists are stored as JSON so item order is preserved in one SQLite field.
     out = _upsert(db_path, date_str, tomorrow_top3=json.dumps(list(items)))
+
+    # Record how many priorities Captain selected without logging their text.
     audit("daily_cycle_tomorrow_top3_set", date=date_str, count=len(items))
     return out
 
 
 def set_personal_top2(db_path, date_str, items):
-    """Persist the per-person top-2 that was actually sent (or previewed).
+    """Save the per-person top two that Captain sent or previewed.
 
-    `items` is a list of `{slack_user_id, key, task_ids, overridden,
-    override_reason}` dicts -- `key` is the board identity the ranking came from,
-    kept so a stored row traces back to ClickUp independently of Slack
-    resolution. Like every other daily_cycle_* audit row this is LOCAL state, so
-    it is written in `shadow` as well as `live`; only `clickup_*` rows are
-    suppressed in shadow."""
+    Each item contains ``slack_user_id``, ``key``, ``task_ids``, ``overridden``,
+    and ``override_reason``. ``key`` preserves the ClickUp board identity even
+    when Slack resolution changes.
+
+    This is local cycle state, so it is written in both ``shadow`` and ``live``.
+    Only ``clickup_*`` audit actions are suppressed in shadow mode.
+    """
+    # Preserve the complete per-person records as ordered JSON.
     out = _upsert(db_path, date_str, personal_top2=json.dumps(list(items)))
+
+    # Audit only the record count; the detailed selection remains in the table.
     audit("daily_cycle_personal_top2_set", date=date_str, count=len(items))
     return out
 
 
 def stamp(db_path, date_str, phase):
-    """Record when the morning or end-of-day phase finished."""
+    """Record when an allowed daily phase finished and return the cycle."""
+    # Reject unknown names before constructing the matching column name.
     if phase not in PHASES:
         raise ValueError("invalid phase: %s (choose from %s)" % (phase, ",".join(PHASES)))
+
+    # ``phase`` is now known to map to a fixed ``*_done_at`` column.
     out = _upsert(db_path, date_str, **{phase + "_done_at": _now()})
+
+    # Keep a separate audit trail of phase completion.
     audit("daily_cycle_stamp", date=date_str, phase=phase)
     return out
 
 
 def get_cycle(db_path, date_str):
-    """Return the saved daily-cycle record for a date, if one exists."""
+    """Return a date's deserialized cycle, or ``None`` when it has no row."""
+    # Reads also initialize or migrate the schema for first-run callers.
     _ensure(db_path)
+
+    # Select by column name so schema order is not behaviorally significant.
     with sqlite3.connect(str(db_path)) as c:
         row = c.execute(
             "SELECT date,top3,tomorrow_top3,personal_top2,morning_done_at,"
             "eod_done_at,updated_at FROM daily_cycle WHERE date=?",
             (date_str,)).fetchone()
+
     if row is None:
         return None
+
+    # Convert JSON-backed list fields to the Python values callers expect.
     return {"date": row[0], "top3": json.loads(row[1]),
             "tomorrow_top3": json.loads(row[2]),
             "personal_top2": json.loads(row[3]),
@@ -124,35 +179,46 @@ def get_cycle(db_path, date_str):
 
 
 def main():
-    """Handle command-line requests to read or update the daily cycle."""
+    """Parse and execute one daily-cycle command, printing JSON output."""
+    # Define the shared command parser and its operation-specific arguments.
     ap = argparse.ArgumentParser(description="Captain daily cycle store")
     sub = ap.add_subparsers(dest="cmd", required=True)
+
     for name in ("set-top3", "set-tomorrow"):
         p = sub.add_parser(name)
         p.add_argument("--db", default=str(DEFAULT_DB))
         p.add_argument("--date", required=True)
         p.add_argument("--items", required=True, help="JSON array of strings")
+
     p_st = sub.add_parser("stamp")
     p_st.add_argument("--db", default=str(DEFAULT_DB))
     p_st.add_argument("--date", required=True)
     p_st.add_argument("--phase", required=True, choices=PHASES)
+
     p_get = sub.add_parser("get")
     p_get.add_argument("--db", default=str(DEFAULT_DB))
     p_get.add_argument("--date", required=True)
+
     args = ap.parse_args()
+
+    # Dispatch to the Python helper matching the selected subcommand.
     try:
         if args.cmd == "set-top3":
             print(json.dumps(set_top3(args.db, args.date, json.loads(args.items)), indent=2))
         elif args.cmd == "set-tomorrow":
-            print(json.dumps(set_tomorrow_top3(args.db, args.date, json.loads(args.items)), indent=2))
+            result = set_tomorrow_top3(
+                args.db,
+                args.date,
+                json.loads(args.items),
+            )
+            print(json.dumps(result, indent=2))
         elif args.cmd == "stamp":
             print(json.dumps(stamp(args.db, args.date, args.phase), indent=2))
         else:
             print(json.dumps(get_cycle(args.db, args.date), indent=2))
-    # OSError belongs here alongside ValueError: --db is a user-supplied path
-    # and _ensure() mkdirs its parent and opens the file, so an unwritable
-    # location must exit with the same clean one-line message a bad --items
-    # payload gets, not a traceback.
+
+    # Invalid JSON and ordinary filesystem errors become concise command errors.
+    # SQLite operational failures remain unexpected and reach the telemetry guard.
     except (ValueError, OSError) as err:
         msg = str(err) if isinstance(err, OSError) else (err.args[0] if err.args else str(err))
         raise SystemExit(str(msg)) from err

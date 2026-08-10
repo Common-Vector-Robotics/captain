@@ -1,4 +1,21 @@
 #!/usr/bin/env python3
+"""Preview and execute audited ClickUp task changes for Captain.
+
+The command supports task creation, task updates, comments, and JSON batches.
+Without ``--execute`` it prints the request it would make. Executed changes
+respect the DailyLoop shadow-mode safety brake, use the shared ClickUp
+credential loader, and leave audit records for every supported mutation.
+
+Examples:
+    python3 scripts/clickup_write.py create-task --list-id 123 --name "Inspect rover"
+    python3 scripts/clickup_write.py --execute comment-task --task-id abc --text "Bench test passed"
+
+This module also exposes the validation and execution helpers used by tests
+and other Captain scripts. Network access is injected through ``request_fn``
+where practical so those callers can exercise the workflow without contacting
+ClickUp.
+"""
+
 import argparse
 import contextlib
 import hashlib
@@ -23,27 +40,29 @@ import captain_modes
 API = "https://api.clickup.com/api/v2"
 STATUS_ALIASES = {"intake": "to do"}
 
-# Escape hatch for a deliberate manual write while in shadow (env var or --force-live-write).
+# A deliberate manual write can bypass shadow mode through this environment
+# variable or the matching ``--force-live-write`` command-line option.
 SHADOW_ESCAPE_ENV = "CAPTAIN_CLICKUP_FORCE_LIVE_WRITE"
 
 
+# Shadow-mode safety
+
+
 def dailyloop_audience():
-    """Read `DailyLoop.audience` from data/captain-modes.json.
+    """Return the configured DailyLoop audience from the mode file.
 
-    A **missing** file (or a missing `DailyLoop` key) means `off` — `off` means the
-    loop is inert, not that manual ClickUp tooling is banned, so this script applies
-    no new restriction in that case.
+    A missing file or ``DailyLoop`` key means ``off``. That means the automated
+    loop is inert, not that manual ClickUp tooling is banned.
 
-    A file that **exists but cannot be parsed** (corrupt JSON, or an I/O error
-    reading a file we just confirmed is there) is a different situation: it means the
-    shadow-mode safety brake itself is broken, not that DailyLoop is unconfigured.
-    Returning `off` for that case would fail OPEN — silently permitting real ClickUp
-    writes while in shadow because the safety file got corrupted. Fail CLOSED
-    instead: treat it as `shadow` (refuse writes) and capture_message so someone
-    learns the file is corrupt.
+    An existing file that cannot be read or parsed fails closed to ``shadow``
+    and emits telemetry. Successfully parsed data is expected to be the mapping
+    written by ``captain_modes``; an incompatible shape surfaces an error.
     """
+    # A genuinely absent configuration does not restrict manual writes.
     if not captain_modes.MODE_PATH.exists():
         return "off"
+
+    # An unreadable existing configuration fails closed instead of guessing.
     try:
         modes = captain_modes.load_modes()
     except (OSError, ValueError):
@@ -53,17 +72,27 @@ def dailyloop_audience():
             level="error",
         )
         return "shadow"
+
     return (modes.get("DailyLoop") or {}).get("audience") or "off"
 
 
 def shadow_write_block_message(force=False):
-    """Return a refusal message if this write should be suppressed by DailyLoop shadow
-    mode, else None. `force` (CLI --force-live-write or the SHADOW_ESCAPE_ENV env var)
-    is the human operator's explicit escape hatch for a deliberate manual write."""
+    """Return a refusal message when DailyLoop shadow mode blocks a write.
+
+    ``force`` and ``CAPTAIN_CLICKUP_FORCE_LIVE_WRITE`` are explicit operator
+    escape hatches. The function returns ``None`` when the write may proceed.
+
+    Example input: force=True
+    Example output: None
+    """
+    # An explicit operator override always permits the requested write.
     if force or os.environ.get(SHADOW_ESCAPE_ENV):
         return None
+
+    # Only shadow mode suppresses writes; off and live continue normally.
     if dailyloop_audience() != "shadow":
         return None
+
     return (
         "Refused: DailyLoop is in shadow mode (data/captain-modes.json -> "
         "DailyLoop.audience). No ClickUp mutation was made and no clickup_* audit row "
@@ -73,11 +102,16 @@ def shadow_write_block_message(force=False):
 
 
 def now():
-    """Return the current time in a standard, timezone-aware text format."""
+    """Return the current UTC time as a timezone-aware ISO 8601 string."""
     return datetime.now(timezone.utc).isoformat()
 
 
+# ClickUp errors and HTTP requests
+
+
 class ClickUpRequestError(Exception):
+    """Represent a request ClickUp received but rejected."""
+
     def __init__(self, http_status, clickup_message, path):
         """Remember the details of a request that ClickUp rejected."""
         super().__init__(clickup_message)
@@ -96,6 +130,8 @@ class ClickUpRequestError(Exception):
 
 
 class ClickUpUnavailableError(Exception):
+    """Represent an outage, timeout, or throttled ClickUp request."""
+
     def __init__(self, message, path):
         """Remember why ClickUp could not be reached for this request."""
         super().__init__(message)
@@ -108,12 +144,19 @@ class ClickUpUnavailableError(Exception):
 
 
 def clickup_error_message(error):
-    """Extract ClickUp's most useful explanation from an error response."""
+    """Extract ClickUp's most useful explanation from an HTTP error response.
+
+    ClickUp has used several keys for API error text, so this helper checks
+    ``err``, ``message``, and ``error`` in that order.
+    """
+    # A malformed or unreadable response still receives a stable fallback.
     try:
         raw = error.read().decode("utf-8", errors="replace")
         body = json.loads(raw) if raw else {}
     except (OSError, ValueError, UnicodeError):
         body = {}
+
+    # Return the first non-empty message in ClickUp's known response shapes.
     if isinstance(body, dict):
         for key in ("err", "message", "error"):
             value = body.get(key)
@@ -123,7 +166,15 @@ def clickup_error_message(error):
 
 
 def request(method, path, token, payload=None):
-    """Send one authenticated ClickUp request and translate failures clearly."""
+    """Send one authenticated request and translate ClickUp failures.
+
+    Successful JSON responses become dictionaries. HTTP 429 and 5xx responses
+    are classified as temporary unavailability; other HTTP errors retain
+    ClickUp's rejection details.
+
+    Example input: method="GET", path="/task/abc", payload=None
+    """
+    # Encode a body only for operations that supplied a payload.
     body = None if payload is None else json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         API + path,
@@ -131,27 +182,39 @@ def request(method, path, token, payload=None):
         method=method,
         headers={"Authorization": token, "Content-Type": "application/json"},
     )
+
+    # Keep transport details and error classification in one shared boundary.
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = resp.read().decode()
             return json.loads(data) if data else {}
     except urllib.error.HTTPError as error:
         message = clickup_error_message(error)
+
+        # Throttling and server errors are retry/outage conditions, not bad input.
         if error.code >= 500 or error.code == 429:
             raise ClickUpUnavailableError(message, path)
+
         raise ClickUpRequestError(error.code, message, path)
     except (urllib.error.URLError, TimeoutError) as error:
         raise ClickUpUnavailableError("ClickUp API is unavailable", path) from error
 
 
 def verify_due_date(token, task_id, expected_due_date_ms, request_fn=request):
-    """Read a task back from ClickUp to confirm its due date was saved correctly."""
+    """Read a task back and report whether ClickUp saved its due date.
+
+    A missing expected due date requires no verification and returns
+    ``{"checked": False}`` without making a request.
+    """
     if expected_due_date_ms is None:
         return {"checked": False}
+
+    # ClickUp returns due dates as strings, so normalize before comparing.
     task = request_fn("GET", f"/task/{task_id}", token)
     actual = task.get("due_date")
     actual_int = int(actual) if actual is not None else None
     ok = actual_int == expected_due_date_ms
+
     return {
         "checked": True,
         "ok": ok,
@@ -162,17 +225,31 @@ def verify_due_date(token, task_id, expected_due_date_ms, request_fn=request):
 
 
 def clean_payload(values):
-    """Remove blank values so Captain sends ClickUp only intentional changes."""
+    """Remove absent values so ClickUp receives only intentional changes.
+
+    ``None`` and empty lists are omitted. Other false-like values, including
+    ``False``, ``0``, and empty strings, retain their existing meaning.
+    """
     return {key: value for key, value in values.items() if value is not None and value != []}
 
 
 def parse_assignees(raw):
-    """Validate assignee identifiers and convert them to ClickUp's numeric form."""
+    """Convert assignee identifiers to ClickUp's numeric user-ID format.
+
+    Blank items are ignored. A non-numeric value raises an actionable error
+    that directs callers to the Owners-label fallback.
+
+    Example input: ["123", " 456 "]
+    Example output: [123, 456]
+    """
     values = []
+
+    # Normalize every repeated ``--assignee`` value independently.
     for item in raw or []:
         item = str(item).strip()
         if not item:
             continue
+
         try:
             values.append(int(item))
         except ValueError:
@@ -182,52 +259,54 @@ def parse_assignees(raw):
                 "built-in ClickUp assignee, use --owner \"<name>\" instead "
                 "to fall back to the Owners custom labels field."
             )
+
     return values
 
 
-# --- Owners custom-field fallback -------------------------------------------
+# Owners-label fallback
 #
-# Ported from scripts/weekly_slack_clickup_status.py (ensure_owners_field_for_label
-# and friends), which is deleted at the Task 12 Phase B cutover. The owner's
-# standing rule (MEMORY.md, 2026-06-16 / 06-18 / 06-23): prefer the built-in
-# ClickUp assignee field first; if the person cannot be a built-in assignee, use
-# the `Owners` custom **labels** field -- creating it on the list if missing,
-# adding the needed owner label -- rather than leaving ownership only in the
-# task description or free text.
+# Prefer ClickUp's built-in numeric assignees. When a person cannot be a
+# built-in assignee, preserve ownership in the list's ``Owners`` labels field
+# instead of burying it in a task description or other free text.
 #
-# Hard API constraint (verified against ClickUp's developer docs and feedback
-# tracker): the public API can create a labels field with initial options, and
-# can set an existing option's value on a task, but it cannot append a new
-# option to an *existing* labels field. That is an open feature request, not a
-# gap in this tooling -- so when the field already exists but lacks the
-# requested label, we must not silently drop ownership and must not write it
-# into the description (the rule explicitly forbids that). We surface it as an
-# actionable `needs_owner_label` marker instead, mirroring how
-# `needs_blocked_status` already surfaces an equivalent can't-do-it-via-API gap.
-#
-# Write shape: `create-task`'s POST /list/{id}/task supports inline
-# `custom_fields` in the create body -- that IS a documented Create Task
-# parameter, so create-task keeps setting Owners inline. `update-task`'s
-# PUT /task/{id} does NOT support `custom_fields` as an update parameter;
-# setting a custom field on an existing task is a *different* endpoint,
-# POST /task/{id}/field/{field_id} with {"value": [...]}, and per ClickUp's
-# docs that call OVERWRITES whatever option ids are already on the task's
-# labels field. So update-task must read-and-union: read the task's current
-# Owners value (from the GET already performed in prepare_operation) and union
-# it with the newly resolved option ids before writing, or a second owner's
-# label would silently delete the first owner's label.
+# ClickUp can create a labels field with initial options, but its public API
+# cannot append an option to an existing labels field. A missing owner option
+# therefore becomes an actionable ``needs_owner_label`` result rather than
+# silently losing the owner. Creating a task can set custom fields inline.
+# Updating a task requires the separate custom-field endpoint, which overwrites
+# the field, so updates read and union existing option IDs before writing.
 
-OWNER_LABEL_PALETTE = ["#2ecd6f", "#1bbc9c", "#3398dc", "#9b59b6", "#e67e22", "#e74c3c", "#f1c40f", "#667684"]
+OWNER_LABEL_PALETTE = [
+    "#2ecd6f",
+    "#1bbc9c",
+    "#3398dc",
+    "#9b59b6",
+    "#e67e22",
+    "#e74c3c",
+    "#f1c40f",
+    "#667684",
+]
 
 
 def owner_label_color(owner_name):
-    """Choose the same label color each time a particular owner name is used."""
-    idx = int(hashlib.sha1((owner_name or "Owner").encode("utf-8")).hexdigest()[:2], 16) % len(OWNER_LABEL_PALETTE)
+    """Choose a stable palette color for an owner's label.
+
+    Hashing the raw name makes repeated uses select the same color without
+    storing additional state.
+    """
+    digest_prefix = hashlib.sha1(
+        (owner_name or "Owner").encode("utf-8")
+    ).hexdigest()[:2]
+    idx = int(digest_prefix, 16) % len(OWNER_LABEL_PALETTE)
     return OWNER_LABEL_PALETTE[idx]
 
 
 def normalize_label_text(value):
-    """Simplify label text so similar owner names can be compared reliably."""
+    """Normalize punctuation, spacing, and case for owner-name comparisons.
+
+    Example input: "  Ada-Lovelace  "
+    Example output: "ada lovelace"
+    """
     return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
 
@@ -241,69 +320,60 @@ def find_owners_field(fields):
     for field in fields:
         if normalize_label_text(field.get("name")) == "owners":
             return field
+
     return None
 
 
 def owners_label_option(field, owner_name):
-    """Find the label option that matches a person's name."""
+    """Find the Owners label option matching a person's normalized name."""
     want = normalize_label_text(owner_name)
+
     for opt in ((field.get("type_config") or {}).get("options") or []):
         if normalize_label_text(opt.get("label") or opt.get("name")) == want:
             return opt
+
     return None
 
 
 def owner_fallback_applies(operation):
-    """Decide whether the Owners-label fallback should be consulted for this
-    operation. `--assignee` always wins when it names an actual numeric
-    ClickUp user AND the command supports setting assignees (only create-task
-    does today -- update-task has no `--assignee` option, so a stray
-    `assignee` key on an update-task batch operation must not block the
-    Owners fallback there)."""
+    """Return whether an operation needs the Owners-label fallback.
+
+    A valid numeric assignee takes precedence for ``create-task``. The
+    ``update-task`` command does not support assignees, so an unrelated
+    ``assignee`` key in batch input must not suppress its owner fallback.
+
+    Example output: (True, ["Ada Lovelace"])
+    """
+    # Normalize owner names and ignore empty repeated arguments.
     owners = [str(name).strip() for name in (operation.get("owner") or []) if str(name).strip()]
     if not owners:
         return False, []
+
+    # A built-in create-task assignee is the preferred ownership mechanism.
     if operation.get("command") == "create-task" and parse_assignees(operation.get("assignee", [])):
         return False, []
+
     return True, owners
 
 
 def resolve_owner_field(list_id, owner_names, token, request_fn, audit_fn, source, evidence):
-    """Resolve the ClickUp Owners-labels custom field and the option ids for
-    `owner_names` on `list_id`. Returns (field, option_ids, needs_owner_label):
+    """Resolve an Owners field and label option IDs for the requested names.
 
-    - `field` is the (possibly just-created) Owners field dict, always
-      present -- callers use `field["id"]`.
-    - `option_ids` is the list of option ids that resolved for `owner_names`
-      (empty if none resolved).
-    - `needs_owner_label` is None when every requested owner name resolved to
-      an existing label option, else `{"list_id": ..., "owner": <first missing
-      name>, "owners": [<all missing names>]}` -- the actionable marker for
-      case 3 (field exists, but this owner isn't one of its label options; the
-      public API cannot add one). Propagated by the caller into both the audit
-      record and the per-operation result, mirroring `needs_blocked_status`.
+    Returns ``(field, option_ids, needs_owner_label)``. The field may be
+    created here, so this lookup is not always read-only. When a pre-existing
+    field lacks an option, ``needs_owner_label`` tells a human which options
+    to add because ClickUp's API cannot add them.
 
-    Important: the wrong-type guard and the "missing option" check are both
-    gated on whether *this call* just created the field. A field this call
-    created is never reported as wrong-typed (we requested type 'labels'
-    ourselves) or as missing its own label (telling a human to add a label
-    option that this call just added would be nonsensical) -- gating on
-    `created` keeps that guard from running after a real mutation and
-    reporting a false "safe, nothing happened" story. If ClickUp's create
-    response doesn't give us usable option ids for the labels we just asked
-    it to create, that's a malformed-response situation, not a "someone needs
-    to add a label" situation, so it raises a distinct ValueError instead of
-    a misleading `needs_owner_label`.
-
-    Raises ValueError if the list already has a *pre-existing* `Owners` field
-    that is not a `labels` field -- a real misconfiguration. That case is
-    raised before any mutation is attempted, so it cannot corrupt data; the
-    caller lets it propagate as a normal per-operation failure (same as any
-    other ValueError from `prepare_operation`).
+    A pre-existing ``Owners`` field with the wrong type raises ``ValueError``
+    before this function mutates it. A newly created field whose response does
+    not contain the requested option IDs also raises instead of falsely
+    claiming that a human merely needs to add an option.
     """
+    # Reuse the list's Owners field, or create it with every requested option.
     fields = clickup_list_fields(list_id, token, request_fn)
     field = find_owners_field(fields)
     created = False
+
     if not field:
         payload = {
             "name": "Owners",
@@ -316,12 +386,11 @@ def resolve_owner_field(list_id, owner_names, token, request_fn, audit_fn, sourc
                 ],
             },
         }
+
+        # Audit both accepted and rejected field-creation attempts.
         try:
             result = request_fn("POST", "/list/{}/field".format(list_id), token, payload)
         except (ClickUpRequestError, ClickUpUnavailableError):
-            # Minor: a rejected create must still leave an audit trace -- the
-            # event is named `..._create_attempt`, so it must fire on failure
-            # too, not only on success.
             audit_fn(
                 "clickup_custom_field_create_attempt",
                 list_id=list_id,
@@ -332,8 +401,10 @@ def resolve_owner_field(list_id, owner_names, token, request_fn, audit_fn, sourc
                 evidence=evidence,
             )
             raise
+
         field = result.get("field") or result
         created = True
+
         audit_fn(
             "clickup_custom_field_create_attempt",
             list_id=list_id,
@@ -343,10 +414,17 @@ def resolve_owner_field(list_id, owner_names, token, request_fn, audit_fn, sourc
             source=source,
             evidence=evidence,
         )
+
+    # Refuse to reinterpret a user's pre-existing field with an incompatible type.
     if not created and (field.get("type") or "") != "labels":
         raise ValueError(
-            "Owners custom field on list {} is type {!r}, expected 'labels'".format(list_id, field.get("type"))
+            "Owners custom field on list {} is type {!r}, expected 'labels'".format(
+                list_id,
+                field.get("type"),
+            )
         )
+
+    # Resolve every requested name while retaining all unresolved names.
     option_ids, missing = [], []
     for name in owner_names:
         opt = owners_label_option(field, name)
@@ -354,8 +432,11 @@ def resolve_owner_field(list_id, owner_names, token, request_fn, audit_fn, sourc
             option_ids.append(opt.get("id"))
         else:
             missing.append(name)
+
     needs_owner_label = None
+
     if missing:
+        # A new field should contain the options just sent in its create payload.
         if created:
             raise ValueError(
                 "ClickUp created the Owners labels field on list {} but its response did not "
@@ -363,6 +444,8 @@ def resolve_owner_field(list_id, owner_names, token, request_fn, audit_fn, sourc
                     list_id, missing
                 )
             )
+
+        # Existing fields cannot receive new options through ClickUp's API.
         for name in missing:
             audit_fn(
                 "clickup_owner_label_missing",
@@ -375,49 +458,79 @@ def resolve_owner_field(list_id, owner_names, token, request_fn, audit_fn, sourc
                        "list -- the public ClickUp API cannot append a new option to an existing "
                        "labels field.",
             )
+
         needs_owner_label = {"list_id": list_id, "owner": missing[0], "owners": missing}
+
     return field, option_ids, needs_owner_label
 
 
 def owner_field_existing_value(existing_custom_fields, field_id):
-    """Return the list of option ids already set for `field_id` on a task, from
-    the `custom_fields` array of a prior GET /task response. Empty list if the
-    field isn't present on the task yet or carries no value."""
+    """Return existing option IDs for one field from a task response.
+
+    A missing field or a value with an unexpected shape returns an empty list.
+    """
     for custom_field in existing_custom_fields or []:
         if custom_field.get("id") == field_id:
             value = custom_field.get("value")
             return [item for item in value if item is not None] if isinstance(value, list) else []
+
     return []
 
 
 def dedupe_preserve_order(values):
-    """Remove repeated values while keeping their original order."""
+    """Remove repeated values while preserving first-seen order.
+
+    Example input: ["one", "two", "one"]
+    Example output: ["one", "two"]
+    """
     seen = set()
     result = []
+
     for value in values:
         if value not in seen:
             seen.add(value)
             result.append(value)
+
     return result
 
 
+# Status and operation preparation
+
+
 def allowed_statuses(token, list_id, request_fn=request):
-    """Return the workflow statuses allowed by a ClickUp list."""
+    """Return the workflow status names allowed by a ClickUp list."""
     result = request_fn("GET", f"/list/{list_id}", token)
     return [item.get("status") for item in result.get("statuses", []) if item.get("status")]
 
 
 def resolve_status(requested_status, statuses):
-    """Match a requested status to an allowed one or explain why it cannot be used."""
+    """Match a requested status to a list status or explain the mismatch.
+
+    Comparisons ignore case and surrounding whitespace. The known ``intake``
+    alias maps to ``to do``. A missing Blocked status becomes an actionable
+    marker; any other invalid name becomes a validation error.
+    """
+    # No requested status means the operation should leave status unchanged.
     if requested_status is None:
         return {"applied": None, "requested": None, "mapped": False}
+
+    # First prefer an exact normalized match to a status on the destination list.
     normalized = str(requested_status).strip().casefold()
     by_normalized_name = {str(status).strip().casefold(): status for status in statuses}
+
     if normalized in by_normalized_name:
-        return {"applied": by_normalized_name[normalized], "requested": requested_status, "mapped": False}
+        return {
+            "applied": by_normalized_name[normalized],
+            "requested": requested_status,
+            "mapped": False,
+        }
+
+    # Then consult Captain's small set of intentional workflow aliases.
     alias = STATUS_ALIASES.get(normalized)
     if alias and alias in by_normalized_name:
         return {"applied": by_normalized_name[alias], "requested": requested_status, "mapped": True}
+
+    # Blocked is special: preserve the request as follow-up work for the list.
     if normalized == "blocked":
         return {
             "applied": None,
@@ -425,6 +538,8 @@ def resolve_status(requested_status, statuses):
             "mapped": False,
             "needs_blocked_status": True,
         }
+
+    # Other unknown statuses are ordinary validation failures.
     return {
         "applied": None,
         "requested": requested_status,
@@ -434,24 +549,39 @@ def resolve_status(requested_status, statuses):
 
 
 def add_status_note(description, resolution):
-    """Explain in the task description when a requested Blocked status is unavailable."""
+    """Append a task note when the requested Blocked status is unavailable.
+
+    Existing notes are not duplicated, and an absent description becomes just
+    the note.
+    """
     if not resolution.get("needs_blocked_status"):
         return description
+
     note = ("Requested workflow state: Blocked — this list has no Blocked status yet. "
             "Add it in List/Space settings; status left unchanged.")
+
     if description and note in description:
         return description
+
     return "\n\n".join(part for part in (description, note) if part)
 
 
 def operation_fields(operation):
-    """Validate an operation and identify the ClickUp request it requires."""
+    """Validate an operation and describe its primary ClickUp request.
+
+    The returned metadata contains the HTTP method, API path, audit event, and
+    task identity used by later preparation and execution phases.
+    """
     command = operation.get("command")
+
+    # New tasks require both a destination list and a human-readable name.
     if command == "create-task":
         list_id = operation.get("list_id")
         name = operation.get("name")
+
         if not list_id or not name:
             raise ValueError("create-task requires list_id and name")
+
         return {
             "method": "POST",
             "path": "/list/{}/task".format(list_id),
@@ -460,10 +590,14 @@ def operation_fields(operation):
             "audit_event": "clickup_task_create",
             "due_date_followup_required": operation.get("due_date_ms") is None,
         }
+
+    # Updates already know their task ID; the destination list may be resolved later.
     if command == "update-task":
         task_id = operation.get("task_id")
+
         if not task_id:
             raise ValueError("update-task requires task_id")
+
         return {
             "method": "PUT",
             "path": "/task/{}".format(task_id),
@@ -473,18 +607,23 @@ def operation_fields(operation):
             "audit_event": "clickup_task_update",
             "due_date_followup_required": False,
         }
+
+    # Comments use a separate endpoint and cannot carry Owners-label changes.
     if command == "comment-task":
         task_id = operation.get("task_id")
+
         if not task_id:
             raise ValueError("comment-task requires task_id")
         if not operation.get("comment_text"):
             raise ValueError("comment-task requires comment_text")
+
         if operation.get("owner"):
             raise ValueError(
                 "comment-task does not support --owner/owner -- the Owners-label fallback only "
                 "applies to create-task and update-task, and comment-task has no list_id to "
                 "resolve it against"
             )
+
         return {
             "method": "POST",
             "path": "/task/{}/comment".format(task_id),
@@ -494,28 +633,31 @@ def operation_fields(operation):
             "audit_event": "clickup_task_comment",
             "due_date_followup_required": False,
         }
+
     raise ValueError("unsupported batch command: {}".format(command))
 
 
 def operation_payload(operation, resolution, existing_description=None, custom_fields_value=None):
     """Build the request body for the operation's primary write.
 
-    `custom_fields_value` is ONLY ever used for `create-task`: POST
-    /list/{id}/task is a documented Create Task parameter that accepts inline
-    `custom_fields`. `update-task`'s PUT /task/{id} has no such parameter --
-    ClickUp does not support setting custom fields through Update Task, so
-    that body must never carry a `custom_fields` key. Setting the Owners
-    field on an existing task goes through a separate POST
-    /task/{id}/field/{field_id} call made after this payload's request
-    succeeds (see `execute_prepared_operation`'s `owner_field_update`).
+    ``custom_fields_value`` is valid only for task creation. ClickUp's Update
+    Task endpoint does not accept custom fields, so existing tasks receive an
+    Owners-field follow-up request only after their primary update succeeds.
     """
     command = operation["command"]
+
+    # Comments have a minimal, command-specific request shape.
     if command == "comment-task":
         return {"comment_text": operation.get("comment_text")}
+
+    # Status mapping may require retaining or annotating the old description.
     description = operation.get("description")
     if description is None and (resolution.get("mapped") or resolution.get("needs_blocked_status")):
         description = existing_description
+
     description = add_status_note(description, resolution)
+
+    # Create Task accepts assignees and inline custom fields.
     if command == "create-task":
         return clean_payload({
             "name": operation.get("name"),
@@ -527,6 +669,8 @@ def operation_payload(operation, resolution, existing_description=None, custom_f
             "due_date_time": False if operation.get("due_date_ms") is not None else None,
             "custom_fields": custom_fields_value,
         })
+
+    # Update Task omits custom fields; those use a dedicated endpoint later.
     return clean_payload({
         "name": operation.get("name"),
         "description": description,
@@ -539,86 +683,123 @@ def operation_payload(operation, resolution, existing_description=None, custom_f
 
 
 def prepare_operation(operation, token, request_fn, status_cache, audit_fn=audit):
-    """Check one proposed change and assemble everything needed to perform it safely."""
+    """Validate and assemble one operation before its primary write.
+
+    The result is ``(fields, payload, resolution, validation_error)``. Status
+    lookups are cached per list. Resolving the Owners fallback can create the
+    list's custom field, so this preparation phase is not always read-only.
+    """
+    # Validate command-specific required fields before making API requests.
     fields = operation_fields(operation)
     command = operation.get("command")
     requested_status = operation.get("status")
     needs_owner_fallback, owner_names = owner_fallback_applies(operation)
+
     existing_description = None
     existing_custom_fields = []
     list_id = fields.get("list_id")
+
+    # Updates need their current task when status or owner handling depends on it.
     if command == "update-task" and (requested_status is not None or needs_owner_fallback):
         task = request_fn("GET", "/task/{}".format(fields["task_id"]), token)
         list_id = ((task.get("list") or {}).get("id"))
+
         if not list_id:
-            raise ValueError("could not identify destination list for task {}".format(fields["task_id"]))
+            raise ValueError(
+                "could not identify destination list for task {}".format(
+                    fields["task_id"]
+                )
+            )
+
         fields["task_name"] = operation.get("name") or task.get("name") or fields["task_id"]
         fields["list_id"] = list_id
         existing_description = task.get("description")
         existing_custom_fields = task.get("custom_fields") or []
 
+    # Resolve a requested status against the destination list's real workflow.
     if requested_status is not None:
         if list_id not in status_cache:
             status_cache[list_id] = allowed_statuses(token, list_id, request_fn=request_fn)
+
         resolution = resolve_status(requested_status, status_cache[list_id])
         if resolution.get("error"):
             return fields, None, None, resolution["error"]
     else:
         resolution = {"applied": None, "requested": None, "mapped": False}
 
+    # Prepare Owners data either inline for creates or as a later update request.
     custom_fields_value = None
     owner_field_update = None
+
     if needs_owner_fallback:
-        # Defense in depth: operation_fields already rejects `owner` on
-        # comment-task (the only command with no list_id), but never attempt
-        # the field lookup without a real destination list regardless of
-        # which command got here -- a lookup against `/list/None/field` is a
-        # guaranteed, permanently-broken 404.
+        # Defense in depth: never make a guaranteed-bad ``/list/None/field``
+        # request, even if a new command reaches this helper unexpectedly.
         if not list_id:
             raise ValueError(
                 "cannot resolve the Owners-label fallback without a list_id "
                 "(operation_id={})".format(operation.get("operation_id"))
             )
+
         field, option_ids, needs_owner_label = resolve_owner_field(
             list_id, owner_names, token, request_fn, audit_fn,
             operation.get("source", "captain"), operation.get("evidence", []),
         )
+
         if needs_owner_label:
             resolution["needs_owner_label"] = needs_owner_label
+
         if command == "create-task":
-            # POST /list/{id}/task supports inline custom_fields -- set directly.
+            # Create Task supports setting the resolved Owners options inline.
             custom_fields_value = [{"id": field["id"], "value": option_ids}] if option_ids else None
         else:
-            # PUT /task/{id} does not support custom_fields. Read-and-union
-            # against what's already on the task so setting a new owner never
-            # deletes an existing one; skip the follow-up write entirely if
-            # the union doesn't actually add anything new.
+            # The custom-field endpoint overwrites values. Union first so a
+            # new owner never deletes an existing one, and skip no-op writes.
             existing_ids = owner_field_existing_value(existing_custom_fields, field["id"])
             union_ids = dedupe_preserve_order(list(existing_ids) + list(option_ids))
+
             if option_ids and set(union_ids) != set(existing_ids):
                 owner_field_update = {"field_id": field["id"], "value": union_ids}
 
+    # Attach any follow-up field write to the status/owner resolution record.
     resolution["owner_field_update"] = owner_field_update
-    return fields, operation_payload(operation, resolution, existing_description, custom_fields_value), resolution, None
+
+    payload = operation_payload(
+        operation,
+        resolution,
+        existing_description,
+        custom_fields_value,
+    )
+    return fields, payload, resolution, None
+
+
+# Audited execution
 
 
 def resolve_audited_task_id(fields, result):
-    """Return the task id to attribute this operation to.
+    """Return the task ID that should receive the operation's audit record.
 
-    Only `create-task` learns its task id from the response body (the response *is*
-    the created task). Every other command already knows its target task id ahead of
-    the request — for `comment-task` in particular, the response is the *comment*
-    object, whose `id` is a comment id, not a task id, and must never be used here.
+    Only ``create-task`` learns its task ID from the response. Other commands
+    already know their target. In particular, a comment response contains a
+    comment ID, which must never be mistaken for the task ID.
     """
     if fields.get("task_id"):
         return fields["task_id"]
+
     return result.get("id")
 
 
 def execute_prepared_operation(operation, fields, payload, resolution, token, request_fn, audit_fn):
-    """Perform one checked ClickUp change, verify it, and record the result."""
+    """Execute one prepared operation, audit it, and verify follow-up data.
+
+    The primary write happens first. An Owners-field update and due-date
+    verification are separate follow-up requests, each with its own audit
+    result so partial success remains visible.
+    """
+    # Perform the primary task or comment mutation exactly once.
     result = request_fn(fields["method"], fields["path"], token, payload)
     task_id = resolve_audited_task_id(fields, result)
+
+    # Record the primary mutation before attempting independent follow-ups.
     due_date_verification = {"checked": False}
     audit_fn(
         fields["audit_event"],
@@ -636,18 +817,13 @@ def execute_prepared_operation(operation, fields, payload, resolution, token, re
         needs_owner_label=resolution.get("needs_owner_label"),
     )
 
-    # The Owners label follow-up for update-task: this is a SECOND request
-    # after the primary task write above just succeeded. Ordering matters --
-    # if this call fails, the task write already landed and must not be
-    # reported as if it (or the whole operation) simply failed; it's a
-    # distinct, partial outcome ("task exists, ownership did not land") that
-    # the caller needs to be able to tell apart from both blanket success and
-    # blanket failure. We catch failures here (rather than let them propagate)
-    # so the primary result below is still returned/counted as succeeded;
-    # `execute_batch` inspects `owner_field_write` to also surface a
-    # dedicated `failed` entry for the ownership half.
+    # Owners on an existing task require a second request. Catch its failure
+    # here because the primary task write has already landed; ``execute_batch``
+    # reports that partial outcome as both a succeeded task write and a
+    # dedicated failed owner-field write.
     owner_field_write = None
     owner_field_update = resolution.get("owner_field_update")
+
     if owner_field_update:
         field_path = "/task/{}/field/{}".format(task_id, owner_field_update["field_id"])
         audit_kwargs = dict(
@@ -660,6 +836,7 @@ def execute_prepared_operation(operation, fields, payload, resolution, token, re
             operation_id=operation.get("operation_id"),
             needs_owner_label=resolution.get("needs_owner_label"),
         )
+
         try:
             request_fn("POST", field_path, token, {"value": owner_field_update["value"]})
             owner_field_write = {
@@ -672,25 +849,49 @@ def execute_prepared_operation(operation, fields, payload, resolution, token, re
         except ClickUpRequestError as error:
             error_data = error.as_error(fields["task_name"])
             owner_field_write = {
-                "attempted": True, "ok": False, "field_id": owner_field_update["field_id"],
-                "value": owner_field_update["value"], "error": error_data,
+                "attempted": True,
+                "ok": False,
+                "field_id": owner_field_update["field_id"],
+                "value": owner_field_update["value"],
+                "error": error_data,
             }
             audit_fn("clickup_owner_field_update", ok=False, error=error_data, **audit_kwargs)
         except ClickUpUnavailableError as error:
             error_data = error.as_error()
             owner_field_write = {
-                "attempted": True, "ok": False, "field_id": owner_field_update["field_id"],
-                "value": owner_field_update["value"], "error": error_data, "unavailable": True,
+                "attempted": True,
+                "ok": False,
+                "field_id": owner_field_update["field_id"],
+                "value": owner_field_update["value"],
+                "error": error_data,
+                "unavailable": True,
             }
-            audit_fn("clickup_owner_field_update", ok=False, error=error_data, unavailable=True, **audit_kwargs)
+            audit_fn(
+                "clickup_owner_field_update",
+                ok=False,
+                error=error_data,
+                unavailable=True,
+                **audit_kwargs,
+            )
 
+    # Read due dates back because ClickUp may accept but normalize the value.
     if operation.get("due_date_ms") is not None:
         try:
-            due_date_verification = verify_due_date(token, task_id, operation["due_date_ms"], request_fn=request_fn)
+            due_date_verification = verify_due_date(
+                token,
+                task_id,
+                operation["due_date_ms"],
+                request_fn=request_fn,
+            )
         except ClickUpRequestError as error:
-            due_date_verification = {"checked": True, "ok": False, "error": error.as_error(fields["task_name"])}
+            due_date_verification = {
+                "checked": True,
+                "ok": False,
+                "error": error.as_error(fields["task_name"]),
+            }
         except ClickUpUnavailableError as error:
             due_date_verification = {"checked": True, "ok": False, "error": error.as_error()}
+
         audit_fn(
             "clickup_due_date_verification",
             task_id=task_id,
@@ -699,6 +900,8 @@ def execute_prepared_operation(operation, fields, payload, resolution, token, re
             operation_id=operation.get("operation_id"),
             due_date_verification=due_date_verification,
         )
+
+    # Return one complete operation record for batch aggregation and callers.
     return {
         "operation_id": operation.get("operation_id"),
         "task_id": task_id,
@@ -717,171 +920,334 @@ def execute_prepared_operation(operation, fields, payload, resolution, token, re
 def execute_batch(operations, token, request_fn=request, audit_fn=audit):
     """Preflight all operations, then execute every valid mutation exactly once.
 
-    The preflight phase is NOT purely read-only: the Owners-label fallback's
-    field lookup (`resolve_owner_field`, called from `prepare_operation`) can
-    itself create a real ClickUp list-level custom field before the main
-    execution loop runs. Callers must not assume anything about preflight is
-    inert, and a ClickUp outage encountered during preflight (429/5xx) is
-    handled the same way an outage during execution is -- caught here and
-    turned into a `failed` entry (plus "not attempted" entries for whatever
-    hadn't been preflighted yet) rather than allowed to propagate out of this
-    function with no `succeeded`/`failed` arrays for the caller to inspect.
+    Preflight is not always read-only: resolving an Owners fallback may create
+    a list-level custom field. If ClickUp becomes unavailable during either
+    phase, the result identifies the uncertain operation and every operation
+    that was not attempted instead of dropping them from the report.
     """
+    # Copy inputs so internal preparation never mutates caller-owned mappings.
     operations = [dict(operation) for operation in operations]
     operation_ids = [operation.get("operation_id") for operation in operations]
+
+    # Stable, unique IDs are required to trace every partial batch outcome.
     if any(not operation_id for operation_id in operation_ids):
         raise ValueError("every batch operation requires a non-empty operation_id")
     if len(operation_ids) != len(set(operation_ids)):
         raise ValueError("batch operation_id values must be unique")
+
     succeeded, failed, prepared, status_cache = [], [], [], {}
+
+    # Phase 1: validate and prepare each operation before primary writes begin.
     for index, operation in enumerate(operations):
         try:
-            fields, payload, resolution, validation_error = prepare_operation(operation, token, request_fn, status_cache, audit_fn=audit_fn)
+            fields, payload, resolution, validation_error = prepare_operation(
+                operation,
+                token,
+                request_fn,
+                status_cache,
+                audit_fn=audit_fn,
+            )
         except ClickUpRequestError as error:
             task_name = operation.get("name") or operation.get("task_id")
             error_data = error.as_error(task_name)
             error_data["retryable"] = True
-            failed.append({"operation_id": operation["operation_id"], "task_name": task_name, "error": error_data})
+            failed.append({
+                "operation_id": operation["operation_id"],
+                "task_name": task_name,
+                "error": error_data,
+            })
             continue
         except ClickUpUnavailableError as error:
             task_name = operation.get("name") or operation.get("task_id")
             error_data = error.as_error()
             error_data.update({"unavailable": True, "unknown": True, "retryable": False})
-            failed.append({"operation_id": operation["operation_id"], "task_name": task_name, "error": error_data})
-            # Anything already fully preflighted (possibly including a real
-            # field-create mutation from its own Owners-label lookup) never
-            # reaches the execution loop now -- account for it as "not
-            # attempted" too, same as the execution loop does for operations
-            # queued behind a failure, so nothing is silently dropped.
-            not_attempted = [prepared_operation for prepared_operation, _, _, _ in prepared] + operations[index + 1:]
+            failed.append({
+                "operation_id": operation["operation_id"],
+                "task_name": task_name,
+                "error": error_data,
+            })
+
+            # Prepared items may already have created Owners fields, but their
+            # primary writes did not run. Report them and all later items.
+            not_attempted = [
+                prepared_operation
+                for prepared_operation, _, _, _ in prepared
+            ] + operations[index + 1:]
+
             for pending_operation in not_attempted:
                 failed.append({
                     "operation_id": pending_operation["operation_id"],
                     "task_name": pending_operation.get("name") or pending_operation.get("task_id"),
-                    "error": {"message": "Not attempted because ClickUp API became unavailable", "unavailable": True, "retryable": True},
+                    "error": {
+                        "message": "Not attempted because ClickUp API became unavailable",
+                        "unavailable": True,
+                        "retryable": True,
+                    },
                 })
-            return {"ok": False, "succeeded": succeeded, "failed": failed, "unavailable": error.as_error()}
+
+            return {
+                "ok": False,
+                "succeeded": succeeded,
+                "failed": failed,
+                "unavailable": error.as_error(),
+            }
         except ValueError as error:
-            failed.append({"operation_id": operation["operation_id"], "task_name": operation.get("name"), "error": {"message": str(error)}})
+            failed.append({
+                "operation_id": operation["operation_id"],
+                "task_name": operation.get("name"),
+                "error": {"message": str(error)},
+            })
             continue
+
         if validation_error:
             validation_error["retryable"] = True
-            failed.append({"operation_id": operation["operation_id"], "task_name": fields["task_name"], "error": validation_error})
+            failed.append({
+                "operation_id": operation["operation_id"],
+                "task_name": fields["task_name"],
+                "error": validation_error,
+            })
             continue
+
         prepared.append((operation, fields, payload, resolution))
 
+    # Phase 2: execute every successfully prepared primary write in order.
     for index, (operation, fields, payload, resolution) in enumerate(prepared):
         try:
-            op_result = execute_prepared_operation(operation, fields, payload, resolution, token, request_fn, audit_fn)
+            op_result = execute_prepared_operation(
+                operation,
+                fields,
+                payload,
+                resolution,
+                token,
+                request_fn,
+                audit_fn,
+            )
         except ClickUpRequestError as error:
             error_data = error.as_error(fields["task_name"])
             error_data["retryable"] = True
-            failed.append({"operation_id": operation["operation_id"], "task_name": fields["task_name"], "error": error_data})
+            failed.append({
+                "operation_id": operation["operation_id"],
+                "task_name": fields["task_name"],
+                "error": error_data,
+            })
             continue
         except ClickUpUnavailableError as error:
             error_data = error.as_error()
             error_data.update({"unavailable": True, "unknown": True, "retryable": False})
-            failed.append({"operation_id": operation["operation_id"], "task_name": fields["task_name"], "error": error_data})
+            failed.append({
+                "operation_id": operation["operation_id"],
+                "task_name": fields["task_name"],
+                "error": error_data,
+            })
+
+            # Stop primary writes after an outage and retain all pending IDs.
             for pending_operation, pending_fields, _, _ in prepared[index + 1:]:
                 failed.append({
                     "operation_id": pending_operation["operation_id"],
                     "task_name": pending_fields["task_name"],
-                    "error": {"message": "Not attempted because ClickUp API became unavailable", "unavailable": True, "retryable": True},
+                    "error": {
+                        "message": "Not attempted because ClickUp API became unavailable",
+                        "unavailable": True,
+                        "retryable": True,
+                    },
                 })
-            return {"ok": False, "succeeded": succeeded, "failed": failed, "unavailable": error.as_error()}
+
+            return {
+                "ok": False,
+                "succeeded": succeeded,
+                "failed": failed,
+                "unavailable": error.as_error(),
+            }
+
         succeeded.append(op_result)
-        # The primary task write above already succeeded (that's why we're
-        # here at all) -- an owner-field-write failure is a genuine partial
-        # outcome, not a blanket success or blanket failure: the task exists
-        # (stays in `succeeded`, with `owner_field_write` describing what
-        # happened to it) AND a dedicated `failed` entry is added so a caller
-        # that only scans `failed` for retryable work still sees it.
+
+        # A failed owner follow-up is partial success: retain the primary write
+        # in ``succeeded`` and add a dedicated failure for retry workflows.
         owner_field_write = op_result.get("owner_field_write")
         if owner_field_write and not owner_field_write.get("ok"):
             error_data = dict(owner_field_write.get("error") or {})
+
             if owner_field_write.get("unavailable"):
                 error_data.update({"unavailable": True, "unknown": True, "retryable": False})
             else:
                 error_data["retryable"] = True
+
             failed.append({
                 "operation_id": "{}:owner-field".format(operation["operation_id"]),
                 "task_name": fields["task_name"],
                 "error": error_data,
             })
+
     return {"ok": not failed, "succeeded": succeeded, "failed": failed}
 
 
+# Command-line input and workflow
+
+
 def parse_operations_file(path):
-    """Read a batch of ClickUp changes from a JSON file or standard input."""
+    """Read a batch operation array from a JSON file or standard input.
+
+    The input may be a bare array or an object with an ``operations`` array.
+    Passing ``-`` reads the JSON document from standard input.
+    """
+    # Load the complete document from the selected input source.
     raw = sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8")
     data = json.loads(raw)
+
+    # Normalize both accepted top-level shapes to a single list.
     operations = data.get("operations") if isinstance(data, dict) else data
     if not isinstance(operations, list):
         raise ValueError("batch input must be a JSON array or an object with an operations array")
+
     return operations
 
 
 def operation_from_args(args):
-    """Turn command-line choices into the standard operation record used internally."""
-    common = {"operation_id": "single", "command": args.command, "source": args.source, "evidence": args.evidence}
+    """Convert parsed command-line arguments to an internal operation record."""
+    # Every single-operation command carries the same audit and source metadata.
+    common = {
+        "operation_id": "single",
+        "command": args.command,
+        "source": args.source,
+        "evidence": args.evidence,
+    }
+
+    # Creation needs the destination list plus the complete initial task shape.
     if args.command == "create-task":
-        return dict(common, list_id=args.list_id, name=args.name, description=args.description, status=args.status,
-                    priority=args.priority, assignee=args.assignee, owner=args.owner, due_date_ms=args.due_date_ms)
+        return dict(
+            common,
+            list_id=args.list_id,
+            name=args.name,
+            description=args.description,
+            status=args.status,
+            priority=args.priority,
+            assignee=args.assignee,
+            owner=args.owner,
+            due_date_ms=args.due_date_ms,
+        )
+
+    # Comments carry only a target task and the comment body beyond shared data.
     if args.command == "comment-task":
         return dict(common, task_id=args.task_id, comment_text=args.comment_text)
-    return dict(common, task_id=args.task_id, name=args.name, description=args.description, status=args.status,
-                priority=args.priority, owner=args.owner, due_date_ms=args.due_date_ms, parent_task_id=args.parent_task_id)
+
+    # The remaining single-operation command is an update with optional changes.
+    return dict(
+        common,
+        task_id=args.task_id,
+        name=args.name,
+        description=args.description,
+        status=args.status,
+        priority=args.priority,
+        owner=args.owner,
+        due_date_ms=args.due_date_ms,
+        parent_task_id=args.parent_task_id,
+    )
 
 
 def main():
-    """Preview or execute audited ClickUp task changes requested on the command line."""
-    parser = argparse.ArgumentParser(description="Audited Captain ClickUp writes. Use only for explicit human requests or approved proposals.")
-    parser.add_argument("--execute", action="store_true", help="Actually mutate ClickUp. Without this, prints the planned request only.")
-    parser.add_argument("--force-live-write", action="store_true",
-                         help="Escape hatch: override DailyLoop shadow-mode write suppression for a deliberate manual write.")
+    """Preview or execute audited ClickUp changes from the command line."""
+    # Define global safety options before command-specific arguments.
+    parser = argparse.ArgumentParser(
+        description=(
+            "Audited Captain ClickUp writes. Use only for explicit human "
+            "requests or approved proposals."
+        )
+    )
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Actually mutate ClickUp. Without this, prints the planned request only.",
+    )
+    parser.add_argument(
+        "--force-live-write",
+        action="store_true",
+        help=(
+            "Escape hatch: override DailyLoop shadow-mode write suppression "
+            "for a deliberate manual write."
+        ),
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
+    # create-task accepts built-in assignees or the Owners-label fallback.
     create = sub.add_parser("create-task")
     create.add_argument("--list-id", required=True)
     create.add_argument("--name", required=True)
     create.add_argument("--description")
     create.add_argument("--status")
-    create.add_argument("--priority", type=int, choices=[1, 2, 3, 4], help="1 urgent, 2 high, 3 normal, 4 low")
-    create.add_argument("--assignee", action="append", default=[],
-                         help="Numeric ClickUp user ID. Repeat for multiple assignees. Always preferred over "
-                              "--owner: when both are given, --assignee wins and no Owners label is set.")
-    create.add_argument("--owner", action="append", default=[],
-                         help="Human name/label for ClickUp's Owners custom labels field, used only as a "
-                              "fallback when no numeric --assignee is available for this person. Creates the "
-                              "Owners field on the list if it does not exist yet. Repeat for multiple owners.")
+    create.add_argument(
+        "--priority",
+        type=int,
+        choices=[1, 2, 3, 4],
+        help="1 urgent, 2 high, 3 normal, 4 low",
+    )
+    create.add_argument(
+        "--assignee",
+        action="append",
+        default=[],
+        help=(
+            "Numeric ClickUp user ID. Repeat for multiple assignees. Always preferred over "
+            "--owner: when both are given, --assignee wins and no Owners label is set."
+        ),
+    )
+    create.add_argument(
+        "--owner",
+        action="append",
+        default=[],
+        help=(
+            "Human name/label for ClickUp's Owners custom labels field, used only as a "
+            "fallback when no numeric --assignee is available for this person. Creates the "
+            "Owners field on the list if it does not exist yet. Repeat for multiple owners."
+        ),
+    )
     create.add_argument("--due-date-ms", type=int, help="ClickUp due date in Unix milliseconds")
     create.add_argument("--source", default="captain")
     create.add_argument("--evidence", action="append", default=[])
 
+    # update-task can also move a task beneath a new parent when explicitly asked.
     update = sub.add_parser("update-task")
     update.add_argument("--task-id", required=True)
     update.add_argument("--name")
     update.add_argument("--description")
     update.add_argument("--status")
     update.add_argument("--priority", type=int, choices=[1, 2, 3, 4])
-    update.add_argument("--owner", action="append", default=[],
-                         help="Same Owners-label fallback as create-task's --owner (update-task has no "
-                              "--assignee option, so this is applied whenever given).")
+    update.add_argument(
+        "--owner",
+        action="append",
+        default=[],
+        help=(
+            "Same Owners-label fallback as create-task's --owner (update-task has no "
+            "--assignee option, so this is applied whenever given)."
+        ),
+    )
     update.add_argument("--due-date-ms", type=int)
-    update.add_argument("--parent-task-id", help="Set/move task under this ClickUp parent task ID. Use only for explicit structural-change requests.")
+    update.add_argument(
+        "--parent-task-id",
+        help=(
+            "Set/move task under this ClickUp parent task ID. Use only for "
+            "explicit structural-change requests."
+        ),
+    )
     update.add_argument("--source", default="captain")
     update.add_argument("--evidence", action="append", default=[])
 
+    # comment-task appends plain text without changing task fields.
     comment = sub.add_parser("comment-task")
     comment.add_argument("--task-id", required=True)
     comment.add_argument("--text", dest="comment_text", required=True)
     comment.add_argument("--source", default="captain")
     comment.add_argument("--evidence", action="append", default=[])
 
+    # batch accepts the same operation records used by the internal API.
     batch = sub.add_parser("batch")
-    batch.add_argument("--operations-file", default="-", help="JSON array or {operations:[...]}; use - for stdin")
+    batch.add_argument(
+        "--operations-file",
+        default="-",
+        help="JSON array or {operations:[...]}; use - for stdin",
+    )
 
     args = parser.parse_args()
+
+    # Parse batch input or normalize one subcommand into a single-item batch.
     if args.command == "batch":
         try:
             operations = parse_operations_file(args.operations_file)
@@ -892,25 +1258,41 @@ def main():
             return 0
     else:
         operations = [operation_from_args(args)]
+
         if not args.execute:
             operation = operations[0]
+
+            # A dry run validates only local request shape and makes no API calls.
             try:
                 fields = operation_fields(operation)
-                payload = operation_payload(operation, {"applied": operation.get("status"), "requested": operation.get("status"), "mapped": False})
+                payload = operation_payload(
+                    operation,
+                    {
+                        "applied": operation.get("status"),
+                        "requested": operation.get("status"),
+                        "mapped": False,
+                    },
+                )
             except ValueError as error:
-                # A plain user/CLI error (e.g. a non-numeric --assignee) must exit
-                # non-zero cleanly, the same as the --execute path below -- it must
-                # not escape main() and reach the captain_telemetry.guard() wrap
-                # around __main__, which would page someone on a typo.
+                # Treat CLI mistakes as normal validation failures. Letting one
+                # reach the telemetry guard would incorrectly page on a typo.
                 print(json.dumps({"ok": False, "error": {"message": str(error)}}, indent=2))
                 return 2
-            preview = {"dry_run": True, "planned_request": {"method": fields["method"], "path": fields["path"], "payload": payload, "execute": False}}
+
+            preview = {
+                "dry_run": True,
+                "planned_request": {
+                    "method": fields["method"],
+                    "path": fields["path"],
+                    "payload": payload,
+                    "execute": False,
+                },
+            }
             needs_owner_fallback, owner_names = owner_fallback_applies(operation)
+
             if needs_owner_fallback:
-                # The Owners field/label lookup requires a real ClickUp GET and is only
-                # done at --execute time (prepare_operation); this preview cannot resolve
-                # a field_id/option_id without a network call, so it surfaces the pending
-                # names instead of guessing at custom_fields.
+                # Resolving Owners IDs requires ClickUp. Surface pending names
+                # and the possible field creation instead of guessing offline.
                 preview["owner_label_pending"] = owner_names
                 preview["owner_field_create_warning"] = (
                     "If the destination list has no 'Owners' labels custom field yet, running "
@@ -918,23 +1300,28 @@ def main():
                     "is the one irreversible mutation this dry run cannot rule out without a "
                     "real ClickUp GET."
                 )
+
             print(json.dumps(preview, indent=2))
             return 0
 
-    # `args.execute` is True past this point. Shadow mode refuses real writes by
-    # construction: no ClickUp mutation, no clickup_* audit row. `off` and `live` (and the
-    # escape hatch) proceed exactly as before this brake was added.
+    # From here on, ``--execute`` is active. Apply the shadow brake before
+    # loading credentials, initializing audit storage, or touching ClickUp.
     block_message = shadow_write_block_message(force=args.force_live_write)
     if block_message:
         print(block_message)
         return 1
 
+    # Load the credential only after all no-write exit paths have completed.
     try:
         token = load_clickup_credentials(("CLICKUP_API_KEY",))["CLICKUP_API_KEY"]
     except MissingClickUpCredentials as error:
         raise SystemExit(str(error))
+
+    # Database setup is intentionally quiet so stdout remains machine-readable.
     with contextlib.redirect_stdout(io.StringIO()):
         init_db()
+
+    # Execute the prepared batch and translate expected failures to JSON exits.
     try:
         result = execute_batch(operations, token)
     except ClickUpUnavailableError as error:
@@ -943,6 +1330,7 @@ def main():
     except ValueError as error:
         print(json.dumps({"ok": False, "error": {"message": str(error)}}, indent=2))
         return 2
+
     print(json.dumps(result, indent=2))
     return 1 if result.get("unavailable") else 0
 

@@ -98,22 +98,22 @@ def load_sentry_env(required_keys=(), environ=None, env_path=None):
     # Use the real process environment unless a caller supplies a test mapping.
     environ = os.environ if environ is None else environ
 
-    # Read all recognized keys by default, or only the explicitly requested required_keys.
+    # Read all recognized keys by default, or only the explicitly required keys.
     keys = tuple(required_keys) or tuple(KNOWN_KEYS)
 
-    # Read settings from files
+    # Read the settings file only when the environment cannot answer fully.
     file_values = {}
-    if any(not environ.get(key) for key in keys): 
+    if any(not environ.get(key) for key in keys):
         file_values = _read_known_values(env_path or DEFAULT_ENV_PATH)
 
-    # Overwrite file settings with environment settings
+    # Resolve each key, preferring the environment over the settings file.
     resolved = {}
     for key in keys:
         value = environ.get(key) or file_values.get(key)
         if value:
             resolved[key] = value
 
-    # Report missing keys
+    # Report any explicitly required keys that remain missing.
     missing = [key for key in tuple(required_keys) if not resolved.get(key)]
     if missing:
         raise MissingSentryCredentials("Missing " + " or ".join(missing))
@@ -135,14 +135,14 @@ def _collect_secret_values(environ):
     """
     values = []
 
-    # Keep only string values long enough to be meaningful redaction needles.
+    # Skip non-string values and strings too short to be useful redaction needles.
     for name, value in environ.items():
-        if not isinstance(value, str) or len(value) < _MIN_SECRET_LENGTH: # Skip non-strings and short values
+        if not isinstance(value, str) or len(value) < _MIN_SECRET_LENGTH:
             continue
 
-        # Match secret markers case-insensitively against the setting name.
-        upper = name.upper() # Case-insensitive
-        if any(marker in upper for marker in _SECRET_NAME_MARKERS): # Check for secret markers
+        # Compare setting names case-insensitively and keep secret-marker matches.
+        upper = name.upper()
+        if any(marker in upper for marker in _SECRET_NAME_MARKERS):
             values.append(value)
 
     return tuple(values)
@@ -150,7 +150,7 @@ def _collect_secret_values(environ):
 
 def _read_all_env_file_values(path):
     """Read every setting from a local environment file.
-     
+
     Example input: CLICKUP_API_KEY='example-secret'
     Example output: {"CLICKUP_API_KEY": "example-secret"}
     """
