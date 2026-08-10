@@ -164,20 +164,24 @@ def build_state(views):
 
 def diff_failures(prev_state, views):
     """Return jobs whose failure counter increased since the prior snapshot."""
-    prev_jobs = prev_state.get("jobs", {}) if isinstance(prev_state, dict) else {} # prev_jobs
+    # Get jobs from previous state if available.
+    prev_jobs = prev_state.get("jobs", {}) if isinstance(prev_state, dict) else {}
 
-    # The first run creates a baseline; historical failures are not new alerts.
+    # The first run creates a baseline and reports no historical failures.
     if not prev_jobs:
         return []
 
+    # Collect jobs whose current counter exceeds the saved counter.
     failures = []
     for view in views:
-        # Missing counters behave like zero for comparison while remaining
-        # separately visible through main's counters_missing warning.
+        # Read the current count, treating a missing value as zero.
         current = view["errors"] or 0
+
+        # Match the prior job by key and default its missing count to zero.
         previous_entry = prev_jobs.get(view["key"], {})
         previous = previous_entry.get("errors") or 0
 
+        # A higher count is a newly observed failure worth reporting.
         if current > previous:
             failures.append(
                 {
