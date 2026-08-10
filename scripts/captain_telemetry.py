@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""All Sentry contact for the Captain workspace lives in this module.
-
-Design rules (spec 2026-07-27-captain-sentry-integration-design.md):
-- sentry_sdk is imported lazily and only here.
-- Missing package, missing DSN, or CAPTAIN_SENTRY_DISABLED=1 -> silent no-op.
-- Telemetry never changes caller behavior and never raises.
-- Secret values are scrubbed from every outgoing event.
+"""Sentry contact for the Captain workspace lives in this module.
 """
 
 from __future__ import annotations
@@ -24,18 +18,18 @@ DEFAULT_ENVIRONMENT = "captain-host"
 _SECRET_NAME_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "DSN")
 _MIN_SECRET_LENGTH = 8
 
-# Files that may hold secret values which never pass through os.environ (e.g.
-# scripts/clickup_credentials.py reads CLICKUP_API_KEY straight out of
-# .secrets/clickup.env into a local dict, not into the environment). These are
-# read fresh on every scrub_event call so a secret loaded after init_telemetry
-# is still redacted -- see fix for the two scrubber-bypass leak paths.
+# Files that may hold secret values which never pass through os.environ
 _SECRET_ENV_FILES = (
     ROOT / ".secrets" / "clickup.env",
     ROOT / ".secrets" / "sentry.env",
 )
 
+# State for the current process, including whether telemetry is active and what secrets to scrub.
 _STATE = {"active": False, "component": None, "scrub_values": ()}
 
+
+
+# Helper classes and functions
 
 class MissingSentryCredentials(RuntimeError):
     """Explain that error reporting cannot start because a required setting is missing."""
@@ -44,35 +38,52 @@ class MissingSentryCredentials(RuntimeError):
 
 
 def _read_known_values(path):
-    """Read recognized error-reporting settings from a local settings file."""
+    """Read recognized error-reporting settings from a local settings file.
+    
+    Example input: SENTRY_DSN=https://example.com/sentrydsn
+    Example output: {"SENTRY_DSN": "https://example.com/sentrydsn"}
+    """
     try:
         lines = Path(path).read_text(encoding="utf-8").splitlines()
     except OSError:
         return {}
     values = {}
+
+    # Loop over each line
     for raw_line in lines:
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
+        line = raw_line.strip() # Remove whitespace
+        if not line or line.startswith("#"): # Skip empty lines and comments
             continue
-        if line.startswith("export "):
+        
+        if line.startswith("export "): # Remove "export" prefix if present
             line = line[len("export "):].lstrip()
-        key, separator, raw_value = line.partition("=")
-        key = key.strip()
-        if not separator or key not in KNOWN_KEYS:
-            continue
-        value = raw_value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        
+        key, separator, raw_value = line.partition("=") # Split line into key and value
+        key = key.strip() # Remove whitespace from key
+
+        
+        if not separator or key not in KNOWN_KEYS: 
+            continue # Skip if line doesn't contain "=" or key is not recognized
+
+        # Remove whitespace and quotes from value
+        value = raw_value.strip() 
+
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'): # Remove surrounding quotes if present
             value = value[1:-1]
-        if value:
+        if value: # If no quotes, just use the stripped value
             values[key] = value
+
     return values
 
 
 def load_sentry_env(required_keys=(), environ=None, env_path=None):
     """Find error-reporting settings in the environment or local settings file."""
+
     environ = os.environ if environ is None else environ
+
     keys = tuple(required_keys) or tuple(KNOWN_KEYS)
     file_values = {}
+    
     if any(not environ.get(key) for key in keys):
         file_values = _read_known_values(env_path or DEFAULT_ENV_PATH)
     resolved = {}
