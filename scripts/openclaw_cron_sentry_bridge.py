@@ -320,7 +320,7 @@ def main(argv=None, run_list=None, capture_message_fn=None,
 
     # A successful check-in keeps Sentry's dead-man monitor healthy.
     checkin_fn(MONITOR_SLUG, "ok", monitor_config=MONITOR_CONFIG)
-    print(
+    print( # Example: {"ok": true, "jobs": 12, "new_failures": ["job1", "job2"]})
         json.dumps(
             {
                 "ok": True,
@@ -331,7 +331,7 @@ def main(argv=None, run_list=None, capture_message_fn=None,
     )
     return 0
 
-
+# The outer telemetry guard ensures that any uncaught exception is reported to Sentry
 if __name__ == "__main__":
     with captain_telemetry.guard("openclaw-cron-bridge"):
         raise SystemExit(main())
