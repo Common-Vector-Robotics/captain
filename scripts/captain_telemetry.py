@@ -85,7 +85,7 @@ def _read_known_values(path):
 
 
 def load_sentry_env(required_keys=(), environ=None, env_path=None):
-    """Resolve Sentry settings, preferring environment variables over a file.
+    """Load Sentry settings, preferring environment variables over a file.
 
     ``required_keys`` controls which missing values raise
     ``MissingSentryCredentials``. With no required keys, the function returns
@@ -98,22 +98,22 @@ def load_sentry_env(required_keys=(), environ=None, env_path=None):
     # Use the real process environment unless a caller supplies a test mapping.
     environ = os.environ if environ is None else environ
 
-    # Read all recognized keys by default, or only the explicitly requested set.
+    # Read all recognized keys by default, or only the explicitly requested required_keys.
     keys = tuple(required_keys) or tuple(KNOWN_KEYS)
-    file_values = {}
 
-    # Touch the settings file only when the environment cannot answer fully.
-    if any(not environ.get(key) for key in keys):
+    # Read settings from files
+    file_values = {}
+    if any(not environ.get(key) for key in keys): 
         file_values = _read_known_values(env_path or DEFAULT_ENV_PATH)
 
-    # Environment variables take precedence over values from the file.
+    # Overwrite file settings with environment settings
     resolved = {}
     for key in keys:
         value = environ.get(key) or file_values.get(key)
         if value:
             resolved[key] = value
 
-    # Required settings fail together so the caller gets one useful error.
+    # Report missing keys
     missing = [key for key in tuple(required_keys) if not resolved.get(key)]
     if missing:
         raise MissingSentryCredentials("Missing " + " or ".join(missing))
@@ -137,12 +137,12 @@ def _collect_secret_values(environ):
 
     # Keep only string values long enough to be meaningful redaction needles.
     for name, value in environ.items():
-        if not isinstance(value, str) or len(value) < _MIN_SECRET_LENGTH:
+        if not isinstance(value, str) or len(value) < _MIN_SECRET_LENGTH: # Skip non-strings and short values
             continue
 
         # Match secret markers case-insensitively against the setting name.
-        upper = name.upper()
-        if any(marker in upper for marker in _SECRET_NAME_MARKERS):
+        upper = name.upper() # Case-insensitive
+        if any(marker in upper for marker in _SECRET_NAME_MARKERS): # Check for secret markers
             values.append(value)
 
     return tuple(values)
@@ -150,18 +150,11 @@ def _collect_secret_values(environ):
 
 def _read_all_env_file_values(path):
     """Read every setting from a local environment file.
-
-    Unlike ``_read_known_values``, this helper keeps every valid key. That
-    allows the scrubber to find secrets, such as a ClickUp API key, that a
-    script reads directly from a file without adding to ``os.environ``.
-
-    A missing file is normal and returns an empty mapping. Other read errors
-    propagate so ``scrub_event`` can drop the event instead of sending it with
-    an incomplete redaction set.
-
+     
     Example input: CLICKUP_API_KEY='example-secret'
     Example output: {"CLICKUP_API_KEY": "example-secret"}
     """
+
     # Absence is expected on hosts that do not use this particular secret file.
     try:
         text = Path(path).read_text(encoding="utf-8")
