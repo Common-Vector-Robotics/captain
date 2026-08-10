@@ -185,29 +185,11 @@ Required env file for live telemetry (`.secrets/sentry.env`):
 - `SENTRY_DSN` (required)
 - `SENTRY_ENVIRONMENT` (optional, default `captain-host`)
 
-Dependency: `sentry-sdk` (see `requirements.txt`):
+Dependency: `sentry-sdk` (see `requirements.txt`).
 
-```bash
-python3 -m pip install --user -r requirements.txt
-```
-
-On Homebrew-managed Python this fails with `error: externally-managed-environment`
-(PEP 668). Fix:
-
-```bash
-python3 -m pip install --user --break-system-packages -r requirements.txt
-```
-
-`--break-system-packages` installs into a Homebrew-managed Python's user site
-directory, which is why pip guards it by default. If you'd rather not override
-the guard, use a venv instead:
-
-```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-```
-
-A venv changes which interpreter must run the scripts — see the launchd
-interpreter note in README.md before choosing this route for the cron bridge.
+Setup and troubleshooting live in one place: the "Sentry telemetry (optional)"
+section of README.md. It covers the DSN file, install and interpreter pitfalls,
+the launchd cron bridge, and how to turn telemetry off.
 
 Commands:
 

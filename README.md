@@ -355,35 +355,28 @@ Excluded from git by design:
 
 Runtime state remains on the Captain host unless explicitly exported through a reviewed process.
 
-# Extras
+# Optional Extras
 
 ## Sentry telemetry
 
-Captain can report hard failures (script crashes, session-report server errors, OpenClaw cron job failures) to Sentry.
+Captain can report hard failures — script crashes, session-report server errors, and OpenClaw cron job failures — to a Sentry project.
 
-The cron bridge runs every 10 minutes via launchd on the Captain host, diffs `openclaw cron list --json` error counters, and heartbeats the `captain-openclaw-bridge` Sentry monitor (dead-man's switch: a missed check-in means the host, OpenClaw, or the bridge is down).
+Captain's scripts send an event to Sentry when they crash. A cron bridge also runs every 10 minutes via launchd, comparing each OpenClaw job's error counter against the previous run, and reports jobs that newly failed. 
 
-Deploy/refresh on the Captain host:
+Each bridge run also checks in with the `captain-openclaw-bridge` Sentry monitor, which acts as a dead-man's switch: a missed check-in means the host, OpenClaw, or the bridge itself is down.
 
-```bash
-# Install the Python packages needed by Captain and Sentry telemetry.
-python3 -m pip install --user -r requirements.txt
-```
+Without `.secrets/sentry.env`, every telemetry call is a silent no-op and Captain behaves exactly as it does today. Run these steps on the Captain host, from its workspace directory (`~/.openclaw/workspace-captain` by default).
 
-On Homebrew-managed Python this fails outright with `error: externally-managed-environment` (PEP 668). Fix:
+### 1. Add your Sentry DSN
 
-```bash
-# Use this version only if Python reports an externally-managed-environment error.
-python3 -m pip install --user --break-system-packages -r requirements.txt
-```
-
-`--break-system-packages` installs into a Homebrew-managed Python's user site directory, which is why pip guards it by default.
-
-Create `.secrets/sentry.env` (never committed; without it telemetry is a silent no-op):
+Create the settings file. It is never committed:
 
 ```bash
 # Create the private secrets folder if it does not already exist.
 mkdir -p .secrets
+
+# Make the folder accessible only to your user account.
+chmod 700 .secrets
 
 # Create the Sentry settings file. Replace the DSN placeholder.
 cat > .secrets/sentry.env <<'EOF'
@@ -391,36 +384,50 @@ SENTRY_DSN=<your project's Sentry DSN>
 # SENTRY_ENVIRONMENT=captain-host   # optional, defaults to captain-host
 EOF
 
-# Create the local log folder required by the launchd service.
-mkdir -p logs
+# Allow only your user account to read or edit the settings file.
+chmod 600 .secrets/sentry.env
 ```
 
-`launchd` may use a different Python installation than the one where you installed `sentry-sdk`. Because the bridge silently continues when the SDK is unavailable, it may appear healthy while sending no Sentry events or check-ins. Before loading the plist, verify that `sentry-sdk` is installed for the exact Python interpreter selected by the plist’s `PATH`:
+Telemetry also needs the `sentry-sdk` package, which came from [step 2](#2-install-python-dependencies). If you skipped that step, run `python3 -m pip install --user -r requirements.txt` now, adding `--break-system-packages` if Python reports `error: externally-managed-environment`.
+
+### 2. Confirm that events reach Sentry
 
 ```bash
-# Confirm that launchd's Python can import the Sentry package.
-PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin /usr/bin/env python3 -c "import sentry_sdk; print(sentry_sdk.VERSION)"
+# Send one test event to confirm the Sentry connection works.
+python3 scripts/captain_telemetry.py --self-test
 ```
 
-If this fails with `ModuleNotFoundError`, install the dependencies for that specific interpreter:
+Expected output is `{"ok": true, "sent": true}`, followed within a minute by a `captain-telemetry self-test` event in your Sentry project. Resolve that event once you see it.
 
-```Shell
-PYTHON_PATH="$(PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin /usr/bin/env python3 -c 'import sys; print(sys.executable)')"
-"$PYTHON_PATH" -m pip install --user -r requirements.txt
-```
+If the output is `{"ok": false, "error": "telemetry inactive ..."}`, one of three things is true: `SENTRY_DSN` is missing or empty, `sentry-sdk` is not installed for this Python, or `CAPTAIN_SENTRY_DISABLED=1` is set in the environment. All three are deliberate no-ops, so nothing else in the output will tell you which one it is — check them in that order.
 
-Before enabling scheduled Sentry checks, test the Sentry-to-OpenClaw connection on this computer. Confirm that OpenClaw accepts the scheduling settings without errors:
+### 3. Preview the cron-failure bridge
+
+See what the bridge would report before it can send anything:
 
 ```bash
-# Test the Sentry bridge without sending telemetry or changing cron jobs.
+# Show what the bridge would report, without sending events or check-ins.
 python3 scripts/openclaw_cron_sentry_bridge.py --dry-run
 ```
 
-Check the output: `jobs` should be greater than 0 and `counters_missing` should be `[]`.
+Expected output looks like this: `jobs` greater than 0, `counters_missing` empty, `truncated` false:
 
-If every job shows up in `counters_missing`, OpenClaw's field names don't match what `job_view()` looks for, and the bridge will silently report zero failures forever while the dead-man's-switch still says it's healthy! Fix the field mapping in `scripts/openclaw_cron_sentry_bridge.py` before loading the plist:
+```json
+{
+  "ok": true,
+  "dry_run": true,
+  "jobs": 27,
+  "would_report": [],
+  "counters_missing": [],
+  "truncated": false
+}
+```
 
-```Shell
+If `truncated` is `true`, OpenClaw returned only the first page of its job list and the jobs beyond it are unmonitored. The bridge reports this to Sentry as a warning too, because `openclaw cron list --json` offers no way to page through the rest.
+
+If every job is listed in `counters_missing`, OpenClaw's field names don't match what `job_view()` looks for, and the bridge will silently report zero failures forever while the dead-man's switch still says it's healthy. Fix the field mapping before loading the plist:
+
+```bash
 # Inspect the actual counter and error fields returned by OpenClaw.
 openclaw cron list --json |
   jq '.jobs[] | {
@@ -429,24 +436,79 @@ openclaw cron list --json |
     state_keys: (.state // {} | keys),
     state: .state
   }'
-  
+
 # Update job_view() to match the error fields returned by `openclaw cron list --json`.
 nano scripts/openclaw_cron_sentry_bridge.py
 
-# Re-verify
+# Re-verify.
 python3 -m pytest tests/test_openclaw_cron_sentry_bridge.py -v
 python3 scripts/openclaw_cron_sentry_bridge.py --dry-run
 ```
 
-`launchd/com.intermode.captain-sentry-bridge.plist` hardcodes `WorkingDirectory` and both `StandardOutPath`/`StandardErrorPath` to `/Users/owen/.openclaw/workspace-captain`. If you are deploying from a different clone or a different user's home directory, edit those three paths in the plist before copying it in.
+### 4. Check that launchd's Python can load the SDK
+
+`launchd` may pick a different Python than your shell does, and the bridge continues silently when the SDK is missing — so it would look healthy while sending nothing at all. Confirm that `sentry-sdk` is installed for the exact interpreter the plist's `PATH` selects:
 
 ```bash
+# Confirm that launchd's Python can import the Sentry package.
+PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin /usr/bin/env python3 -c "import sentry_sdk; print(sentry_sdk.VERSION)"
+```
+
+A version number means you are set. If this fails with `ModuleNotFoundError`, install the dependencies for that specific interpreter:
+
+```bash
+# Install Captain's dependencies for the interpreter launchd will use.
+PYTHON_PATH="$(PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin /usr/bin/env python3 -c 'import sys; print(sys.executable)')"
+"$PYTHON_PATH" -m pip install --user -r requirements.txt
+```
+
+A virtualenv (`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`) works for running the scripts by hand, but the plist calls plain `python3` and will not find it. If you go that route, replace the `/usr/bin/env` and `python3` entries in the plist's `ProgramArguments` with the venv interpreter's absolute path before continuing.
+
+### 5. Install the launchd service
+
+`launchd/com.intermode.captain-sentry-bridge.plist` hardcodes `/Users/owen/.openclaw/workspace-captain` in three places: `WorkingDirectory`, `StandardOutPath`, and `StandardErrorPath`. If your workspace lives anywhere else, edit those three paths before copying the file in.
+
+```bash
+# Create the log folder the launchd service writes to.
+mkdir -p logs
+
 # Copy the launchd service file into your user account.
 cp launchd/com.intermode.captain-sentry-bridge.plist ~/Library/LaunchAgents/
 
 # Stop the old service if it is already loaded. No output is expected if it is not.
 launchctl unload ~/Library/LaunchAgents/com.intermode.captain-sentry-bridge.plist 2>/dev/null
 
-# Load the service so it runs on its schedule.
+# Load the service so it runs every 10 minutes.
 launchctl load ~/Library/LaunchAgents/com.intermode.captain-sentry-bridge.plist
 ```
+
+### 6. Confirm the bridge is running
+
+The service runs once immediately on load, so you can check the result right away:
+
+```bash
+# Confirm launchd loaded the service. The middle column is the last exit code.
+launchctl list | grep com.intermode.captain-sentry-bridge
+
+# Read the result of the most recent run.
+tail -n 5 logs/sentry-bridge.out.log
+tail -n 20 logs/sentry-bridge.err.log
+```
+
+Expect exit code `0` from `launchctl list` and a line like `{"ok": true, "jobs": 27, "new_failures": []}` in the out log, with the error log empty.
+
+Two things look like breakage but are not:
+
+- **The first run never reports failures.** It only records the current error counters as a baseline in `data/sentry-bridge-state.json`. Failure events start with the next run, 10 minutes later.
+- **You do not create the Sentry monitor yourself.** `captain-openclaw-bridge` appears in Sentry's Crons dashboard on its own, because the bridge sends its schedule with the first check-in.
+
+### Turning telemetry off
+
+```bash
+# Stop the scheduled bridge.
+launchctl unload ~/Library/LaunchAgents/com.intermode.captain-sentry-bridge.plist
+```
+
+To silence all telemetry, delete `.secrets/sentry.env` or set `CAPTAIN_SENTRY_DISABLED=1`. Either one returns every telemetry call to being a no-op; nothing else about Captain changes.
+
+See the Sentry section of [`TOOLS.md`](TOOLS.md) for the rules new Captain scripts must follow.
