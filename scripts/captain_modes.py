@@ -13,9 +13,11 @@ MODE_PATH = ROOT / "data" / "captain-modes.json"
 sys.path.insert(0, str(ROOT / "scripts"))
 from captain_db import audit, init_db  # noqa: E402
 
+# User IDs of Slack users who are allowed to toggle DailyLoop modes, mapped to their names.
+# Loop options: off, shadow, live.
 AUTHORIZED_TOGGLE_USERS = {
-    "U0B4G00QXT8": "Gavin",
-    "U043AKSJC85": "Arnold",
+    "SLACK_USER_ID": "Name",
+    "SLACK_USER_ID": "Name",
 }
 
 
