@@ -9,7 +9,7 @@ import json
 import re
 from pathlib import Path
 
-# Shared storage paths
+# Captain repo root
 ROOT = Path(__file__).resolve().parents[1]
 
 # Regex to match Slack user IDs, which start with 'U' and are followed by 9 to 11 alphanumeric characters.
