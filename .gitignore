@@ -1,0 +1,22 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local state: the Captain SQLite DB (see CAPTAIN_DB_PATH in scripts/captain_db.py)
+data/captain.sqlite
+data/captain.sqlite-journal
+data/captain.sqlite-wal
+data/captain.sqlite-shm
+
+# Local config derived from the tracked *.example.json files
+data/captain-channels.json
+data/critical-path-overrides.json
+data/meeting-ingestion.json
+
+# Secrets
+.env
+.env.*
+
+# macOS
+.DS_Store
