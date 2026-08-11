@@ -1,33 +1,22 @@
-"""Resolve Slack user IDs to trustworthy offline display names.
-
-Never fabricate a name. A plausible but incorrect name could direct action at
-the wrong person, so an unresolved user always remains a bare Slack ID.
-
-Resolution order:
-
-1. Invert ``admin_recipients`` from Captain's channel configuration.
-2. Check ``data/slack-user-cache.json`` when available and valid.
-3. Return the original user ID unchanged.
-
-This command-side helper cannot call OpenClaw's agent-only ``member-info``
-tool. It also never resolves or renders email addresses; the resolution order
-above is the complete policy enforced by this module.
+"""
+A tool for Captain to automatically resolve Slack user IDs into human-readable names.
 """
 
+# Requirements
 from __future__ import annotations
 
 import json
 import re
 from pathlib import Path
 
+# Shared storage paths
 ROOT = Path(__file__).resolve().parents[1]
 
-# Match workspace-style Slack IDs: ``U`` plus 9-11 uppercase letters or digits.
-# At least one digit is required so ordinary uppercase words are not mistaken
-# for users. Slightly varied lengths remain allowed for future Slack formats;
-# an unknown match safely renders as itself.
+# Regex to match Slack user IDs, which start with 'U' and are followed by 9 to 11 alphanumeric characters.
 USER_ID_RE = re.compile(r"\bU(?=[A-Z0-9]*\d)[A-Z0-9]{9,11}\b")
 
+
+# ------------ Helper Functions ------------
 
 def invert_admin_recipients(channels_cfg):
     """Invert ``admin_recipients`` from name-to-ID into ID-to-name form.
@@ -37,25 +26,26 @@ def invert_admin_recipients(channels_cfg):
     Example input: {"admin_recipients": {"Alex": "U0123456789"}}
     Example output: {"U0123456789": "Alex"}
     """
-    # Only dictionary configuration can contain the expected mapping.
-    admins = (
-        channels_cfg.get("admin_recipients")
-        if isinstance(channels_cfg, dict)
-        else None
-    )
+
+    # Get admin recipients from channels configuration
+    admins = (channels_cfg.get("admin_recipients") if isinstance(channels_cfg, dict) else None ) 
+
+    # Fails soft if the configuration is missing or malformed.
     if not isinstance(admins, dict):
         return {}
 
     # Keep only non-empty string pairs; malformed entries cannot be trusted.
     inverted = {}
+
+    # Iterate over the admin recipients and invert the mapping from name-to-ID to ID-to-name.
     for name, user_id in admins.items():
         if (
-            isinstance(name, str)
-            and name
-            and isinstance(user_id, str)
-            and user_id
+            isinstance(name, str) # Is name string?
+            and name # Is name non-empty?
+            and isinstance(user_id, str) # Is user_id string?
+            and user_id # Is user_id non-empty?
         ):
-            inverted[user_id] = name
+            inverted[user_id] = name # Add to inverted
 
     return inverted
 
@@ -66,16 +56,20 @@ def load_user_cache(cache_path):
     Missing files, unreadable JSON, non-dictionary data, and malformed entries
     are ignored. A stale cache must degrade to bare IDs, never break a caller.
     """
+
     # The cache is optional supporting data, so read and parse failures are safe.
+
+    # Try loading cache.
     try:
         data = json.loads(Path(cache_path).read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError): # Return empty mapping if missing
         return {}
 
+    # Return empty mapping if the cache is malformed
     if not isinstance(data, dict):
         return {}
 
-    # Reject anything except a non-empty string ID and non-blank string name.
+    # Return valid entries
     return {
         key: value
         for key, value in data.items()
@@ -86,14 +80,21 @@ def load_user_cache(cache_path):
     }
 
 
+# ----------- SlackNameResolver Class ------------ 
+
 class SlackNameResolver:
     """Render Slack IDs with known names while preserving unknown IDs."""
 
     def __init__(self, channels_cfg=None, cache_path=None, root=None):
         """Load known names from Captain's channel settings and local name cache."""
-        # ``root`` and ``cache_path`` are seams for isolated callers and tests.
+
+        # Default root path is the project root, but it can be overridden for testing.
         root = root or ROOT
+
+        # Invert the admin recipients from the channels configuration to create a mapping of Slack user IDs to display names.
         self._admin_by_id = invert_admin_recipients(channels_cfg or {})
+
+        # Load the Slack user cache from the specified cache path or the default location in the project root.
         self._cache = load_user_cache(
             cache_path or (root / "data" / "slack-user-cache.json")
         )
@@ -127,3 +128,4 @@ class SlackNameResolver:
             lambda match: self.render(match.group(0)),
             text,
         )
+
