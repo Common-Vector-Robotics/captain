@@ -6,13 +6,14 @@ precedence, unrelated settings are ignored, and callers receive a clear error
 when any explicitly required value is unavailable.
 """
 
+# Shared imports
 import os
 from pathlib import Path
 
-
+# Shared paths and recognized keys
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_ENV_PATH = ROOT / ".secrets" / "clickup.env"
-KNOWN_KEYS = frozenset(("CLICKUP_API_KEY", "CLICKUP_TEAM_ID"))
+DEFAULT_ENV_PATH = ROOT / ".secrets" / "clickup.env" 
+KNOWN_KEYS = frozenset(("CLICKUP_API_KEY", "CLICKUP_TEAM_ID")) # Read-only key names
 
 
 # Configuration errors

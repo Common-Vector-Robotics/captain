@@ -6,6 +6,7 @@ writes, and approval-queue writes. Run it directly to initialize the storage or
 print basic table counts.
 """
 
+ # Requirements
 import argparse
 import json
 import os
@@ -16,6 +17,7 @@ from pathlib import Path
 
 import captain_telemetry
 
+# Shared storage paths
 ROOT = Path(__file__).resolve().parents[1]
 DB = Path(os.environ.get("CAPTAIN_DB_PATH", str(ROOT / "data" / "captain.sqlite")))
 AUDIT = Path(
@@ -23,6 +25,7 @@ AUDIT = Path(
 )
 APPROVALS = ROOT / "data" / "approval-queue.jsonl"
 
+# SQLite schema for Captain's local database
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 CREATE TABLE IF NOT EXISTS commitments (
@@ -76,16 +79,19 @@ def now():
 
 def conn():
     """Open Captain's local database, creating its folder when needed."""
+
     # SQLite cannot create a missing parent directory itself.
     DB.parent.mkdir(parents=True, exist_ok=True)
+
     return sqlite3.connect(DB)
 
 
 def init_db():
     """Create Captain's database tables and tracking files if they are missing."""
+
     # executescript applies the complete idempotent schema in one connection.
-    with conn() as c:
-        c.executescript(SCHEMA)
+    with conn() as connection:
+        connection.executescript(SCHEMA)
 
     # The append-only JSONL stores must exist before other scripts can use them.
     for path in [AUDIT, APPROVALS]:
@@ -97,6 +103,7 @@ def init_db():
 
 def audit(event, **fields):
     """Append one timestamped action to Captain's permanent JSONL audit log."""
+
     record = {"ts": now(), "event": event, **fields}
 
     AUDIT.parent.mkdir(parents=True, exist_ok=True)
@@ -108,6 +115,7 @@ def audit(event, **fields):
 
 def queue_approval(proposal):
     """Append a proposal for human review and audit that queue change."""
+
     # Keep proposals as one JSON object per line for safe append-only writes.
     APPROVALS.parent.mkdir(parents=True, exist_ok=True)
     with APPROVALS.open("a", encoding="utf-8") as approvals_file:
@@ -127,20 +135,25 @@ def queue_approval(proposal):
 
 def main():
     """Run the requested database setup or show basic record counts."""
-    parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["init", "stats"])
-    args = parser.parse_args()
 
+    parser = argparse.ArgumentParser() # Starts a command-line argument parser
+    parser.add_argument("command", choices=["init", "stats"]) # Defines the command argument with choices
+    args = parser.parse_args() # Parses the command-line arguments
+
+    # Execute the requested command
     if args.command == "init":
         init_db()
     elif args.command == "stats":
         # Initialization makes stats safe on a brand-new workspace.
         init_db()
 
-        with conn() as c:
-            for table in ["commitments", "clickup_tasks", "proposals"]:
-                count = c.execute(f"select count(*) from {table}").fetchone()[0]
-                print(f"{table}: {count}")
+        with conn() as connection: # Opens a connection to the database
+            for table in ["commitments", "clickup_tasks", "proposals"]: # Iterates over the list of table names
+
+                count = connection.execute(f"select count(*) from {table}").fetchone()[0] # Executes a SQL query to count the number of records in the table
+                print(f"{table}: {count}") # Prints the table name and the count of records
+
+                # Example: commitments: 42
 
 
 if __name__ == "__main__":
