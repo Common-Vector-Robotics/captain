@@ -37,7 +37,9 @@ def req(url, token):
     Example input: url="https://api.clickup.com/api/v2/team/123/task?page=0"
     Example output: {"tasks": [...], "last_page": True}
     """
-    request = urllib.request.Request(url, headers={"Authorization": token})
+
+    # Request the URL with the provided token in the Authorization header.
+    request = urllib.request.Request(url, headers={"Authorization": token}) 
 
     # Bound the network request so an unavailable API cannot hang the script.
     with urllib.request.urlopen(request, timeout=30) as resp:
@@ -49,14 +51,20 @@ def req(url, token):
 
 def main():
     """Download all requested ClickUp tasks and save them to a JSON file."""
+
+    # Start argument parser
     parser = argparse.ArgumentParser(
         description=(
             "Fetch ClickUp tasks read-only, always including subtasks and "
             "pagination"
         )
     )
+
+    # Add arguments for output file and closed tasks inclusion
     parser.add_argument("--out", required=True)
     parser.add_argument("--include-closed", action="store_true")
+
+    # Parse args
     args = parser.parse_args()
 
     # Load both values required to authenticate and choose the team endpoint.
@@ -67,21 +75,25 @@ def main():
     except MissingClickUpCredentials as error:
         raise SystemExit(str(error))
 
+    # Extract API key and team ID from the loaded credentials.
     token = credentials["CLICKUP_API_KEY"]
     team = credentials["CLICKUP_TEAM_ID"]
 
     # Prefer explicitly configured lists; otherwise fetch across the whole team.
     list_ids = [
-        item.strip()
-        for item in os.environ.get("CAPTAIN_CLICKUP_LIST_IDS", "").split(",")
-        if item.strip()
+        item.strip() # Remove whitespace from each list ID
+        for item in os.environ.get("CAPTAIN_CLICKUP_LIST_IDS", "").split(",") # Get list IDs from environment variable and split by comma
+        if item.strip() # Keep only non-empty strings
     ]
+
+    # Initialize an empty list to hold all fetched tasks.
     all_tasks = []
 
+
     if list_ids:
-        bases = [f"{API}/list/{list_id}/task" for list_id in list_ids]
+        bases = [f"{API}/list/{list_id}/task" for list_id in list_ids] # Build a task URL for each configured list ID
     else:
-        bases = [f"{API}/team/{team}/task"]
+        bases = [f"{API}/team/{team}/task"] # Build a single task URL scoped to the team ID
 
     # Fetch every page for each selected list or for the configured team.
     for base in bases:
