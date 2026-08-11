@@ -10,6 +10,8 @@ Example:
     python3 scripts/fetch_clickup_tasks.py --out data/clickup-tasks.json
 """
 
+# Requirements
+
 import argparse
 import json
 import os
@@ -22,6 +24,7 @@ from pathlib import Path
 import captain_telemetry
 from clickup_credentials import MissingClickUpCredentials, load_clickup_credentials
 
+# API endpoint for ClickUp tasks
 API = "https://api.clickup.com/api/v2"
 
 
