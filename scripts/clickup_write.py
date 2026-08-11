@@ -16,6 +16,9 @@ where practical so those callers can exercise the workflow without contacting
 ClickUp.
 """
 
+
+# Requirements
+
 import argparse
 import contextlib
 import hashlib
@@ -31,12 +34,17 @@ from pathlib import Path
 
 import captain_telemetry
 
+
+# Root path and shared modules
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# Shared database and clickup helpers
 from captain_db import audit, init_db
 from clickup_credentials import MissingClickUpCredentials, load_clickup_credentials
 import captain_modes
 
+# API endpoint for ClickUp tasks
 API = "https://api.clickup.com/api/v2"
 STATUS_ALIASES = {"intake": "to do"}
 
@@ -1146,6 +1154,10 @@ def operation_from_args(args):
 
 def main():
     """Preview or execute audited ClickUp changes from the command line."""
+
+
+    # ---------------- Parse command-line arguments ----------------
+
     # Define global safety options before command-specific arguments.
     parser = argparse.ArgumentParser(
         description=(
@@ -1166,9 +1178,11 @@ def main():
             "for a deliberate manual write."
         ),
     )
+
+    # Add subparsers
     sub = parser.add_subparsers(dest="command", required=True)
 
-    # create-task accepts built-in assignees or the Owners-label fallback.
+    # Create-Task 
     create = sub.add_parser("create-task")
     create.add_argument("--list-id", required=True)
     create.add_argument("--name", required=True)
@@ -1245,7 +1259,12 @@ def main():
         help="JSON array or {operations:[...]}; use - for stdin",
     )
 
+    # Parse Args
     args = parser.parse_args()
+
+
+    # ---------------- Execute the requested command ----------------
+
 
     # Parse batch input or normalize one subcommand into a single-item batch.
     if args.command == "batch":

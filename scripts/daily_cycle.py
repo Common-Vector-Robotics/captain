@@ -9,6 +9,8 @@ operations as Python helpers and as a compact command-line interface.
 Every public state-update helper also writes to Captain's local audit log.
 """
 
+# Requirements
+
 import argparse
 import json
 import sqlite3
@@ -18,12 +20,14 @@ from pathlib import Path
 
 import captain_telemetry
 
+# Root path of Captain project
 ROOT = Path(__file__).resolve().parents[1]
 
 # Allow direct script execution to import the neighboring database helper.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from captain_db import DB as DEFAULT_DB, audit  # noqa: E402
 
+# Define the SQLite schema for the daily_cycle table, which stores the daily cycle state.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS daily_cycle (
   date TEXT PRIMARY KEY,
@@ -36,15 +40,12 @@ CREATE TABLE IF NOT EXISTS daily_cycle (
 );
 """
 
-# ``CREATE TABLE IF NOT EXISTS`` cannot add columns to an existing host
-# database. Keep post-launch columns here so ``_ensure`` can migrate old
-# databases. They also appear last in ``SCHEMA`` so fresh and migrated tables
-# have the same layout, although ``get_cycle`` safely selects columns by name.
+# Columns added in later schema versions, which are applied if missing from an older database.
 ADDED_COLUMNS = (
     ("personal_top2", "TEXT NOT NULL DEFAULT '[]'"),
 )
 
-# Only these phase names map to timestamp columns in the table.
+# Phrasees that can be used to mark the completion of daily phases, which are recorded in the database.
 PHASES = ("morning", "eod")
 
 
@@ -62,19 +63,19 @@ def _ensure(db_path):
     # SQLite cannot create the database until its parent directory exists.
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
-    with sqlite3.connect(str(db_path)) as c:
+    with sqlite3.connect(str(db_path)) as connection:
         # Create the complete current schema for a new database.
-        c.executescript(SCHEMA)
+        connection.executescript(SCHEMA)
 
         # Add any newer columns missing from an older database.
-        existing = {row[1] for row in c.execute("PRAGMA table_info(daily_cycle)")}
+        existing = {row[1] for row in connection.execute("PRAGMA table_info(daily_cycle)")}
         for name, decl in ADDED_COLUMNS:
             if name in existing:
                 continue
 
             # SQL identifiers cannot use parameter placeholders. Both values
             # come from ``ADDED_COLUMNS`` above, never from user input.
-            c.execute("ALTER TABLE daily_cycle ADD COLUMN %s %s" % (name, decl))
+            connection.execute("ALTER TABLE daily_cycle ADD COLUMN %s %s" % (name, decl))
 
 
 def _upsert(db_path, date_str, **updates):
@@ -83,20 +84,21 @@ def _upsert(db_path, date_str, **updates):
     Example input: ``_upsert(db, "2026-08-10", top3='["Ship"]')``
     Example output: the complete deserialized cycle mapping for that date.
     """
+
     # Ensure both the table and any additive migrations are present.
     _ensure(db_path)
     t = _now()
 
-    with sqlite3.connect(str(db_path)) as c:
+    with sqlite3.connect(str(db_path)) as connection:
         # Insert the day's base row once; later calls reuse it.
-        c.execute("INSERT INTO daily_cycle(date, updated_at) VALUES(?, ?) "
+        connection.execute("INSERT INTO daily_cycle(date, updated_at) VALUES(?, ?) "
                   "ON CONFLICT(date) DO NOTHING", (date_str, t))
 
         # Apply each supplied field while sharing one update timestamp.
         for k, v in updates.items():
             # SQL identifiers cannot use placeholders. ``k`` always comes from
             # fixed internal field names, never directly from user input.
-            c.execute("UPDATE daily_cycle SET %s=?, updated_at=? WHERE date=?" % k,
+            connection.execute("UPDATE daily_cycle SET %s=?, updated_at=? WHERE date=?" % k,
                       (v, t, date_str))
 
     # Read through the public path so callers always receive the full row shape.
@@ -161,8 +163,8 @@ def get_cycle(db_path, date_str):
     _ensure(db_path)
 
     # Select by column name so schema order is not behaviorally significant.
-    with sqlite3.connect(str(db_path)) as c:
-        row = c.execute(
+    with sqlite3.connect(str(db_path)) as connection:
+        row = connection.execute(
             "SELECT date,top3,tomorrow_top3,personal_top2,morning_done_at,"
             "eod_done_at,updated_at FROM daily_cycle WHERE date=?",
             (date_str,)).fetchone()
@@ -180,25 +182,31 @@ def get_cycle(db_path, date_str):
 
 def main():
     """Parse and execute one daily-cycle command, printing JSON output."""
+
+
     # Define the shared command parser and its operation-specific arguments.
     ap = argparse.ArgumentParser(description="Captain daily cycle store")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
+    # Set-top-3 and Set-tomorrow
     for name in ("set-top3", "set-tomorrow"):
         p = sub.add_parser(name)
         p.add_argument("--db", default=str(DEFAULT_DB))
         p.add_argument("--date", required=True)
         p.add_argument("--items", required=True, help="JSON array of strings")
 
-    p_st = sub.add_parser("stamp")
-    p_st.add_argument("--db", default=str(DEFAULT_DB))
-    p_st.add_argument("--date", required=True)
-    p_st.add_argument("--phase", required=True, choices=PHASES)
+    # Stamp
+    p_stamp = sub.add_parser("stamp")
+    p_stamp.add_argument("--db", default=str(DEFAULT_DB))
+    p_stamp.add_argument("--date", required=True)
+    p_stamp.add_argument("--phase", required=True, choices=PHASES)
 
+    # Get
     p_get = sub.add_parser("get")
     p_get.add_argument("--db", default=str(DEFAULT_DB))
     p_get.add_argument("--date", required=True)
 
+    # Parse args
     args = ap.parse_args()
 
     # Dispatch to the Python helper matching the selected subcommand.
@@ -206,11 +214,7 @@ def main():
         if args.cmd == "set-top3":
             print(json.dumps(set_top3(args.db, args.date, json.loads(args.items)), indent=2))
         elif args.cmd == "set-tomorrow":
-            result = set_tomorrow_top3(
-                args.db,
-                args.date,
-                json.loads(args.items),
-            )
+            result = set_tomorrow_top3(args.db, args.date,json.loads(args.items))
             print(json.dumps(result, indent=2))
         elif args.cmd == "stamp":
             print(json.dumps(stamp(args.db, args.date, args.phase), indent=2))
@@ -224,6 +228,7 @@ def main():
         raise SystemExit(str(msg)) from err
 
 
+# Entry point
 if __name__ == "__main__":
     with captain_telemetry.guard("daily_cycle"):
         main()
