@@ -28,6 +28,7 @@ invocation is side-effect free.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import subprocess
@@ -571,9 +572,11 @@ def build_arg_parser():
         )
     )
 
-    # The lookback is parsed separately so input errors do not reach telemetry.
+    # The shared type keeps this window's accepted values identical to
+    # captain_activity's, and turns a bad value into an argparse usage error
+    # rather than an exception that telemetry would report as an incident.
     ap.add_argument(
-        "--hours", default=str(ca.DEFAULT_HOURS),
+        "--hours", type=ca.positive_hours, default=ca.DEFAULT_HOURS,
         help="Lookback window in hours (default: %d)" % ca.DEFAULT_HOURS,
     )
 
@@ -606,21 +609,20 @@ def main(argv=None, root=None, cron_list_fn=None, cron_runs_fn=None, send_fn=Non
     stdout = stdout or sys.stdout
     stderr = stderr or sys.stderr
 
-    # Let argparse format its own help and invalid-option responses.
+    # Let argparse format help, validation failures, and invalid options.
+    # Redirection keeps that output on the caller's streams, since argparse
+    # would otherwise write past the injected ones straight to the real ones.
     parser = build_arg_parser()
     try:
-        args = parser.parse_args(argv)
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            args = parser.parse_args(argv)
     except SystemExit as exc:
-        # Return argparse's clean exit code instead of creating a traceback.
+        # Treat a malformed lookback as user input, not a Captain incident:
+        # returning the exit code here keeps it out of telemetry's exception
+        # path so a typo never pages anyone.
         return exc.code if isinstance(exc.code, int) else 2
 
-    # Treat a malformed lookback as user input, not a Captain incident.
-    try:
-        hours = ca._parse_hours_argument([args.hours])
-    except ca.BadHoursArgument as exc:
-        # Handle it inside ``main`` so telemetry never pages over a typo.
-        print("daily_activity_digest: %s" % exc, file=stderr)
-        return 2
+    hours = args.hours
 
     # Construct the default OpenClaw collectors only when tests do not inject them.
     openclaw_bin = os.environ.get("OPENCLAW_BIN", "openclaw")

@@ -19,10 +19,7 @@ Provides a single timeline of all recent Captain activity, including:
              actions. A no-op leaves no trace here -- that gap is exactly
              why the DECIDED/STATE lines above exist.
 
-Usage:
-    python3 scripts/captain_activity.py [HOURS]
-
-    HOURS defaults to 24. Must be a positive integer.
+The only argument is the lookback window, in hours.
 
 This is a read-only diagnostic tool. It never writes to `data/` (or
 anywhere else), and every external call (openclaw subprocess, state file
@@ -36,6 +33,8 @@ line kind and the evidence behind it.
 # Requirements
 from __future__ import annotations
 
+import argparse
+import contextlib
 import json
 import os
 import subprocess
@@ -66,10 +65,6 @@ _RUN_END_KEYS = ("finishedAt", "finished_at", "endedAt", "ended_at")
 
 
 # Feed data model
-
-class BadHoursArgument(ValueError):
-    """Identify an invalid ``HOURS`` value for ``main`` to report cleanly."""
-
 
 class Event(tuple):
     """Store one feed entry as readable text plus structured details.
@@ -530,28 +525,47 @@ def build_report(hours, root=None, cron_list_fn=None, cron_runs_fn=None, now=Non
 
 # Command-line interface
 
-def _parse_hours_argument(argv):
-    """Return a positive hours value or raise ``BadHoursArgument``.
+def positive_hours(raw):
+    """Return ``raw`` as a positive integer lookback window for ``argparse``.
 
-    The dedicated exception lets ``main`` turn invalid user input into a clean
-    command error instead of an incident traceback.
+    ``argparse`` renders the raised ``ArgumentTypeError`` as a usage message on
+    stderr and exits 2, so a typo'd window stays a clean command error rather
+    than an incident traceback. ``daily_activity_digest.py`` reuses this as its
+    own ``--hours`` type so both commands enforce one rule.
     """
-    # An omitted argument uses the documented 24-hour window.
-    if not argv:
-        return DEFAULT_HOURS
-
-    # Parse only the first positional value, matching the existing CLI contract.
-    raw = argv[0]
     try:
         hours = int(raw)
     except (TypeError, ValueError):
-        raise BadHoursArgument("HOURS must be an integer, got %r" % (raw,))
+        raise argparse.ArgumentTypeError("must be an integer, got %r" % (raw,))
 
     # Zero and negative windows cannot describe recent activity.
     if hours <= 0:
-        raise BadHoursArgument("HOURS must be positive, got %r" % (raw,))
+        raise argparse.ArgumentTypeError("must be positive, got %r" % (raw,))
 
     return hours
+
+
+def build_arg_parser():
+    """Return the parser for the activity feed's lookback window."""
+    # The module docstring stays the canonical long-form help text, so it is
+    # passed through verbatim rather than rewrapped by argparse.
+    parser = argparse.ArgumentParser(
+        prog="captain_activity.py",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    # HOURS stays positional and optional, matching the documented
+    # `captain_activity.py [HOURS]` contract. An integer default is returned
+    # as-is; argparse applies ``type`` only to values it reads from the
+    # command line.
+    parser.add_argument(
+        "hours", nargs="?", type=positive_hours, default=DEFAULT_HOURS,
+        help="Lookback window in hours (default: %d). Must be a positive integer."
+             % DEFAULT_HOURS,
+    )
+
+    return parser
 
 
 # --------- Main entry point --------
@@ -565,21 +579,20 @@ def main(argv=None, root=None, cron_list_fn=None, cron_runs_fn=None,
     stdout = stdout or sys.stdout
     stderr = stderr or sys.stderr
 
-    # The module docstring is the canonical long-form CLI help text.
-    if argv and argv[0] in ("-h", "--help"):
-        print(__doc__.strip() if __doc__ else "usage: captain_activity.py [HOURS]",
-              file=stdout)
-        return 0
-
-    # Validate user input before entering the telemetry incident path.
+    # Let argparse format help, validation failures, and invalid options.
+    # Redirection keeps that output on the caller's streams, since argparse
+    # would otherwise write past the injected ones straight to the real ones.
+    parser = build_arg_parser()
     try:
-        hours = _parse_hours_argument(argv)
-    except BadHoursArgument as exc:
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            args = parser.parse_args(argv)
+    except SystemExit as exc:
         # A typo'd HOURS argument is a user-input error, not a Captain
-        # incident -- fail cleanly here so it never reaches
-        # captain_telemetry.guard's exception path and pages anyone.
-        print("captain_activity: %s" % exc, file=stderr)
-        return 2
+        # incident. Returning argparse's exit code here keeps it out of
+        # captain_telemetry.guard's exception path so it never pages anyone.
+        return exc.code if isinstance(exc.code, int) else 2
+
+    hours = args.hours
 
     # Collect every source for the same time window.
     events, warnings, now = build_report(
