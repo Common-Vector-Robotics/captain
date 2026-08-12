@@ -6,6 +6,7 @@ afternoon, and end-of-day runs share the same status, owner, ClickUp link, and
 latest action. Run this module directly to add, update, or list blockers.
 """
 
+# Requirements
 import argparse
 import hashlib
 import json
@@ -16,9 +17,18 @@ from pathlib import Path
 
 import captain_telemetry
 
+# Root path of Captain project
 ROOT = Path(__file__).resolve().parents[1]
+
+
+# --- Database schema and helpers ---
+# Resolve the database path from the environment or default to the local SQLite file.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# Shared database and audit functions
 from captain_db import DB as DEFAULT_DB, audit  # noqa: E402
+
+# Blocker ledger schema and helpers
 
 STATUSES = ("open", "chasing", "escalated", "cleared")
 COLS = (
@@ -90,16 +100,21 @@ def add_blocker(
     The stable identifier is derived from ``source`` and ``text``, making
     repeated observations of the same blocker an update rather than a duplicate.
     """
+
+    # Create database and table if missing
     ensure_schema(db_path)
 
     # Use a deterministic, compact ID so the same evidence finds the same row.
-    blocker_id = "captain_blk_" + hashlib.sha1(
-        ("%s:%s" % (source, text)).encode("utf-8")
+    digest_prefix = hashlib.sha1(
+        f"{source}:{text}".encode("utf-8") 
     ).hexdigest()[:12]
+    blocker_id = f"captain_blk_{digest_prefix}"
+
+    # Get the current timestamp for opened_at and updated_at fields.
     timestamp = _now()
 
-    # On a repeated observation, preserve existing optional fields unless the
-    # caller supplies newer values.
+
+    # Insert or update the blocker row in the database, preserving existing values for optional fields if not provided.
     with sqlite3.connect(str(db_path)) as connection:
         connection.execute(
             """INSERT INTO blockers(
@@ -125,6 +140,7 @@ def add_blocker(
             ),
         )
 
+    # Add an audit entry for the addition of the blocker.
     audit(
         "blocker_added",
         blocker_id=blocker_id,
@@ -151,7 +167,10 @@ def update_blocker(
             % (status, ",".join(STATUSES))
         )
 
+    # Create database and table if missing
     ensure_schema(db_path)
+
+    # Make timestamp at the start, so all fields share the same value.
     timestamp = _now()
 
     with sqlite3.connect(str(db_path)) as connection:
@@ -227,9 +246,12 @@ def open_blockers(db_path):
 
 def main():
     """Read the command-line request and add, update, or list blockers."""
+
+    # --------- Command-Line Parser ---------
     parser = argparse.ArgumentParser(description="Captain blocker ledger")
     subparsers = parser.add_subparsers(dest="cmd", required=True)
 
+    # Add
     add_parser = subparsers.add_parser("add")
     add_parser.add_argument("--db", default=str(DEFAULT_DB))
     add_parser.add_argument("--text", required=True)
@@ -238,6 +260,7 @@ def main():
     add_parser.add_argument("--owner")
     add_parser.add_argument("--clickup-task-id")
 
+    # Update
     update_parser = subparsers.add_parser("update")
     update_parser.add_argument("--db", default=str(DEFAULT_DB))
     update_parser.add_argument("--id", required=True)
@@ -246,12 +269,14 @@ def main():
     update_parser.add_argument("--owner")
     update_parser.add_argument("--clickup-task-id")
 
+    # List
     list_parser = subparsers.add_parser("list")
     list_parser.add_argument("--db", default=str(DEFAULT_DB))
     args = parser.parse_args()
 
-    # Dispatch to the requested ledger operation and convert expected user
-    # errors into concise command-line messages.
+    # --------- Command Dispatch ---------
+
+    # Add
     if args.cmd == "add":
         try:
             blocker_id = add_blocker(
@@ -274,6 +299,7 @@ def main():
 
         print(json.dumps({"id": blocker_id}))
 
+    # Update
     elif args.cmd == "update":
         try:
             result = update_blocker(
@@ -294,7 +320,8 @@ def main():
 
         print(json.dumps(result, indent=2))
 
-    else:
+    # List
+    elif args.cmd == "list":
         try:
             blockers = open_blockers(args.db)
         except (ValueError, KeyError, OSError) as err:
@@ -307,6 +334,9 @@ def main():
 
         print(json.dumps(blockers, indent=2))
 
+
+
+# Entry point
 
 if __name__ == "__main__":
     with captain_telemetry.guard("blocker_ledger"):
