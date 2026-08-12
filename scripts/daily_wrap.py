@@ -6,6 +6,7 @@ and blocker activity, and identifies critical-path risks. It reads local files
 and prints one JSON report for the daily-loop prompt to consume.
 """
 
+ # Requirements
 import argparse
 import json
 import sqlite3
@@ -16,14 +17,18 @@ from zoneinfo import ZoneInfo
 
 import captain_telemetry
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Constants
+ROOT = Path(__file__).resolve().parents[1] # Root of the Captain repository
+sys.path.insert(0, str(Path(__file__).resolve().parent)) # Add scripts/ to sys.path for local imports
 from captain_db import DB as DEFAULT_DB, AUDIT as DEFAULT_AUDIT  # noqa: E402
 from daily_context import is_open, due_local_date, slim  # noqa: E402
 
+# Timezone and status constants
 TZ = ZoneInfo("America/Detroit")
 NON_PROGRESS = {"to do", "backlog", "not started", "intake", "open"}
 
+
+# ------- Internal helpers -------
 
 def _tasks(path):
     """Read tasks from a plain list or a ClickUp-style ``{"tasks": [...]}`` file."""
@@ -37,7 +42,7 @@ def _tasks(path):
 
 def _audit_counts(audit_path, date_str):
     """Count the task and blocker actions recorded during the chosen local day."""
-    # Use the full Detroit calendar day, matching _blocker_day's date comparison.
+    # Use the full calendar day, matching _blocker_day's date comparison.
     # A non-midnight cutoff would classify overnight activity inconsistently.
     start = datetime.combine(
         datetime.strptime(date_str, "%Y-%m-%d").date(),
@@ -238,9 +243,16 @@ def build_wrap(morning_snapshot_path, eod_clickup_path, audit_path, db_path,
     }
 
 
+# ------ Main -------
+
 def main():
     """Read command-line options, build the daily wrap, and print it as JSON."""
+
+    # ------- Parsing -------
+    
+    # Parser
     parser = argparse.ArgumentParser(description="Captain EOD wrap builder")
+
     parser.add_argument("--morning", required=True)
     parser.add_argument("--eod", required=True)
     parser.add_argument("--db", default=str(DEFAULT_DB))
@@ -251,6 +263,8 @@ def main():
         default=str(ROOT / "data" / "critical-paths.json"),
     )
     args = parser.parse_args()
+
+    # ------- Execution -------
 
     # Expected input and path errors become concise CLI messages; unexpected
     # failures still reach the surrounding telemetry guard.
