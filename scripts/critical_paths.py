@@ -518,26 +518,41 @@ def print_summary(state):
 
 def main():
     """Fetch or load tasks, discover critical paths, and print or save the result."""
+
+
+    # Start arg parser
     parser = argparse.ArgumentParser(
         description="Discover Captain critical paths from ClickUp"
     )
+
+    # Command
     parser.add_argument("command", choices=["discover", "score", "write-state"])
+
+    # Max-Paths
     parser.add_argument(
         "--max-paths",
         type=int,
         default=int(os.environ.get("CAPTAIN_MAX_CRITICAL_PATHS", "5")),
     )
+
+    # Parse Args
     args = parser.parse_args()
 
-    # Fetch current ClickUp truth, apply human overrides, and score the paths.
+    # Fetch current ClickUp truh
     token, team_id = get_clickup_credentials()
     tasks = fetch_clickup_tasks(token, team_id)
+
+    # Apply human overrides
     overrides = load_overrides()
+
+    # Discover and score critical paths
     state = discover_paths(tasks, max_paths=args.max_paths, overrides=overrides)
 
     # Only write-state mutates local state; discover and score remain read-only.
     if args.command == "write-state":
-        write_state(state)
+        write_state(state) # Write the discovered critical paths to the local state file
+
+        # Audit the write-state operation for telemetry and monitoring purposes
         audit(
             "critical_paths_state_written",
             source="scripts/critical_paths.py",
@@ -547,12 +562,15 @@ def main():
                 len(path.get("task_ids") or [])
                 for path in state.get("paths") or []
             ),
+
+            # Log any invalid override task IDs that were detected during discovery
             invalid_override_task_ids=state.get("invalid_override_task_ids") or [],
         )
 
+    # Print the discovered critical paths to stdout for visibility and debugging
     print_summary(state)
 
-
+# Run within telemetry guard
 if __name__ == "__main__":
     with captain_telemetry.guard("critical_paths"):
         main()
