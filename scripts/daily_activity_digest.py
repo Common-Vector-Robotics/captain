@@ -25,6 +25,8 @@ Usage:
 invocation is side-effect free.
 """
 
+
+# Requirements
 from __future__ import annotations
 
 import argparse
@@ -43,6 +45,7 @@ import captain_activity as ca  # noqa: E402
 import captain_telemetry  # noqa: E402
 import slack_user_names  # noqa: E402
 
+# Constants
 ROOT = Path(__file__).resolve().parents[1]
 TZ = ZoneInfo("America/Detroit")
 
