@@ -2,8 +2,7 @@
 """Captain activity viewer: one chronological, read-only feed of what Captain
 actually did (or deliberately did not do) in the last N hours.
 
-Answers "how can I see all captain actions, even no_op ones?" by merging
-three sources of truth that individually cannot answer it:
+Provides a single timeline of all recent Captain activity, including:
 
   CRON    -- `openclaw cron list --json` (agentId == "captain") plus
              `openclaw cron runs --id <id>` per job. Proves a job fired, but
@@ -33,6 +32,8 @@ that breaks this script. The four source descriptions above define each output
 line kind and the evidence behind it.
 """
 
+
+# Requirements
 from __future__ import annotations
 
 import json
@@ -42,9 +43,10 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent)) # Add scripts/ to sys.path for local imports
 import captain_telemetry  # noqa: E402
 
+# Constants
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_HOURS = 24
 TIME_FORMAT = "%m-%d %H:%M"
@@ -58,6 +60,9 @@ _RUN_TS_KEYS = ("tsIso", "runAtIso", "finishedAt", "finished_at",
                 "endedAt", "ended_at", "startedAt", "started_at", "timestamp")
 _RUN_START_KEYS = ("startedAt", "started_at")
 _RUN_END_KEYS = ("finishedAt", "finished_at", "endedAt", "ended_at")
+
+
+# --------- Helpers for parsing and normalizing external data ---------
 
 
 # Feed data model
@@ -549,9 +554,12 @@ def _parse_hours_argument(argv):
     return hours
 
 
+# --------- Main entry point --------
+
 def main(argv=None, root=None, cron_list_fn=None, cron_runs_fn=None,
          now=None, stdout=None, stderr=None):
     """Print Captain's recent activity as a readable command-line report."""
+
     # Use real command-line streams by default while keeping tests injectable.
     argv = sys.argv[1:] if argv is None else list(argv)
     stdout = stdout or sys.stdout
