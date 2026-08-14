@@ -18,32 +18,33 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
-def test_load_toggle_users_inverts_private_name_mapping(tmp_path):
+def test_load_toggle_users_inverts_private_name_mapping(tmp_path, monkeypatch):
     path = tmp_path / "captain-channels.json"
     write_json(path, {"mode_toggle_users": {"Operator": "U0123456789"}})
-    assert captain_modes.load_toggle_users(path) == {"U0123456789": "Operator"}
+    monkeypatch.setattr(captain_modes, "CHANNELS_PATH", path)
+    assert captain_modes.load_toggle_users() == {"U0123456789": "Operator"}
 
 
 @pytest.mark.parametrize("value", [None, {}, [], {"Operator": ""}])
-def test_load_toggle_users_fails_closed(tmp_path, value):
+def test_load_toggle_users_fails_closed(tmp_path, monkeypatch, value):
     path = tmp_path / "captain-channels.json"
     write_json(path, {} if value is None else {"mode_toggle_users": value})
+    monkeypatch.setattr(captain_modes, "CHANNELS_PATH", path)
     with pytest.raises(SystemExit, match="mode_toggle_users"):
-        captain_modes.load_toggle_users(path)
+        captain_modes.load_toggle_users()
 
 
 def test_set_dailyloop_rejects_blank_or_unknown_user(tmp_path, monkeypatch):
     channels = tmp_path / "captain-channels.json"
     modes = tmp_path / "captain-modes.json"
     write_json(channels, {"mode_toggle_users": {"Operator": "U0123456789"}})
+    monkeypatch.setattr(captain_modes, "CHANNELS_PATH", channels)
+    monkeypatch.setattr(captain_modes, "MODE_PATH", modes)
     monkeypatch.setattr(captain_modes, "init_db", lambda: None)
     monkeypatch.setattr(captain_modes, "audit", lambda *args, **kwargs: None)
     for user_id in ("", "U9999999999"):
         with pytest.raises(SystemExit, match="Unauthorized"):
-            captain_modes.set_dailyloop(
-                "shadow", user_id, "test", mode_path=modes,
-                channels_path=channels,
-            )
+            captain_modes.set_dailyloop("shadow", user_id, "test")
 
 
 def test_set_dailyloop_records_configured_operator(tmp_path, monkeypatch):
@@ -51,16 +52,15 @@ def test_set_dailyloop_records_configured_operator(tmp_path, monkeypatch):
     modes = tmp_path / "captain-modes.json"
     events = []
     write_json(channels, {"mode_toggle_users": {"Operator": "U0123456789"}})
+    monkeypatch.setattr(captain_modes, "CHANNELS_PATH", channels)
+    monkeypatch.setattr(captain_modes, "MODE_PATH", modes)
     monkeypatch.setattr(captain_modes, "init_db", lambda: None)
     monkeypatch.setattr(
         captain_modes,
         "audit",
         lambda event, **fields: events.append((event, fields)),
     )
-    result = captain_modes.set_dailyloop(
-        "shadow", "U0123456789", "test", mode_path=modes,
-        channels_path=channels,
-    )
+    result = captain_modes.set_dailyloop("shadow", "U0123456789", "test")
     assert result["DailyLoop"]["updated_by"] == "Operator"
     assert json.loads(modes.read_text(encoding="utf-8")) == result
     assert len(events) == 1
@@ -81,6 +81,8 @@ def test_set_dailyloop_does_not_change_mode_file_when_audit_fails(
     original = b'{"DailyLoop":{"audience":"off"},"Other":{"enabled":true}}\n'
     write_json(channels, {"mode_toggle_users": {"Operator": "U0123456789"}})
     modes.write_bytes(original)
+    monkeypatch.setattr(captain_modes, "CHANNELS_PATH", channels)
+    monkeypatch.setattr(captain_modes, "MODE_PATH", modes)
 
     def fail_audit(*args, **kwargs):
         raise RuntimeError("audit unavailable")
@@ -89,47 +91,47 @@ def test_set_dailyloop_does_not_change_mode_file_when_audit_fails(
     monkeypatch.setattr(captain_modes, "audit", fail_audit)
 
     with pytest.raises(RuntimeError, match="audit unavailable"):
-        captain_modes.set_dailyloop(
-            "live", "U0123456789", "test", mode_path=modes,
-            channels_path=channels,
-        )
+        captain_modes.set_dailyloop("live", "U0123456789", "test")
 
     assert modes.read_bytes() == original
 
 
-def test_save_modes_is_owner_only_under_permissive_umask(tmp_path):
+def test_save_modes_is_owner_only_under_permissive_umask(tmp_path, monkeypatch):
     """Catch mode-state creation that inherits group or world permissions."""
     modes = tmp_path / "captain-modes.json"
+    monkeypatch.setattr(captain_modes, "MODE_PATH", modes)
     previous_umask = os.umask(0o022)
     try:
-        captain_modes.save_modes({"DailyLoop": {"audience": "shadow"}}, modes)
+        captain_modes.save_modes({"DailyLoop": {"audience": "shadow"}})
     finally:
         os.umask(previous_umask)
 
     assert stat.S_IMODE(modes.stat().st_mode) == 0o600
 
 
-def test_save_modes_creates_owner_only_parent(tmp_path):
+def test_save_modes_creates_owner_only_parent(tmp_path, monkeypatch):
     """Catch a new mode-state directory that is visible to other users."""
     modes = tmp_path / "private-state" / "captain-modes.json"
+    monkeypatch.setattr(captain_modes, "MODE_PATH", modes)
     previous_umask = os.umask(0o022)
     try:
-        captain_modes.save_modes({"DailyLoop": {"audience": "shadow"}}, modes)
+        captain_modes.save_modes({"DailyLoop": {"audience": "shadow"}})
     finally:
         os.umask(previous_umask)
 
     assert stat.S_IMODE(modes.parent.stat().st_mode) == 0o700
 
 
-def test_save_modes_rejects_parent_writable_by_other_users(tmp_path):
+def test_save_modes_rejects_parent_writable_by_other_users(tmp_path, monkeypatch):
     """Catch staging mode state in a directory another user can replace."""
     parent = tmp_path / "shared-state"
     parent.mkdir(mode=0o777)
     parent.chmod(0o777)
     modes = parent / "captain-modes.json"
+    monkeypatch.setattr(captain_modes, "MODE_PATH", modes)
 
     with pytest.raises(OSError, match="owner-controlled directory"):
-        captain_modes.save_modes({"DailyLoop": {"audience": "live"}}, modes)
+        captain_modes.save_modes({"DailyLoop": {"audience": "live"}})
 
     assert list(parent.iterdir()) == []
 
@@ -142,6 +144,7 @@ def test_save_modes_failure_preserves_original_and_removes_temp(
     modes = tmp_path / "captain-modes.json"
     original = b'{"DailyLoop":{"audience":"off"}}\n'
     modes.write_bytes(original)
+    monkeypatch.setattr(captain_modes, "MODE_PATH", modes)
 
     if failure_stage == "write":
         real_fdopen = os.fdopen
@@ -172,7 +175,7 @@ def test_save_modes_failure_preserves_original_and_removes_temp(
         monkeypatch.setattr(os, "replace", fail_replace)
 
     with pytest.raises(OSError, match=f"{failure_stage} failed"):
-        captain_modes.save_modes({"DailyLoop": {"audience": "live"}}, modes)
+        captain_modes.save_modes({"DailyLoop": {"audience": "live"}})
 
     assert modes.read_bytes() == original
     assert sorted(path.name for path in tmp_path.iterdir()) == [modes.name]
@@ -185,6 +188,7 @@ def test_save_modes_stages_unpredictable_owner_only_temp_beside_target(
     modes = tmp_path / "captain-modes.json"
     original = b'{"DailyLoop":{"audience":"off"}}\n'
     modes.write_bytes(original)
+    monkeypatch.setattr(captain_modes, "MODE_PATH", modes)
     observed = []
 
     def inspect_replace(source, destination):
@@ -203,7 +207,7 @@ def test_save_modes_stages_unpredictable_owner_only_temp_beside_target(
 
     for audience in ("shadow", "live"):
         with pytest.raises(OSError, match="replace failed"):
-            captain_modes.save_modes({"DailyLoop": {"audience": audience}}, modes)
+            captain_modes.save_modes({"DailyLoop": {"audience": audience}})
 
     assert {item["parent"] for item in observed} == {modes.parent}
     assert {item["destination"] for item in observed} == {modes}

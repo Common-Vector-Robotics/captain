@@ -34,10 +34,10 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
-def load_toggle_users(path=CHANNELS_PATH):
+def load_toggle_users():
     """Load private DailyLoop operators, keyed by Slack user ID."""
     try:
-        config = json.loads(path.read_text(encoding="utf-8"))
+        config = json.loads(CHANNELS_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise SystemExit(f"Cannot load mode_toggle_users: {error}") from error
 
@@ -62,19 +62,19 @@ def load_toggle_users(path=CHANNELS_PATH):
     return users
 
 
-def load_modes(path=MODE_PATH):
+def load_modes():
     """Read Captain's saved operating modes, or return an empty setup."""
     # A missing file represents a workspace with no modes configured yet.
-    if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
+    if MODE_PATH.exists():
+        return json.loads(MODE_PATH.read_text(encoding="utf-8"))
 
     return {}
 
 
-def save_modes(modes, path=MODE_PATH):
+def save_modes(modes):
     """Securely and atomically replace the saved operating-mode file."""
 
-    path = Path(path)
+    path = MODE_PATH
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     parent_info = os.stat(path.parent, follow_symlinks=False)
     parent_mode = stat.S_IMODE(parent_info.st_mode)
@@ -114,10 +114,7 @@ def save_modes(modes, path=MODE_PATH):
 DAILYLOOP_AUDIENCES = ("off", "shadow", "live")
 
 
-def set_dailyloop(
-    audience, user_id, source, *, mode_path=MODE_PATH,
-    channels_path=CHANNELS_PATH,
-):
+def set_dailyloop(audience, user_id, source):
     """Set DailyLoop to off, shadow, or live for a configured Slack operator.
 
     The single audit row is precommit authorization, not proof that persistence
@@ -134,12 +131,12 @@ def set_dailyloop(
             % (audience, ", ".join(DAILYLOOP_AUDIENCES))
         )
 
-    authorized = load_toggle_users(channels_path)
+    authorized = load_toggle_users()
     if not user_id or user_id not in authorized:
         raise SystemExit(f"Unauthorized DailyLoop toggle user: {user_id}")
 
     # Preserve unrelated modes while replacing the DailyLoop record.
-    modes = load_modes(mode_path)
+    modes = load_modes()
     modes["DailyLoop"] = {
         "audience": audience,
         "updated_at": now_iso(),
@@ -159,7 +156,7 @@ def set_dailyloop(
         state_authoritative=True,
         authoritative_state="mode_file",
     )  # Record the authorized mode-change attempt in the audit log.
-    save_modes(modes, mode_path)  # Activate the mode only after auditing succeeds.
+    save_modes(modes)  # Activate the mode only after auditing succeeds.
 
     return modes
 
