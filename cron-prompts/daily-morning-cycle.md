@@ -167,16 +167,16 @@ Workflow:
          key's mapped id and
          skip the lookup. Anything short of exact equality is NOT a match and
          falls through to (ii): a `people[]` key is an email, a ClickUp username,
-         or an Owners label, so `Alex B`, `alex`, and
-         `alex@example.com` all fail this test.
+         or an Owners label, so `Name Lastname`, `name`, and
+         `name@example.com` all fail this test.
          Never substring-match, never compare first names only, never match
          against the ids on the right-hand side. A loose match here would send one
          person's tasks to a different human who merely shares a first name, and
          nothing downstream would catch it, because a hardcoded id always looks
          like a successful resolution. What exact equality cannot do is tell two
          humans apart when both present the SAME key: a second employee whose
-         Owners label is also `Alex` matches the key `Alex` character-for-character
-         and gets the first Alex's id. Do not read that case as caught here — it
+         Owners label is also `Name` matches the key `Name` character-for-character
+         and gets the configured id for that key. Do not read that case as caught here — it
          is not, and it is not detectable in this step either, because the
          ranking script groups people BY `key`, so two humans sharing one label
          already arrive as a single `people[]` entry with their tasks pooled. The
@@ -256,8 +256,8 @@ Workflow:
       arbitrary.
       Then cross-check the merged recipients before delivery, because merging on
       "same Slack id" cannot catch the opposite failure — one human resolving to
-      TWO ids. The assignee path may resolve `alex@example.com` to `U111` while
-      the Owners-label path resolves the label `Alex` to `U222`: another Alex, a
+      TWO ids. The assignee path may resolve `name@example.com` to `U111` while
+      the Owners-label path resolves the label `Name` to `U222`: another person, a
       guest account, a deactivated duplicate. Each lookup returned exactly one
       unambiguous user, so text-nobody does not fire and the merge above finds
       nothing to merge, and the morning sends two DMs — one telling the wrong

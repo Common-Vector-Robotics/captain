@@ -49,7 +49,7 @@ def owner_label_names(task):
     unset well-formed Owners field returns an empty list; structurally malformed
     field data surfaces as an error instead of being guessed around.
 
-    Example output: ``["Alex", "Jordan"]``
+    Example output: ``["Name", "Name Lastname"]``
     """
     # Find the custom field named ``Owners`` without assuming field-name case.
     for field in task.get("custom_fields") or []:

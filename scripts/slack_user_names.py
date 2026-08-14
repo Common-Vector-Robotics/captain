@@ -23,8 +23,8 @@ def invert_admin_recipients(channels_cfg):
 
     Missing or malformed configuration safely produces an empty mapping.
 
-    Example input: {"admin_recipients": {"Alex": "U0123456789"}}
-    Example output: {"U0123456789": "Alex"}
+    Example input: {"admin_recipients": {"Name": "U0123456789"}}
+    Example output: {"U0123456789": "Name"}
     """
 
     # Get admin recipients from channels configuration
@@ -128,4 +128,3 @@ class SlackNameResolver:
             lambda match: self.render(match.group(0)),
             text,
         )
-

@@ -100,7 +100,7 @@ Use one batch command rather than a shell loop. The JSON input is an array (or a
       "list_id": "901327546010",
       "name": "Investigate controller fault",
       "status": "to do",
-      "owner": ["Alex"],
+      "owner": ["Name"],
       "source": "explicit Slack request"
     }
   ]
@@ -145,7 +145,7 @@ document it there), and the actual endpoint for setting a custom field on an exi
 are already on the field. So update-task always reads the task's current Owners value first (from
 the same task GET already done for status resolution) and writes the **union** of the existing
 option ids and the newly resolved ones, as a second request made after the primary task write
-succeeds. Setting Alex's label never removes Casey's. If the union doesn't add anything new, no
+succeeds. Setting one owner's label never removes another owner's. If the union doesn't add anything new, no
 follow-up request is made at all. If the primary task write succeeds but this follow-up field-value
 call fails, the operation result still reports the task as succeeded (it exists) but carries an
 `owner_field_write: {attempted: true, ok: false, error: {...}}`, and a matching
