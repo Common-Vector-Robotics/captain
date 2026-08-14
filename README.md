@@ -93,7 +93,7 @@ flowchart TB
 
 ## Install and set up
 
-Captain is packaged as an OpenClaw Claw (note: `.claw` packages are still experimental). It installs Captain as a new agent with six scheduled jobs plus one Claw-managed hourly heartbeat in every `DailyLoop` mode, including `off`. The five weekday operational jobs remain off until you configure them locally. Heartbeat routing still uses the configured `captain` Slack binding.
+Captain is packaged as an OpenClaw Claw (note: `.claw` packages are still experimental). It installs Captain as a new agent with six scheduled jobs plus one Claw-managed hourly heartbeat in every `DailyLoop` mode, including `off`. The five weekday operational jobs remain off until you configure them locally.
 
 ### Prerequisites
 
