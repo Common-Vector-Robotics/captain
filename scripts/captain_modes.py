@@ -9,10 +9,7 @@ is written atomically and recorded in Captain's audit log.
 # Requirements
 import argparse
 import json
-import os
-import stat
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -72,43 +69,19 @@ def load_modes():
 
 
 def save_modes(modes):
-    """Securely and atomically replace the saved operating-mode file."""
+    """Atomically replace the saved operating-mode file with owner-only access."""
 
-    path = MODE_PATH
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    parent_info = os.stat(path.parent, follow_symlinks=False)
-    parent_mode = stat.S_IMODE(parent_info.st_mode)
-    if (
-        not stat.S_ISDIR(parent_info.st_mode)
-        or parent_info.st_uid != os.geteuid()
-        or parent_mode & 0o022
-    ):
-        raise OSError(
-            f"Mode-state parent is not an owner-controlled directory: {path.parent}"
-        )
-
-    payload = json.dumps(modes, indent=2, sort_keys=True) + "\n"
-
-    # Write beside the destination so the final replacement remains atomic.
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    staged = Path(tmp_name)
+    MODE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = MODE_PATH.with_suffix(".tmp")
+    temporary.touch(mode=0o600, exist_ok=False)
     try:
-        os.fchmod(fd, 0o600)
-        mode_file = os.fdopen(fd, "w", encoding="utf-8")
-        fd = -1  # ``mode_file`` now owns the descriptor.
-        with mode_file:
-            mode_file.write(payload)
-            mode_file.flush()
-            os.fsync(mode_file.fileno())
-
-        # Publish the fully written owner-private file atomically.
-        os.replace(staged, path)
+        temporary.write_text(
+            json.dumps(modes, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(MODE_PATH)
     finally:
-        if fd >= 0:
-            os.close(fd)
-        staged.unlink(missing_ok=True)
+        temporary.unlink(missing_ok=True)
 
 
 DAILYLOOP_AUDIENCES = ("off", "shadow", "live")

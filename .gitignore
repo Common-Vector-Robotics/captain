@@ -18,7 +18,7 @@ data/sentry-bridge-state.json
 # Local config derived from the tracked *.example.json files
 data/captain-channels.json
 data/captain-modes.json
-data/.captain-modes.json.*.tmp
+data/captain-modes.tmp
 data/critical-path-overrides.json
 data/meeting-ingestion.json
 

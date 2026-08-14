@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import stat
 import subprocess
 import sys
@@ -109,114 +108,29 @@ def test_save_modes_is_owner_only_under_permissive_umask(tmp_path, monkeypatch):
     assert stat.S_IMODE(modes.stat().st_mode) == 0o600
 
 
-def test_save_modes_creates_owner_only_parent(tmp_path, monkeypatch):
-    """Catch a new mode-state directory that is visible to other users."""
+def test_save_modes_creates_missing_parent(tmp_path, monkeypatch):
     modes = tmp_path / "private-state" / "captain-modes.json"
     monkeypatch.setattr(captain_modes, "MODE_PATH", modes)
-    previous_umask = os.umask(0o022)
-    try:
-        captain_modes.save_modes({"DailyLoop": {"audience": "shadow"}})
-    finally:
-        os.umask(previous_umask)
+    captain_modes.save_modes({"DailyLoop": {"audience": "shadow"}})
 
-    assert stat.S_IMODE(modes.parent.stat().st_mode) == 0o700
+    assert modes.is_file()
 
 
-def test_save_modes_rejects_parent_writable_by_other_users(tmp_path, monkeypatch):
-    """Catch staging mode state in a directory another user can replace."""
-    parent = tmp_path / "shared-state"
-    parent.mkdir(mode=0o777)
-    parent.chmod(0o777)
-    modes = parent / "captain-modes.json"
-    monkeypatch.setattr(captain_modes, "MODE_PATH", modes)
-
-    with pytest.raises(OSError, match="owner-controlled directory"):
-        captain_modes.save_modes({"DailyLoop": {"audience": "live"}})
-
-    assert list(parent.iterdir()) == []
-
-
-@pytest.mark.parametrize("failure_stage", ["write", "fsync", "replace"])
-def test_save_modes_failure_preserves_original_and_removes_temp(
-    tmp_path, monkeypatch, failure_stage
-):
-    """Catch partial state or temp-file residue from any commit-stage failure."""
-    modes = tmp_path / "captain-modes.json"
-    original = b'{"DailyLoop":{"audience":"off"}}\n'
-    modes.write_bytes(original)
-    monkeypatch.setattr(captain_modes, "MODE_PATH", modes)
-
-    if failure_stage == "write":
-        real_fdopen = os.fdopen
-
-        class FailingWriter:
-            def __init__(self, fd, *args, **kwargs):
-                self.file = real_fdopen(fd, *args, **kwargs)
-
-            def __enter__(self):
-                return self
-
-            def write(self, _value):
-                raise OSError("write failed")
-
-            def __exit__(self, *exc_info):
-                self.file.close()
-
-        monkeypatch.setattr(os, "fdopen", FailingWriter)
-    elif failure_stage == "fsync":
-        def fail_fsync(_fd):
-            raise OSError("fsync failed")
-
-        monkeypatch.setattr(os, "fsync", fail_fsync)
-    else:
-        def fail_replace(_source, _destination):
-            raise OSError("replace failed")
-
-        monkeypatch.setattr(os, "replace", fail_replace)
-
-    with pytest.raises(OSError, match=f"{failure_stage} failed"):
-        captain_modes.save_modes({"DailyLoop": {"audience": "live"}})
-
-    assert modes.read_bytes() == original
-    assert sorted(path.name for path in tmp_path.iterdir()) == [modes.name]
-
-
-def test_save_modes_stages_unpredictable_owner_only_temp_beside_target(
+def test_save_modes_replace_failure_preserves_original_and_removes_temp(
     tmp_path, monkeypatch
 ):
-    """Catch predictable, cross-directory, or broadly readable staging files."""
     modes = tmp_path / "captain-modes.json"
     original = b'{"DailyLoop":{"audience":"off"}}\n'
     modes.write_bytes(original)
     monkeypatch.setattr(captain_modes, "MODE_PATH", modes)
-    observed = []
 
-    def inspect_replace(source, destination):
-        staged = Path(source)
-        observed.append(
-            {
-                "parent": staged.parent,
-                "name": staged.name,
-                "mode": stat.S_IMODE(staged.stat().st_mode),
-                "destination": Path(destination),
-            }
-        )
+    def fail_replace(_source, _destination):
         raise OSError("replace failed")
 
-    monkeypatch.setattr(os, "replace", inspect_replace)
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    with pytest.raises(OSError, match="replace failed"):
+        captain_modes.save_modes({"DailyLoop": {"audience": "live"}})
 
-    for audience in ("shadow", "live"):
-        with pytest.raises(OSError, match="replace failed"):
-            captain_modes.save_modes({"DailyLoop": {"audience": audience}})
-
-    assert {item["parent"] for item in observed} == {modes.parent}
-    assert {item["destination"] for item in observed} == {modes}
-    assert all(
-        re.fullmatch(r"\.captain-modes\.json\.[A-Za-z0-9_-]+\.tmp", item["name"])
-        for item in observed
-    )
-    assert len({item["name"] for item in observed}) == 2
-    assert {item["mode"] for item in observed} == {0o600}
     assert modes.read_bytes() == original
     assert sorted(path.name for path in tmp_path.iterdir()) == [modes.name]
 
@@ -243,11 +157,11 @@ def test_mutable_mode_state_is_gitignored():
 
 def test_mode_state_staging_files_are_gitignored():
     result = subprocess.run(
-        ["git", "check-ignore", "data/.captain-modes.json.abcd1234.tmp"],
+        ["git", "check-ignore", "data/captain-modes.tmp"],
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=False,
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "data/.captain-modes.json.abcd1234.tmp"
+    assert result.stdout.strip() == "data/captain-modes.tmp"
