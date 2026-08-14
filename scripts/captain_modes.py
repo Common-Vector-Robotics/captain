@@ -98,11 +98,10 @@ DAILYLOOP_AUDIENCES = ("off", "shadow", "live")
 def set_dailyloop(audience, user_id, source):
     """Set DailyLoop to off, shadow, or live for a configured Slack operator.
 
-    The single audit row is precommit authorization, not proof that persistence
-    completed. It is appended before the atomic mode-file replacement so an
-    audit failure can never leave an unaudited mode active. The mode file is the
-    authoritative outcome: if its later replacement fails, the row remains a
-    documented but uncommitted attempt.
+    Captain records the requested change in the audit log before updating the
+    mode file. If auditing fails, the mode remains unchanged. If saving fails
+    afterward, the audit log shows the attempted change, but the mode file still
+    contains the active setting and remains the source of truth.
     """
 
     # Input Validation: Reject invalid modes.
