@@ -17,7 +17,7 @@ Mode gate (do this first):
 3. If `shadow`: DRY RUN — no owner pings send, no channel post goes out, no ClickUp writes
    execute; everything this prompt would send becomes one of the concrete preview forms
    established below — `SHADOW (would DM <owner>): ...` / `SHADOW (would DM
-   <admin>): ...` / `SHADOW (would post to #captains-quarters): ...` / `SHADOW (would
+   <admin>): ...` / `SHADOW (would post to <program_channel>): ...` / `SHADOW (would
    write): <task id> <operation>` — sent only to `shadow_recipient` from
    `data/captain-channels.json`. `<owner>`/`<admin>` are always the actual resolved Slack
    user id, never a generic role label, rendered as `Name (Uxxxxxxxx)` by resolving the name
@@ -47,17 +47,17 @@ Mode gate (do this first):
    stale-task briefing counts `clickup_*` audit rows as evidence work moved; a shadow
    preview producing those rows would corrupt that report, while ledger rows are harmless
    because nothing downstream treats them as ClickUp evidence.
-4. If `live`: owner pings send for real, the digest posts to `#captains-quarters`, and
+4. If `live`: owner pings send for real, the digest posts to `program_channel`, and
    ClickUp writes execute for real.
 5. If `audience` is any value not listed above (not `off`/`shadow`/`live`): treat it as
    `off`. The fail-safe action is: record `{audience_unrecognized: <value>}` in the state
    file so the misconfiguration is visible rather than silent, then give final response
    `NO_REPLY` and do nothing else.
 
-Admin recipients (for "DM the responsible Admin" below):
-- Gavin: `user:U0B4G00QXT8`
-- Arnold: `user:U043AKSJC85`
-- Raj: `user:U09MVE90E4C`
+Admin recipients (for "DM the responsible Admin" below) come only from the
+non-empty `admin_recipients` mapping in `data/captain-channels.json`. Never
+substitute a hardcoded person or Slack id. When responsibility is ambiguous,
+route one decision request to every configured administrator.
 
 Hard rules:
 1. ClickUp writes in this cron (live audience only, all audited; in shadow these become
@@ -67,22 +67,23 @@ Hard rules:
    --task-id <id> --status Blocked`, and add the explanatory comment via `--execute
    comment-task --task-id <id> --text "Blocked: <what/since when/what's needed>"`. If the
    result carries `needs_blocked_status`, the status was left unchanged — keep the comment
-   and flag the list in the digest (live: posted to `#captains-quarters`; shadow: in the
+   and flag the list in the digest (live: posted to `program_channel`; shadow: in the
    `shadow_recipient` preview) as `needs Blocked status added`. On clear, comment `Cleared:
    <evidence>` via `--execute comment-task --task-id <id> --text "Cleared: <evidence>"`
    (live audience writes it for real; shadow previews it) — status advancement stays with
    the owner/check-in flow. Task creation from this cron is limited to the ClickUp-home
    step below (giving an unlinked blocker a task to live on) — it never creates a separate
-   "blocker" task when an original task already exists, per MEMORY.md.
+   "blocker" task when an original task already exists, under the ownership
+   contract in `TOOLS.md`.
    Every `clickup_write.py` invocation prints `{ok, succeeded, failed}` and exits 0 even when
    `failed` is non-empty — always inspect `failed` in the printed JSON, never rely on exit
    code. Treat any operation in `failed` as not done: do not advance that blocker's ledger
    status past what actually happened, and list it in the digest's `Failed:` section (live:
-   posted to `#captains-quarters`; shadow: in the `shadow_recipient` preview) with the
+   posted to `program_channel`; shadow: in the `shadow_recipient` preview) with the
    blocker id and the error.
 2. Owner pings (live audience: sent for real to the owner's Slack DM; shadow audience:
-   emitted as a `SHADOW (would DM <owner>): ...` line to `shadow_recipient` only) use the
-   employee check-in lane rules from MEMORY.md: lightweight, no jargon ("blocker" is
+   emitted as a `SHADOW (would DM <owner>): ...` line to `shadow_recipient` only) use this
+   prompt's employee check-in lane rules: lightweight, no jargon ("blocker" is
    internal vocabulary — don't use it with employees), no format demands; voice or text
    replies both fine. One ping per owner per day maximum, enforced within this run as well as
    across runs: immediately after each send in `live` audience (or each `SHADOW (would DM
@@ -112,7 +113,7 @@ for — surfaced in the digest so a human identifies the task, never left silent
 ledger-only], shadow_recipient_unresolved, runs[] — see step 6)
 
 Workflow:
-1. Work from `/Users/owen/.openclaw/workspace-captain`. Read `MEMORY.md`.
+1. Work from the installed Captain workspace root (the directory containing `CLAW.md`). Read `MEMORY.md` when it exists; its absence is valid.
 2. `python3 scripts/blocker_ledger.py list` → open blockers. If empty: update state — including
    the `runs[]` append from step 6 below with `action: "no_op"` and `reason: "no open
    blockers"` — then `NO_REPLY`. A day with nothing to chase is exactly the case this record
@@ -134,7 +135,7 @@ Workflow:
       it later is detectable by the CLEAR CHECK below. Match first — search the board fetch
       for an existing task this blocker is clearly about (task name/description, owner,
       source context); prefer an existing task, then a parent task, over creating anything
-      new, per MEMORY.md's rule that blockers live on the original task, never as
+      new, under this prompt's rule that blockers live on the original task, never as
       standalone blocker tickets:
       - Confident match: `python3 scripts/blocker_ledger.py update --id <id>
         --clickup-task-id <matched task id>` (local state, both audiences), then continue
@@ -147,7 +148,7 @@ Workflow:
         the blocker's `owner` is a known ClickUp member, add their numeric
         `--assignee <id>` to that command; otherwise pass `--owner "<name>"` so ownership
         lands on the Owners custom-labels field rather than only in the task name/prose
-        (per MEMORY.md's standing rule — this applies in this cron's own scope, not just
+        (under the ownership rule in `TOOLS.md` — this applies in this cron's own scope, not just
         the check-in flow). No due date known → the `due_date_followup_required` rule
         applies (ask the owner through the approved messaging lane, subject to the
         one-ping-per-owner-per-day discipline in Hard rule 2). In `live` audience, once
@@ -191,9 +192,9 @@ Workflow:
          instead.
       ii. ESCALATE when the owner is unknown, the blocker needs money/people/vendor
          authority, the same blocker was already chased yesterday without movement, or it
-         sits on a critical path: in `live` audience, DM the responsible Admin (Gavin
-         `user:U0B4G00QXT8`, Arnold `user:U043AKSJC85`, or Raj `user:U09MVE90E4C`, whichever
-         is responsible for this area) with full context (what, since when, owner, linked
+         sits on a critical path: in `live` audience, DM the responsible configured
+         administrator, or every configured administrator when responsibility is
+         ambiguous, with full context (what, since when, owner, linked
          task, what decision is needed); in `shadow` audience, emit that DM as a
          `SHADOW (would DM <admin>): ...` line to `shadow_recipient` instead of sending it to
          the Admin. In `live` audience set the linked task to `Blocked` + comment per Hard
@@ -201,8 +202,8 @@ Workflow:
          status → Blocked` and `SHADOW (would write): <task id> comment added` lines
          instead. Then, in both audiences, `python3 scripts/blocker_ledger.py update --id
          <id> --status escalated --action-note "escalated to admins <date>"`.
-4. Chase digest (live audience: posted once to `#captains-quarters`; shadow audience: the
-   same content as one `SHADOW (would post to #captains-quarters): ...` message sent only
+4. Chase digest (live audience: posted once to `program_channel`; shadow audience: the
+   same content as one `SHADOW (would post to <program_channel>): ...` message sent only
    to `shadow_recipient`): `Captain blocker chase — <date>`; counts
    (open/chasing/escalated/cleared-today); per-blocker one-liners with age and last action;
    any `needs Blocked status added` lists; any `needs Owners label added` lists (from a
@@ -217,8 +218,9 @@ Workflow:
    zero open blockers.
 5. Same-cycle check: after step 3 every open blocker must have status `chasing`,
    `escalated`, or `cleared` with `last_action_at` today. If any slipped through, escalate it
-   now: in `live` audience, DM the responsible Admin (Gavin `user:U0B4G00QXT8`, Arnold
-   `user:U043AKSJC85`, or Raj `user:U09MVE90E4C`) per Hard rule/step 3c.ii and write ClickUp
+   now: in `live` audience, DM the responsible configured administrator, or every
+   configured administrator when responsibility is ambiguous, per Hard rule/step 3c.ii
+   and write ClickUp
    per Hard rule 1, then `python3 scripts/blocker_ledger.py update --id <id> --status
    escalated --action-note "escalated to admins <date>"`; in `shadow` audience, emit the DM
    as `SHADOW (would DM <admin>): ...` and the ClickUp write as `SHADOW (would write): <task

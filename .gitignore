@@ -8,15 +8,34 @@ data/captain.sqlite
 data/captain.sqlite-journal
 data/captain.sqlite-wal
 data/captain.sqlite-shm
+data/audit-log.jsonl
+data/approval-queue.jsonl
+data/clickup-tasks.json
+data/critical-paths.json
+data/meeting-transcript-clickup-reconciliation-state.json
+data/sentry-bridge-state.json
+data/heartbeat-monitor-state.json
+data/.heartbeat-monitor-state.json.*.tmp
 
 # Local config derived from the tracked *.example.json files
 data/captain-channels.json
+data/captain-modes.json
+data/.captain-modes.json.*.tmp
 data/critical-path-overrides.json
 data/meeting-ingestion.json
 
 # Secrets
+.secrets/
 .env
 .env.*
 
+# Private runtime artifacts
+logs/
+memory/daily/
+reports/
+
 # macOS
 .DS_Store
+
+# Isolated development worktrees
+.worktrees/

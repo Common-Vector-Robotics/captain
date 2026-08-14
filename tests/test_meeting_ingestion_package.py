@@ -93,6 +93,91 @@ def test_prompt_keeps_the_runtime_safety_contract():
         assert value in prompt
 
 
+def test_prompt_normalizes_object_and_string_program_channels():
+    """Catch regressions that stringify routing objects or retarget live sends."""
+    prompt = (
+        ROOT / "cron-prompts" / "meeting-transcript-clickup-reconciliation.md"
+    ).read_text(encoding="utf-8")
+    expected_examples = (
+        (
+            '{"name":"captains-quarters","id":"C0123456789"}',
+            "#captains-quarters",
+            "C0123456789",
+        ),
+        ('"captains-quarters"', "#captains-quarters", "captains-quarters"),
+    )
+
+    for configured_value, display_label, live_target in expected_examples:
+        row = f"| `{configured_value}` | `{display_label}` | `{live_target}` |"
+        assert row in prompt
+    assert "Never render the object itself" in prompt
+    assert "account=slack_account" in prompt
+
+
+def test_prompt_uses_exact_noninteractive_docs_cat_contract():
+    """Catch ambiguous Google Docs export guidance that writes to a fake stdout path."""
+    prompt = (
+        ROOT / "cron-prompts" / "meeting-transcript-clickup-reconciliation.md"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        "<google_cli> docs cat <docId> --account <google_account> --no-input"
+        in prompt
+    )
+
+
+def test_prompt_uses_configured_account_for_raw_gmail_fallback():
+    """Catch a raw-message fallback that bypasses the configured CLI or account."""
+    prompt = (
+        ROOT / "cron-prompts" / "meeting-transcript-clickup-reconciliation.md"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        "<google_cli> gmail get <message-id> --format raw --json "
+        "--account <google_account> --no-input"
+        in prompt
+    )
+    assert re.search(r"(?<!<)\bgog gmail get\b", prompt) is None
+
+
+def test_prompt_fails_closed_instead_of_switching_google_access_paths():
+    """Catch fallback to a browser, alternate account, or broader authorization."""
+    prompt = (
+        ROOT / "cron-prompts" / "meeting-transcript-clickup-reconciliation.md"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(prompt.split())
+
+    assert "browser access" not in prompt
+    assert (
+        "Never use a browser, another executable, another account, or a "
+        "broader-scope token as a fallback."
+        in normalized
+    )
+    assert (
+        "If the configured executable and account cannot read both document "
+        "tabs with least-privilege read-only authorization, record a "
+        "source-access blocker and fail closed."
+        in normalized
+    )
+
+
+def test_prompt_uses_regular_file_for_non_docs_drive_downloads():
+    """Reject special stdout paths and extension-dependent Drive downloads."""
+    prompt = (
+        ROOT / "cron-prompts" / "meeting-transcript-clickup-reconciliation.md"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        "<google_cli> drive download <fileId> --out "
+        "<temporary-file-with-extension> --account <google_account> --no-input"
+        in prompt
+    )
+    assert "regular file inside an owner-only temporary directory" in prompt
+    assert "Do not use `--format`" in prompt
+    assert re.search(r"--out\s+`?/dev/stdout(?:\.txt)?`?", prompt) is None
+    assert "/dev/stdout.txt" not in prompt
+
+
 def test_ingestion_artifacts_exclude_private_deployment_data():
     """Confirm public meeting files contain no private paths, emails, or Slack IDs."""
     paths = (

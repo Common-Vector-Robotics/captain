@@ -41,9 +41,23 @@ The ingestion file must contain:
 - `local_summary_directory`: either `null` or a readable directory path.
 
 The channel file must provide `slack_account`, `program_channel`,
-`shadow_recipient`, `admin_recipients`, and `excluded_user_ids`. Use values from the
-files verbatim. Never replace a missing value with a guessed person, account, channel,
-path, or meeting title.
+`shadow_recipient`, `admin_recipients`, and `excluded_user_ids`. `program_channel` may
+be either a non-empty string or an object with non-empty string `name` and `id` fields.
+Normalize it once into separate presentation and routing values:
+
+| Configured `program_channel` | `program_channel_display` | `program_channel_target` |
+| --- | --- | --- |
+| `{"name":"captains-quarters","id":"C0123456789"}` | `#captains-quarters` | `C0123456789` |
+| `"captains-quarters"` | `#captains-quarters` | `captains-quarters` |
+
+For an object, remove at most one leading `#` from `name` before adding exactly one
+for `program_channel_display`, and copy `id` verbatim to `program_channel_target`.
+Never render the object itself and never use its display name as the live target. For
+a string, copy the complete string verbatim to `program_channel_target`; for display,
+keep one existing leading `#` or add one when absent. Display normalization never
+changes the configured live destination. Use every other routing value from the files
+verbatim. Never replace a missing value with a guessed person, account, channel, path,
+or meeting title.
 
 If configuration is missing or invalid, record `configuration_error` in the state file
 when possible and make no ClickUp write. In `shadow`, send one concise setup blocker to
@@ -75,6 +89,11 @@ successful operation.
 
 ## Gmail and Google Docs access
 
+Use only `google_cli` with `google_account` for every Gmail, Docs, and Drive
+operation. The account token must grant only the required Gmail read-only, Drive
+read-only, and Docs read-only scopes. Never use a browser, another executable,
+another account, or a broader-scope token as a fallback.
+
 1. Search the configured Gmail account with the configured `google_cli`, using
    `--no-input` or the CLI's equivalent non-interactive option. Limit the query to the
    configured sender and lookback window.
@@ -83,17 +102,30 @@ successful operation.
    case-insensitive. Process every unprocessed match, newest first.
 3. Read each email only far enough to obtain its meeting title/date and the Google Docs
    `Open meeting notes` link. If the normal body omits the URL, fetch the message as raw
-   MIME, for example `gog gmail get <message-id> --format raw --json --no-input` with
-   the configured account, decode the HTML part, and extract only a
+   MIME with exactly
+   `<google_cli> gmail get <message-id> --format raw --json --account <google_account> --no-input`,
+   decode the HTML part, and extract only a
    `https://docs.google.com/document/d/<DOC_ID>/...` link.
-4. Open or export the document through the already-authenticated configured account.
-   Prefer a plain-text export when it contains both sections; otherwise use available
-   Docs or browser access to read the document tabs separately.
-5. Extract `Transcript` and `Notes` into separate in-memory sources. Do not save their
+4. Read a Google Docs document as text by invoking the configured executable and
+   account in exactly this form (replace only the bracketed values):
+   `<google_cli> docs cat <docId> --account <google_account> --no-input`. Use its
+   stdout in memory. If the configured executable and account cannot read both document
+   tabs with least-privilege read-only authorization, record a source-access blocker and
+   fail closed.
+5. Only for a Drive file confirmed not to be a Google Docs document, choose a
+   regular file inside an owner-only temporary directory whose explicit name already
+   includes the expected extension. Invoke exactly
+   `<google_cli> drive download <fileId> --out <temporary-file-with-extension> --account <google_account> --no-input`.
+   Do not use `--format` for a non-Docs file, do not use a device or stream path for
+   `--out`, and do not depend on the CLI to append an extension. Require the result to
+   be a regular file inside that directory, read only the needed text, and remove the
+   exact temporary directory immediately afterward. If a safe filename or file type
+   cannot be established, record a source-access blocker instead of downloading.
+6. Extract `Transcript` and `Notes` into separate in-memory sources. Do not save their
    raw contents in state, audit logs, Slack, or tracked files. When
    `local_summary_directory` is configured, look for a clearly matching curated summary
    and treat it as additional Notes evidence, never as a replacement for Transcript.
-6. Record `transcript_status` and `notes_status` separately. Analyze Transcript first,
+7. Record `transcript_status` and `notes_status` separately. Analyze Transcript first,
    then make an independent Notes pass for decisions or actions the transcript pass
    missed. Notes is a compression, not ground truth; when the two readings conflict,
    conversational evidence in Transcript wins.
@@ -186,8 +218,8 @@ addressed by an unaccepted request.
 ## Slack reporting
 
 Every Slack send uses the OpenClaw `message` tool with `channel=slack` and
-`account=slack_account`. Never use raw Slack HTTP calls. Never send to a value listed in
-`excluded_user_ids`.
+`account=slack_account`, where the account value is copied verbatim from configuration.
+Never use raw Slack HTTP calls. Never send to a value listed in `excluded_user_ids`.
 
 Render the reconciliation digest in Slack mrkdwn, at most 10 lines:
 
@@ -203,15 +235,17 @@ Do not expose raw emails, transcripts, summaries, email addresses, or long quota
 Use the minimum timestamped paraphrase needed to make a decision reviewable.
 
 In `shadow`, prefix the digest
-`SHADOW (would post to <configured-program-channel>):` but send it only to the exact
+`SHADOW (would post to <program_channel_display>):` but send it only to the exact
 configured `shadow_recipient`. If that recipient cannot be resolved, record
 `shadow_recipient_unresolved: true` and send nothing else.
 
-In `live`, send the digest to the id in `program_channel`. Include held questions there
-when they are useful to the team. Send a separate administrator message only for a setup,
-authentication, document-access, or routing decision that prevents safe processing. Resolve
-administrator names for display when possible, but never fabricate a name or render an
-email address; use the bare Slack id when name resolution fails.
+In `live`, send the digest only to `program_channel_target`, with
+`account=slack_account`; do not resolve either value to a different destination or account.
+Include held questions there when they are useful to the team. Send a separate
+administrator message only for a setup, authentication, document-access, or routing
+decision that prevents safe processing. Resolve administrator names for display when
+possible, but never fabricate a name or render an email address; use the bare Slack id
+when name resolution fails.
 
 After state is durably updated and reporting is complete—or after a legitimate no-op—return
 exactly `NO_REPLY`.

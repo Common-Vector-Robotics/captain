@@ -93,7 +93,13 @@ flowchart TB
 
 ## Install and set up
 
-Captain is packaged as an OpenClaw Claw (note: `.claw` packages are still experimental). It installs Captain as a new agent with five weekday operational jobs plus daily reporting in every `DailyLoop` mode, including `off`. The five operational jobs remain off until you configure them locally.
+Captain is packaged as an OpenClaw Claw (note: `.claw` packages are still experimental). It installs Captain as a new agent with six scheduled jobs plus one Claw-managed hourly heartbeat in every `DailyLoop` mode, including `off`. The five weekday operational jobs remain off until you configure them locally. Heartbeat routing still uses the configured `captain` Slack binding.
+
+The heartbeat uses isolated lightweight context (`lightContext: true`). In the current
+experimental Claw format, the Claw profile schema does not own `heartbeat.prompt`, so an
+operator must install the managed `HEARTBEAT.md` policy into Captain's runtime prompt after
+the Claw is installed. Without an exact prompt match, lightweight heartbeats receive no
+workspace bootstrap files and must remain disabled.
 
 ### Prerequisites
 
@@ -119,12 +125,7 @@ git clone <repository-url> captain
 cd captain
 ```
 
-Run these commands from this package directory (the directory containing `CLAW.md`). Before installing, set `AUTHORIZED_TOGGLE_USERS` to the Slack user IDs and names allowed to switch Captain between `off`, `shadow`, and `live`:
-
-```bash
-# Set authorized users in captain_modes.py (Slack User IDs)
-nano scripts/captain_modes.py
-```
+Run these commands from this package directory (the directory containing `CLAW.md`). Before enabling DailyLoop, copy `data/captain-channels.example.json` to the private `data/captain-channels.json` and configure its `mode_toggle_users` name-to-Slack-ID mapping. Only those Slack users can switch Captain between `off`, `shadow`, and `live`.
 
 Then inspect and preview the package:
 
@@ -142,6 +143,10 @@ openclaw claws add . --dry-run --json
 Review every action in the dry-run output and copy its `planIntegrity` value.
 Replace `SHA256_FROM_DRY_RUN` below with that value, then apply the exact plan:
 
+Do not enable or run Captain's heartbeat or scheduled jobs until this verification succeeds.
+Keep the Gateway and Captain's scheduler stopped while applying the install plan and the
+operator-owned heartbeat policy below.
+
 ```bash
 # Install the exact package plan you just reviewed.
 openclaw claws add . --yes --plan-integrity SHA256_FROM_DRY_RUN
@@ -154,12 +159,66 @@ Confirm the installed agent and note the workspace path reported by OpenClaw:
 ```bash
 # Confirm that Captain was installed and find its workspace path.
 openclaw claws status captain --json
-
-# Check the rest of your OpenClaw setup for problems.
-openclaw doctor
 ```
 
 The default workspace is `~/.openclaw/workspace-captain`. If the install plan reported a different path, use that path in the remaining commands.
+
+#### Install the operator-owned heartbeat policy
+
+Change to the installed workspace, then run this block exactly. It does not interpolate the
+policy through a shell: Python passes the JSON value directly as one process argument. The
+dry run must succeed before the write, and the read-back must match the managed file byte for
+byte. Any command error, invalid UTF-8, type mismatch, byte mismatch, or hash mismatch exits
+nonzero; keep the heartbeat and schedules disabled.
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+import hashlib
+import json
+import subprocess
+
+policy_path = Path("HEARTBEAT.md").resolve(strict=True)
+policy_bytes = policy_path.read_bytes()
+policy = policy_bytes.decode("utf-8")
+config_path = "agents.entries.captain.heartbeat.prompt"
+encoded_policy = json.dumps(policy, ensure_ascii=False)
+set_command = [
+    "openclaw", "config", "set", config_path, encoded_policy, "--strict-json",
+]
+
+subprocess.run([*set_command, "--dry-run"], check=True)
+subprocess.run(set_command, check=True)
+result = subprocess.run(
+    ["openclaw", "config", "get", config_path, "--json"],
+    check=True,
+    capture_output=True,
+    text=True,
+)
+actual = json.loads(result.stdout)
+if not isinstance(actual, str):
+    raise SystemExit("Captain heartbeat prompt read-back is not a string")
+actual_bytes = actual.encode("utf-8")
+if actual_bytes != policy_bytes:
+    raise SystemExit("Captain heartbeat prompt does not exactly match HEARTBEAT.md")
+expected_hash = hashlib.sha256(policy_bytes).hexdigest()
+actual_hash = hashlib.sha256(actual_bytes).hexdigest()
+if actual_hash != expected_hash:
+    raise SystemExit("Captain heartbeat prompt SHA-256 verification failed")
+print(f"Captain heartbeat prompt verified: sha256={actual_hash}")
+PY
+```
+
+Only after this succeeds may you start the Gateway or enable/run Captain jobs. The prompt is
+operator-owned outside the Claw digest, so `claws status` may report an expected
+operator-controlled modification alongside other local agent overrides such as a model.
+Reapply and reverify the prompt after every Claw update before restarting Captain. Do not
+remove the prompt to make the agent state appear unmodified.
+
+```bash
+# Check the rest of your OpenClaw setup for problems after prompt verification.
+openclaw doctor
+```
 
 ### 2. Install Python dependencies
 
@@ -222,13 +281,39 @@ nano data/meeting-ingestion.json
 python3 -m json.tool data/meeting-ingestion.json >/dev/null
 ```
 
-The configured `google_cli` defaults to `gog`. Authenticate `google_account` for Gmail,
-Drive, and Docs using the command supported by your installed `gog` version; a typical
-setup is:
+The configured `google_cli` defaults to `gog`. Authenticate `google_account` with only
+the Gmail, Drive, and Docs read scopes Captain needs:
 
 ```bash
-gog auth add captain@example.com
+gog auth add captain@example.com --services gmail,drive,docs --readonly --drive-scope readonly
 ```
+
+Validate both the refresh token and its stored scopes non-interactively:
+
+```bash
+gog auth list --check --account captain@example.com --no-input --json
+```
+
+In the returned JSON, locate exactly one record for `captain@example.com`, require
+`valid: true`, and require its `scopes` set to contain exactly:
+
+- `email`
+- `openid`
+- `https://www.googleapis.com/auth/userinfo.email`
+- `https://www.googleapis.com/auth/gmail.readonly`
+- `https://www.googleapis.com/auth/drive.readonly`
+- `https://www.googleapis.com/auth/documents.readonly`
+
+No other stored scope is allowed. If broader historical grants appear, do not proceed.
+Remove the local token with `gog auth remove captain@example.com`, revoke the
+application's prior Google account grants in Google Account security, then reauthorize
+non-incrementally with the exact least-privilege command above. Prefer a dedicated Google
+account so unrelated grants cannot accumulate on Captain's identity.
+
+For a headless service, `gog auth keyring file` selects the encrypted file keyring;
+`GOG_KEYRING_BACKEND=file` can enforce that backend. Inject `GOG_KEYRING_PASSWORD` from
+an owner-only service environment or secret manager. Never put its value in this file,
+tracked configuration, command-line arguments, shell history, or logs.
 
 Do not put a password, OAuth token, or client secret in `meeting-ingestion.json`. The
 scheduled job never starts an interactive OAuth flow. `sender`, `subject_prefixes`, and
@@ -261,6 +346,8 @@ Recommended channels:
 - Keep `"slack_account": "captain"` in `data/captain-channels.json` aligned with the
   OpenClaw account name. A mismatched account or missing channel membership can surface as
   a misleading `channel_not_found` error.
+- The Claw-managed hourly heartbeat uses this same configured `captain` Slack binding for
+  any permitted incident routing.
 
 Also invite Captain to the team's existing project and operations channels that it should
 monitor; those channels do not need Captain-specific names.
@@ -285,7 +372,16 @@ nano data/captain-channels.json
 python3 -m json.tool data/captain-channels.json >/dev/null
 ```
 
-Replace every placeholder in `data/captain-channels.json`. Keep configured files local and do not commit credentials or live routing details.
+Replace every placeholder in `data/captain-channels.json`, including the
+`mode_toggle_users` name-to-Slack-ID mapping. That private mapping is the only
+authorization for DailyLoop mode changes; missing or invalid entries fail
+closed. Keep configured files local and do not commit credentials or live
+routing details. `program_channel` accepts either the example `{name,id}` object
+or a non-empty string. The object form gives shadow previews a readable `#name`
+while preserving its exact `id` as the live delivery target; a string remains the
+exact live target. The live `data/captain-modes.json` file is runtime state: it
+is not installed from this package, remains off when absent, and is created by
+the first authorized mode change.
 
 ### 7. Validate in shadow mode
 
@@ -359,9 +455,12 @@ Runtime state remains on the Captain host unless explicitly exported through a r
 
 ## Sentry telemetry
 
-Captain can report hard failures — script crashes, session-report server errors, and OpenClaw cron job failures — to a Sentry project.
+Captain can report hard failures from Captain scripts and OpenClaw cron jobs to a Sentry project.
 
-Captain's scripts send an event to Sentry when they crash. A cron bridge also runs every 10 minutes via launchd, comparing each OpenClaw job's error counter against the previous run, and reports jobs that newly failed. 
+Captain's scripts send an event to Sentry when they crash. The optional cron
+bridge compares each OpenClaw job's error counter against the previous run and
+reports newly failed jobs. You can run it manually or, on macOS, generate a
+host-specific `launchd` definition for it.
 
 Each bridge run also checks in with the `captain-openclaw-bridge` Sentry monitor, which acts as a dead-man's switch: a missed check-in means the host, OpenClaw, or the bridge itself is down.
 
@@ -425,7 +524,7 @@ Expected output looks like this: `jobs` greater than 0, `counters_missing` empty
 
 If `truncated` is `true`, OpenClaw returned only the first page of its job list and the jobs beyond it are unmonitored. The bridge reports this to Sentry as a warning too, because `openclaw cron list --json` offers no way to page through the rest.
 
-If every job is listed in `counters_missing`, OpenClaw's field names don't match what `job_view()` looks for, and the bridge will silently report zero failures forever while the dead-man's switch still says it's healthy. Fix the field mapping before loading the plist:
+If every job is listed in `counters_missing`, OpenClaw's field names don't match what `job_view()` looks for, and the bridge will silently report zero failures forever while the dead-man's switch still says it's healthy. Fix the field mapping before relying on the bridge:
 
 ```bash
 # Inspect the actual counter and error fields returned by OpenClaw.
@@ -445,70 +544,38 @@ python3 -m pytest tests/test_openclaw_cron_sentry_bridge.py -v
 python3 scripts/openclaw_cron_sentry_bridge.py --dry-run
 ```
 
-### 4. Check that launchd's Python can load the SDK
+### 4. Run the bridge automatically on macOS (optional)
 
-`launchd` may pick a different Python than your shell does, and the bridge continues silently when the SDK is missing — so it would look healthy while sending nothing at all. Confirm that `sentry-sdk` is installed for the exact interpreter the plist's `PATH` selects:
-
-```bash
-# Confirm that launchd's Python can import the Sentry package.
-PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin /usr/bin/env python3 -c "import sentry_sdk; print(sentry_sdk.VERSION)"
-```
-
-A version number means you are set. If this fails with `ModuleNotFoundError`, install the dependencies for that specific interpreter:
+The renderer generates a private plist using your workspace and Python paths;
+it does not install or modify any host configuration itself. From the Captain
+workspace, run:
 
 ```bash
-# Install Captain's dependencies for the interpreter launchd will use.
-PYTHON_PATH="$(PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin /usr/bin/env python3 -c 'import sys; print(sys.executable)')"
-"$PYTHON_PATH" -m pip install --user -r requirements.txt
-```
-
-A virtualenv (`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`) works for running the scripts by hand, but the plist calls plain `python3` and will not find it. If you go that route, replace the `/usr/bin/env` and `python3` entries in the plist's `ProgramArguments` with the venv interpreter's absolute path before continuing.
-
-### 5. Install the launchd service
-
-`launchd/com.intermode.captain-sentry-bridge.plist` hardcodes `/Users/owen/.openclaw/workspace-captain` in three places: `WorkingDirectory`, `StandardOutPath`, and `StandardErrorPath`. If your workspace lives anywhere else, edit those three paths before copying the file in.
-
-```bash
-# Create the log folder the launchd service writes to.
+# launchd needs the log directory before the bridge starts.
 mkdir -p logs
 
-# Copy the launchd service file into your user account.
-cp launchd/com.intermode.captain-sentry-bridge.plist ~/Library/LaunchAgents/
+# Render a plist for this workspace and Python installation.
+PLIST_PATH="$HOME/Library/LaunchAgents/ai.openclaw.captain-sentry-bridge.plist"
+python3 scripts/render_sentry_launchd.py \
+  --workspace "$PWD" \
+  --python "$(command -v python3)" \
+  --output "$PLIST_PATH"
 
-# Stop the old service if it is already loaded. No output is expected if it is not.
-launchctl unload ~/Library/LaunchAgents/com.intermode.captain-sentry-bridge.plist 2>/dev/null
-
-# Load the service so it runs every 10 minutes.
-launchctl load ~/Library/LaunchAgents/com.intermode.captain-sentry-bridge.plist
+# Replace an existing bridge job, if any, and load the generated plist.
+launchctl bootout "gui/$(id -u)" "$PLIST_PATH" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH"
 ```
 
-### 6. Confirm the bridge is running
-
-The service runs once immediately on load, so you can check the result right away:
+The generated `ai.openclaw.captain-sentry-bridge.plist` runs immediately and
+every 10 minutes. To stop it later, run:
 
 ```bash
-# Confirm launchd loaded the service. The middle column is the last exit code.
-launchctl list | grep com.intermode.captain-sentry-bridge
-
-# Read the result of the most recent run.
-tail -n 5 logs/sentry-bridge.out.log
-tail -n 20 logs/sentry-bridge.err.log
+launchctl bootout "gui/$(id -u)" \
+  "$HOME/Library/LaunchAgents/ai.openclaw.captain-sentry-bridge.plist"
 ```
-
-Expect exit code `0` from `launchctl list` and a line like `{"ok": true, "jobs": 27, "new_failures": []}` in the out log, with the error log empty.
-
-Two things look like breakage but are not:
-
-- **The first run never reports failures.** It only records the current error counters as a baseline in `data/sentry-bridge-state.json`. Failure events start with the next run, 10 minutes later.
-- **You do not create the Sentry monitor yourself.** `captain-openclaw-bridge` appears in Sentry's Crons dashboard on its own, because the bridge sends its schedule with the first check-in.
 
 ### Turning telemetry off
 
-```bash
-# Stop the scheduled bridge.
-launchctl unload ~/Library/LaunchAgents/com.intermode.captain-sentry-bridge.plist
-```
-
 To silence all telemetry, delete `.secrets/sentry.env` or set `CAPTAIN_SENTRY_DISABLED=1`. Either one returns every telemetry call to being a no-op; nothing else about Captain changes.
 
-See the Sentry section of [`TOOLS.md`](TOOLS.md) for the rules new Captain scripts must follow.
+See [`TOOLS.md`](TOOLS.md) for the telemetry rules new Captain scripts must follow.

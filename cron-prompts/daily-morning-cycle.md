@@ -13,7 +13,7 @@ Mode gate (do this first):
 2. If `off`: final response `NO_REPLY`, do nothing else.
 3. If `shadow`: DRY RUN. No channel posts, no eng-lead/employee DMs, no ClickUp writes.
    Everything this prompt would send goes ONLY to `shadow_recipient` from
-   `data/captain-channels.json`, prefixed `SHADOW (would post to #captains-quarters):` or
+   `data/captain-channels.json`, prefixed `SHADOW (would post to <program_channel>):` or
    `SHADOW (would DM <target>):` — `<target>` is always the actual resolved Slack user id
    (or channel id) being addressed, never a bare role label like "the owner". When `<target>`
    names a person, render it as `Name (Uxxxxxxxx)` by resolving the name via
@@ -47,7 +47,7 @@ Mode gate (do this first):
    stale-task briefing counts `clickup_*` audit rows as evidence work moved; a shadow
    preview producing those rows would corrupt that report, while ledger/cycle rows are
    harmless because nothing downstream treats them as ClickUp evidence.
-4. If `live`: posts go to `#captains-quarters`, pages go to eng leads, ClickUp writes execute.
+4. If `live`: posts go to `program_channel`, pages go to eng leads, ClickUp writes execute.
 5. If `audience` is any value not listed above: record `{audience_unrecognized: <value>}` in state file, final response `NO_REPLY`, do nothing else.
 
 Hard rules:
@@ -71,10 +71,11 @@ owners_labels_unavailable,
 critical_paths_missing, priority_absent, runs[] — see step 8)
 
 Workflow:
-1. Work from `/Users/owen/.openclaw/workspace-captain`. Read `MEMORY.md`. Recall relevant
-   program context with the OpenClaw memory search tools (query for the active projects,
-   open risks, and any notes from yesterday's EOD wrap). Memory is Cognee-backed; if memory
-   search tools are unavailable this session, read `memory/daily/` files from the last 3 days.
+1. Work from the installed Captain workspace root (the directory containing `CLAW.md`).
+   Read `MEMORY.md` when it exists; its absence is valid. Recall relevant program
+   context with OpenClaw memory search tools when available. Otherwise read existing
+   `memory/daily/` files from the last three days; an absent private memory overlay is
+   valid and must not stop the workflow.
 2. Board pull: load `.secrets/clickup.env`; run
    `scripts/fetch_clickup_tasks.py --out data/board-snapshots/$(date +%F)-morning-fetch.json`;
    then `scripts/daily_context.py --clickup data/board-snapshots/$(date +%F)-morning-fetch.json
@@ -84,7 +85,7 @@ Workflow:
    channel the Slack workspace exposes to Captain via the OpenClaw `message` tool's channel
    listing — Captain's bot only sees channels it is a member of, so "all" means all channels
    visible to that membership, not literally every channel in the workspace — and exclude any
-   matching `exclude_names`/`exclude_ids` (currently `#random`). For each remaining channel,
+   matching the configured `exclude_names`/`exclude_ids`. For each remaining channel,
    read new messages since that channel's `last_scan_ts` (or last 16 hours if unset) using the
    OpenClaw `message` tool channel-history reads. If history reads are unavailable or a channel
    is unreadable, record `{channel_id: "unreadable"}` in state and continue. If channel
@@ -94,7 +95,7 @@ Workflow:
    that list is also empty, this sweep covers zero channels this run — note "no watch
    channels configured" once in state and continue (this is surfaced in the brief per step 7
    below, not silently absorbed).
-3b. Read the threads of Captain's own posts from the last 2 days in `#captains-quarters`
+3b. Read the threads of Captain's own posts from the last 2 days in `program_channel`
    (brief, wrap, digests). Treat replies as input: corrections get applied via audited
    tooling (live audience) and reflected in today's top-3; questions get answered in the
    same thread; anything ambiguous becomes a held item in today's brief. Replies never go
@@ -112,7 +113,7 @@ Workflow:
       that IS the fallback trigger, not a silent skip — DM `admin_recipients` instead. Never
       DM `excluded_user_ids`. Message: `Captain safety page:` + one-line summary + permalink +
       who appears involved.
-   b. Open the incident thread: post the same summary to `#captains-quarters` and use that
+   b. Open the incident thread: post the same summary to `program_channel` and use that
       message's thread as the incident thread — record its ts in state and post follow-ups
       there.
    c. File the urgent task directly: `scripts/clickup_write.py --execute create-task
@@ -121,7 +122,7 @@ Workflow:
       (an eng lead or the affected task/project's assignee), add them too: a numeric
       `--assignee <id>` when they are a known ClickUp member, otherwise `--owner "<name>"`
       so ownership lands on the Owners custom-labels field rather than only in the
-      description, per MEMORY.md's standing rule. No due date known → the
+      description, under the ownership rule in `TOOLS.md`. No due date known → the
       `due_date_followup_required` rule applies (ask the owner). Audited automatically. If
       the result carries `needs_owner_label` (Owners field exists on that list but not yet
       this owner's label — the public API cannot add one), the task is still created; note
@@ -162,20 +163,20 @@ Workflow:
       i. Offline shortcut: use `admin_recipients` in `data/captain-channels.json`
          only on EXACT string equality — that person's `key` is character-for-
          character identical, case included, nothing trimmed, expanded or
-         reformatted, to one of the KEYS of `admin_recipients` (today the bare
-         first names `Gavin`, `Arnold`, `Raj`). Then use that key's mapped id and
+         reformatted, to one of the KEYS of `admin_recipients`. Then use that
+         key's mapped id and
          skip the lookup. Anything short of exact equality is NOT a match and
          falls through to (ii): a `people[]` key is an email, a ClickUp username,
-         or an Owners label, so `Gavin B`, `gavin`, and
-         `gavinbender@example.com` all fail this test.
+         or an Owners label, so `Alex B`, `alex`, and
+         `alex@example.com` all fail this test.
          Never substring-match, never compare first names only, never match
          against the ids on the right-hand side. A loose match here would send one
          person's tasks to a different human who merely shares a first name, and
          nothing downstream would catch it, because a hardcoded id always looks
          like a successful resolution. What exact equality cannot do is tell two
          humans apart when both present the SAME key: a second employee whose
-         Owners label is also `Raj` matches the key `Raj` character-for-character
-         and gets the first Raj's id. Do not read that case as caught here — it
+         Owners label is also `Alex` matches the key `Alex` character-for-character
+         and gets the first Alex's id. Do not read that case as caught here — it
          is not, and it is not detectable in this step either, because the
          ranking script groups people BY `key`, so two humans sharing one label
          already arrive as a single `people[]` entry with their tasks pooled. The
@@ -255,12 +256,12 @@ Workflow:
       arbitrary.
       Then cross-check the merged recipients before delivery, because merging on
       "same Slack id" cannot catch the opposite failure — one human resolving to
-      TWO ids. The assignee path may resolve `raj@example.com` to `U111` while
-      the Owners-label path resolves the label `Raj` to `U222`: a second Raj, a
+      TWO ids. The assignee path may resolve `alex@example.com` to `U111` while
+      the Owners-label path resolves the label `Alex` to `U222`: another Alex, a
       guest account, a deactivated duplicate. Each lookup returned exactly one
       unambiguous user, so text-nobody does not fire and the merge above finds
       nothing to merge, and the morning sends two DMs — one telling the wrong
-      Raj about the real Raj's label-only tasks. So: if two entries the board
+      person about the first person's label-only tasks. So: if two entries the board
       shows as the same human (an `owners_label` entry whose label matches an
       `assignee` entry's `username` or its resolved display name) resolved to
       different Slack ids, or if a resolved id is already claimed by another
@@ -284,11 +285,11 @@ Workflow:
       may NOT introduce a task absent from `candidates`, because that would mean
       texting someone about work the board does not show them owning. Set
       `overridden: true` and a one-line `override_reason` for that person.
-   e. Compose one message per recipient. Keep it lightweight per MEMORY.md's
+   e. Compose one message per recipient. Keep it lightweight under this prompt's
       check-in wording rule: no jargon — "blocker" is internal vocabulary and is
       never used with employees, which is why a stuck task is simply ranked lower
       rather than described as stuck — no demanded reply format, and no ask. These
-      texts invite no reply (Gavin, 2026-07-29); corrections arrive through the
+      texts invite no reply; corrections arrive through the
       14:00 standup reconciliation and 15:15 chase as they already do. Shape:
 
        ```
@@ -321,7 +322,7 @@ Workflow:
       iii. In `shadow`: send nothing to the person. Emit
          `SHADOW (would DM <target>): <the full message, both items and both
          reasons>` to `shadow_recipient` instead, batching blocks into as few posts
-         as fit so #dry-dock is not flooded (start a new post before one would
+         as fit so `shadow_recipient` is not flooded (start a new post before one would
          exceed 3,500 characters; never split one person's block across two posts).
          Batching changes when a person's guard write happens, never whether it
          does: a person's entry is written only after the post containing that
@@ -393,14 +394,16 @@ Workflow:
       brief; an unposted brief is not reconstructible at all.
    h. This lane is deliberately SEPARATE from the 15:15 blocker chase's
       `pings_sent` budget in `data/daily-blocker-chase-state.json`, and neither
-      cron reads the other's key (Gavin, 2026-07-29). The morning text is a
+      cron reads the other's key. The morning text is a
       no-reply briefing; a chase ping is a real ask. Sharing one budget would let
       a briefing suppress a chase and break that cron's "no open blocker ends the
       day unowned" guarantee. Do not unify them.
-7. Morning brief (one message, ≤ 10 lines, Slack mrkdwn) posted to `#captains-quarters`:
+7. Morning brief (one message, ≤ 10 lines, Slack mrkdwn) posted to `program_channel`:
    resolve the channel id from `program_channel` in `data/captain-channels.json`; if the id
-   is empty, resolve `#captains-quarters` by name through the `message` tool; if that fails,
-   DM Gavin the brief plus the blocker `program channel unresolved`. Content:
+   is empty, resolve `program_channel` by name through the `message` tool; if that fails,
+   send one fallback to every configured administrator with the blocker `program channel
+   unresolved`. If no administrator resolves, record the routing failure and send
+   nothing rather than guessing a person. Content:
    `Captain morning brief — <date>`; Top 3 with owners; counts line
    (open/overdue/due-today/owner-gaps from context JSON);
    a personal-texts line — `Personal texts: <n> sent, <n> already texted today,

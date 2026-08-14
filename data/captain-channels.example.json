@@ -3,6 +3,9 @@
   "admin_recipients": {
     "Operations lead": "U0123456789"
   },
+  "mode_toggle_users": {
+    "Operations lead": "U0123456789"
+  },
   "shadow_recipient": "channel:C0123456789",
   "activity_digest_channel": "channel:C0123456789",
   "slack_account": "captain",
