@@ -512,7 +512,7 @@ Runtime state remains on the Captain host unless explicitly exported through a r
 
 ## Sentry telemetry
 
-Captain can report hard failures from Captain scripts and OpenClaw cron jobs to a Sentry project.
+Captain can report hard failures — script crashes, session-report server errors, and OpenClaw cron job failures — to a Sentry project.
 
 Captain's scripts send an event to Sentry when they crash. The optional cron
 bridge compares each OpenClaw job's error counter against the previous run and
