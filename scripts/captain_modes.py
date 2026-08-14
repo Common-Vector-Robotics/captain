@@ -18,22 +18,46 @@ import captain_telemetry
 # Shared storage paths
 ROOT = Path(__file__).resolve().parents[1]
 MODE_PATH = ROOT / "data" / "captain-modes.json"
+CHANNELS_PATH = ROOT / "data" / "captain-channels.json"
 sys.path.insert(0, str(ROOT / "scripts"))
 
 # Shared database and audit functions
 from captain_db import audit, init_db  # noqa: E402
-
-# Slack users allowed to toggle DailyLoop, mapped from user ID to display name.
-AUTHORIZED_TOGGLE_USERS = {
-    "SLACK_USER_ID": "Name",
-    "SLACK_USER_ID": "Name",
-}
 
 # -------- Helper functions --------
 
 def now_iso():
     """Return the current time in a standard, timezone-aware text format."""
     return datetime.now(timezone.utc).isoformat()
+
+
+# Slack users allowed to toggle DailyLoop are loaded from private configuration.
+def load_toggle_users():
+    """Load private DailyLoop operators, keyed by Slack user ID."""
+    try:
+        config = json.loads(CHANNELS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise SystemExit(f"Cannot load mode_toggle_users: {error}") from error
+
+    if not isinstance(config, dict):
+        raise SystemExit("mode_toggle_users must be a non-empty name-to-Slack-ID object")
+    raw = config.get("mode_toggle_users")
+    if not isinstance(raw, dict) or not raw:
+        raise SystemExit("mode_toggle_users must be a non-empty name-to-Slack-ID object")
+
+    users = {}
+    for name, user_id in raw.items():
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or not isinstance(user_id, str)
+            or not user_id.strip()
+        ):
+            raise SystemExit("mode_toggle_users contains an invalid name or Slack ID")
+        if user_id in users:
+            raise SystemExit(f"mode_toggle_users repeats Slack ID {user_id}")
+        users[user_id] = name
+    return users
 
 
 def load_modes():
@@ -46,31 +70,38 @@ def load_modes():
 
 
 def save_modes(modes):
-    """Atomically replace the saved operating-mode file with new settings.
+    """Atomically replace the saved operating-mode file with owner-only access.
 
     Input example: {"DailyLoop": {"audience": "live", "updated_at": "2023-10-01T12:00:00Z"}}
     Returns: None
-    
     """
 
     # Write beside the destination so the final replace remains atomic.
     MODE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = MODE_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(modes, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary = MODE_PATH.with_suffix(".tmp")
+    temporary.touch(mode=0o600, exist_ok=False)
+    try:
+        temporary.write_text(
+            json.dumps(modes, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
-    # Atomic replace
-    tmp.replace(MODE_PATH)
+        # Atomic replace
+        temporary.replace(MODE_PATH)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 DAILYLOOP_AUDIENCES = ("off", "shadow", "live")
 
 
 def set_dailyloop(audience, user_id, source):
-    """Set DailyLoop to off, shadow, or live, validating any supplied user.
+    """Set DailyLoop to off, shadow, or live for a configured Slack operator.
 
-    The CLI always supplies a Slack user ID. Direct internal calls may pass a
-    falsey ID, which records an unattributed change. Returns the complete mode
-    document after saving and auditing the change.
+    Captain records the requested change in the audit log before updating the
+    mode file. If auditing fails, the mode remains unchanged. If saving fails
+    afterward, the audit log shows the attempted change, but the mode file still
+    contains the active setting and remains the source of truth.
     """
 
     # Input Validation: Reject invalid modes.
@@ -81,8 +112,9 @@ def set_dailyloop(audience, user_id, source):
         )
 
     # Ensure user ID is authorized.
-    if user_id and user_id not in AUTHORIZED_TOGGLE_USERS:
-        raise SystemExit("Unauthorized DailyLoop toggle user: %s" % user_id)
+    authorized = load_toggle_users()
+    if not user_id or user_id not in authorized:
+        raise SystemExit(f"Unauthorized DailyLoop toggle user: {user_id}")
 
     # Preserve unrelated modes while replacing the DailyLoop record.
     modes = load_modes()
@@ -90,20 +122,22 @@ def set_dailyloop(audience, user_id, source):
         "audience": audience,
         "updated_at": now_iso(),
         "updated_by_slack_user": user_id,
-        "updated_by": AUTHORIZED_TOGGLE_USERS.get(user_id) if user_id else None,
+        "updated_by": authorized[user_id],
     }
 
-    # Persist first, then ensure audit storage exists and record the change.
-
-    init_db() # Ensure the database and audit log are initialized. 
-    save_modes(modes) # Save the updated modes to the file
+    init_db()  # Ensure the database and audit log are initialized.
     audit(
         "captain_mode_toggle",
         mode="DailyLoop",
         audience=audience,
         source=source,
         slack_user=user_id,
-    ) # Record the mode change in the audit log
+        display_name=authorized[user_id],
+        phase="precommit",
+        state_authoritative=True,
+        authoritative_state="mode_file",
+    )  # Record the authorized mode-change attempt in the audit log.
+    save_modes(modes)  # Activate the mode only after auditing succeeds.
 
     return modes
 

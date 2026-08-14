@@ -3,8 +3,39 @@
 Captain is installed safely with `DailyLoop` off. Do not switch it to `shadow`
 or `live` until all of the following are complete.
 
-Daily reporting remains enabled in `off`, `shadow`, and `live` so you always
-have a read-only monitor of what Captain did.
+After the heartbeat policy is verified, daily reporting remains enabled in
+`off`, `shadow`, and `live` so you always have a read-only monitor of what
+Captain did.
+
+Captain's heartbeat uses a lightweight OpenClaw mode. Before enabling Captain,
+run the included setup command below. It gives OpenClaw Captain's heartbeat
+safety rules and verifies that they were copied correctly.
+
+#### Install Captain's heartbeat safety rules
+
+From the installed Captain workspace, run:
+
+```bash
+python3 scripts/install_heartbeat_policy.py
+```
+
+Continue only after it prints `Captain heartbeat policy installed and verified`.
+If it reports an error, keep the heartbeat and scheduled jobs disabled.
+
+Run the command again after every Claw update, before restarting Captain.
+OpenClaw may report Captain as locally modified because this safety setting is
+stored on your machine. That is expected; do not remove it to clear the status.
+
+Create blank local `MEMORY.md` and `USER.md` files for Captain to maintain.
+Preserve existing files; never replace them during installation or an update.
+
+```bash
+for file in MEMORY.md USER.md; do
+  if [ ! -e "$file" ]; then
+    install -m 600 /dev/null "$file"
+  fi
+done
+```
 
 1. Install Python requirements:
 
@@ -27,13 +58,43 @@ have a read-only monitor of what Captain did.
 
 4. Copy `data/captain-channels.example.json` to
    `data/captain-channels.json`, then set your Slack account, program channel,
-   shadow destination, daily reporting destination, administrators, and any
-   excluded users. Do not commit this configured file.
+   shadow destination, daily reporting destination, administrators, authorized
+   `mode_toggle_users`, and any excluded users. Do not commit this configured
+   file. A missing `data/captain-modes.json` remains fail-closed/off until an
+   authorized operator explicitly initializes it with the mode command.
 
-5. Review the five installed weekday schedules. They run at 07:30, 14:00,
-   15:15, 15:45, and 17:45 in `America/Detroit`. The 14:00 meeting job must run
-   after Gemini has produced the Transcript. Edit `CLAW.md` before installation
-   if your operating cadence or timezone differs.
+   Before continuing, verify that daily reporting has an explicit Slack account
+   and destination:
+
+   ```bash
+   python3 - <<'PY'
+   import json
+   from pathlib import Path
+
+   path = Path("data/captain-channels.json")
+   try:
+       config = json.loads(path.read_text(encoding="utf-8"))
+   except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+       raise SystemExit(f"Cannot read {path}: {error}") from error
+   if not isinstance(config, dict):
+       raise SystemExit(f"Captain Slack routing configuration in {path} must be a JSON object")
+
+   required = ("activity_digest_channel", "slack_account")
+   missing = [key for key in required if not isinstance(config.get(key), str) or not config[key]]
+   if missing:
+       raise SystemExit(f"Captain Slack routing configuration missing in {path}: {', '.join(missing)}")
+   print("Captain Slack routing verified: " + ", ".join(required))
+   PY
+   ```
+
+   Do not continue until this prints `Captain Slack routing verified`.
+
+5. Review the six scheduled jobs plus one Claw-managed hourly heartbeat. The five
+   weekday operational schedules run at 07:30, 14:00, 15:15, 15:45, and 17:45 in
+   the host computer's timezone; the daily reporting job runs at 18:30. The 14:00 meeting job
+   must run after Gemini has produced the Transcript. The heartbeat continues to route
+   through the configured `captain` Slack binding. Edit `CLAW.md` before installation
+   if your operating cadence differs.
 
 6. Run the first cycle in shadow mode and inspect the output destination:
 

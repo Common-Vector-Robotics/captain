@@ -14,7 +14,9 @@ Required env vars for live ClickUp reads:
 - `CLICKUP_API_KEY`
 - `CLICKUP_TEAM_ID`
 
-Captain has ClickUp API access via `.secrets/clickup.env` symlinked to Owen’s local ClickUp credential file. Do not print this file or expose token values.
+Captain reads ClickUp credentials from the local runtime environment or
+`.secrets/clickup.env`. That file may be a regular owner-private file or an
+operator-managed symlink; never print it or expose token values.
 
 The ClickUp scripts prefer exported environment variables and otherwise load these keys from `.secrets/clickup.env` automatically. Run the documented commands directly; manual `source`/`set -a` bootstrapping is not required.
 
@@ -49,14 +51,11 @@ timestamped paraphrases as evidence.
 ## Scripts
 
 - `scripts/captain_db.py init`
-- `scripts/ingest_standup_notes.py <source-file>`
-- `scripts/fetch_clickup_tasks.py --out fixtures/clickup_tasks.json`
-- `scripts/reconcile_clickup.py --clickup fixtures/clickup_tasks.json`
+- `scripts/fetch_clickup_tasks.py --out <relative-output-path>`
 - `scripts/clickup_write.py --execute create-task --list-id <list_id> --name <name>`
 - `scripts/clickup_write.py --execute update-task --task-id <task_id> --status <status>`
 - `scripts/clickup_write.py --execute comment-task --task-id <task_id> --text <comment_text>`
 - `scripts/clickup_write.py --execute batch --operations-file <batch.json>`
-- `scripts/audit_report.py`
 - `scripts/blocker_ledger.py add|update|list` — same-cycle blocker ledger (daily loop)
 - `scripts/daily_cycle.py set-top3|set-tomorrow|stamp|get` — per-date top-3 and phase stamps
 - `scripts/daily_context.py --clickup <export>` — morning board buckets + snapshot
@@ -65,35 +64,26 @@ timestamped paraphrases as evidence.
   prints each person's ranked candidates with a plain-language reason and writes
   nothing; `set --date <d> --items <json>` persists the top-2 actually sent to the
   `daily_cycle.personal_top2` column; `get --date <d>` reads it back. Read-only toward
-  ClickUp — it never writes to the board. See `docs/daily-loop.md`'s "Personal top-2
-  texts" for the tier ladder and the recipient-resolution rules.
+  ClickUp — it never writes to the board. The morning-cycle prompt owns the tier ladder
+  and recipient-resolution rules.
 - `scripts/daily_wrap.py --morning <snap> --eod <export>` — EOD deltas + milestone risk
 - `scripts/captain_modes.py dailyloop --audience off|shadow|live --user-id <id>`
 - `scripts/captain_activity.py [HOURS]` — read-only chronological viewer merging cron
   runs, per-cron `runs[]` decision history (this is where no-ops surface), last-run/flag
-  state, and the audit log into one time-sorted feed; default 24 hours. See
-  `docs/daily-loop.md`'s "Seeing what Captain did" for details.
+  state, and the audit log into one time-sorted feed; default 24 hours.
 - `scripts/daily_activity_digest.py [--hours N] [--json] [--post]` — Action summary
-  reporting posted to #dry-dock, mechanically generated (never LLM-written) from
+  reporting posted to the configured `activity_digest_channel`, mechanically generated
+  (never LLM-written) from
   `captain_activity.py`'s own
   collectors. Runs in EVERY `DailyLoop` audience, including `off` — the one deliberate
   exception to the mode gate, safe because it is strictly read-only and its only side effect
   is one Slack post. `--post` is not the default (print-only, matching `--execute`
   elsewhere). Any Slack user id in the rendered text is shown as `Name (Uxxxxxxxx)` via
-  `scripts/slack_user_names.py`'s resolver (never for `--json`, which stays raw). See
-  `docs/daily-loop.md`'s "Action summary reporting" and "Slack name rendering" subsections.
+  `scripts/slack_user_names.py`'s resolver (never for `--json`, which stays raw).
 - `scripts/slack_user_names.py` — shared library (no CLI of its own) behind the id -> name
   rendering above: `SlackNameResolver` resolves a Slack user id to `Name (Uxxxxxxxx)` via
   `admin_recipients` in `data/captain-channels.json`, then `data/slack-user-cache.json`, then
-  falls back to the bare id — never fabricating a name. See `docs/daily-loop.md`'s "Slack name
-  rendering" section.
-- `scripts/refresh_slack_user_cache.py [--user-id ID ...] [--execute]` — operator-run (not on
-  a cron) script that populates `data/slack-user-cache.json` by asking OpenClaw for member
-  info, as the `captain` Slack account. Writes only `{id: name}` pairs, never emails. Dry run
-  by default (matching `--execute`/`--post` elsewhere); fails soft, leaving any existing cache
-  untouched, if OpenClaw is unavailable or nothing resolves. See `docs/daily-loop.md`'s "Slack
-  name rendering" section for the staleness/degradation story.
-
+  falls back to the bare id — never fabricating a name.
 ## ClickUp batch writes
 
 Use one batch command rather than a shell loop. The JSON input is an array (or an object with an `operations` array) of `create-task`, `update-task`, or `comment-task` objects. Every object needs an `operation_id` so the result can identify the safe retry subset.
@@ -107,7 +97,7 @@ Use one batch command rather than a shell loop. The JSON input is an array (or a
       "list_id": "901327546010",
       "name": "Investigate controller fault",
       "status": "to do",
-      "owner": ["Gavin"],
+      "owner": ["Name"],
       "source": "explicit Slack request"
     }
   ]
@@ -124,14 +114,12 @@ The writer first validates every requested status against the destination list. 
 
 ## Owners custom-field fallback
 
-Per MEMORY.md's standing rule, ownership should never live only in a task's description or free
+Ownership should never live only in a task's description or free
 text. `create-task` and `update-task` both accept `--owner "<name>"` (repeatable) as a fallback
 for when the person cannot be a built-in ClickUp assignee: `--assignee` (numeric ClickUp user ID)
 is always preferred, and if both are given, `--assignee` wins and no Owners label is set.
 
-`--owner` resolves against the list's `Owners` custom **labels** field, ported from
-`scripts/weekly_slack_clickup_status.py` (see `docs/daily-loop.md`'s Deprecations table — that
-script is removed at the Task 12 Phase B cutover, so this capability now lives here). Three cases:
+`--owner` resolves against the list's `Owners` custom **labels** field. Three cases:
 
 1. **Owners field missing on the list** → create it with this owner's label as an initial
    option, then set it. Audited as `clickup_custom_field_create_attempt`.
@@ -154,7 +142,7 @@ document it there), and the actual endpoint for setting a custom field on an exi
 are already on the field. So update-task always reads the task's current Owners value first (from
 the same task GET already done for status resolution) and writes the **union** of the existing
 option ids and the newly resolved ones, as a second request made after the primary task write
-succeeds. Setting Priya's label never removes Arnold's. If the union doesn't add anything new, no
+succeeds. Setting one owner's label never removes another owner's. If the union doesn't add anything new, no
 follow-up request is made at all. If the primary task write succeeds but this follow-up field-value
 call fails, the operation result still reports the task as succeeded (it exists) but carries an
 `owner_field_write: {attempted: true, ok: false, error: {...}}`, and a matching

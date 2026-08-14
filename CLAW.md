@@ -7,6 +7,8 @@ agent:
   identity:
     name: Captain
     emoji: "🧭"
+metadata:
+  openclaw.config: profiles/openclaw.yml
 workspace:
   bootstrapFiles:
     AGENTS.md:
@@ -18,14 +20,14 @@ workspace:
   files:
     - source: requirements.txt
       path: requirements.txt
-    - source: launchd/com.intermode.captain-sentry-bridge.plist
-      path: launchd/com.intermode.captain-sentry-bridge.plist
     - source: fixtures/openclaw_cron_list_sample.json
       path: fixtures/openclaw_cron_list_sample.json
     - source: tests/test_openclaw_cron_sentry_bridge.py
       path: tests/test_openclaw_cron_sentry_bridge.py
-    - source: data/captain-modes.json
-      path: data/captain-modes.json
+    - source: tests/test_render_sentry_service.py
+      path: tests/test_render_sentry_service.py
+    - source: data/captain-modes.example.json
+      path: data/captain-modes.example.json
     - source: data/captain-channels.example.json
       path: data/captain-channels.example.json
     - source: data/critical-path-overrides.example.json
@@ -52,6 +54,10 @@ workspace:
       path: scripts/captain_telemetry.py
     - source: scripts/openclaw_cron_sentry_bridge.py
       path: scripts/openclaw_cron_sentry_bridge.py
+    - source: scripts/install_heartbeat_policy.py
+      path: scripts/install_heartbeat_policy.py
+    - source: scripts/render_sentry_service.py
+      path: scripts/render_sentry_service.py
     - source: scripts/clickup_credentials.py
       path: scripts/clickup_credentials.py
     - source: scripts/clickup_write.py
@@ -81,7 +87,6 @@ cronJobs:
     name: Captain daily morning cycle
     schedule:
       cron: "30 7 * * 1-5"
-      timezone: America/Detroit
     session: isolated
     delivery:
       mode: none
@@ -90,7 +95,6 @@ cronJobs:
     name: Captain daily blocker chase
     schedule:
       cron: "15 15 * * 1-5"
-      timezone: America/Detroit
     session: isolated
     delivery:
       mode: none
@@ -99,7 +103,6 @@ cronJobs:
     name: Captain meeting transcript reconciliation
     schedule:
       cron: "0 14 * * 1-5"
-      timezone: America/Detroit
     session: isolated
     delivery:
       mode: none
@@ -108,7 +111,6 @@ cronJobs:
     name: Captain daily bench truth and channel watch
     schedule:
       cron: "45 15 * * 1-5"
-      timezone: America/Detroit
     session: isolated
     delivery:
       mode: none
@@ -117,7 +119,6 @@ cronJobs:
     name: Captain daily EOD wrap
     schedule:
       cron: "45 17 * * 1-5"
-      timezone: America/Detroit
     session: isolated
     delivery:
       mode: none
@@ -126,7 +127,6 @@ cronJobs:
     name: Action summary reporting
     schedule:
       cron: "30 18 * * *"
-      timezone: America/Detroit
     session: isolated
     delivery:
       mode: none

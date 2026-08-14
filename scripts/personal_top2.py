@@ -49,7 +49,7 @@ def owner_label_names(task):
     unset well-formed Owners field returns an empty list; structurally malformed
     field data surfaces as an error instead of being guessed around.
 
-    Example output: ``["Gavin", "Jordan"]``
+    Example output: ``["Name", "Name Lastname"]``
     """
     # Find the custom field named ``Owners`` without assuming field-name case.
     for field in task.get("custom_fields") or []:
@@ -410,7 +410,7 @@ def main():
     p_rank.add_argument("--critical-paths",
                         default=str(ROOT / "data" / "critical-paths.json"))
     p_rank.add_argument("--date",
-                        default=datetime.now(daily_context.TZ).date().isoformat())
+                        default=datetime.now().astimezone().date().isoformat())
 
     p_set = sub.add_parser("set", help="persist the top-2 that was actually sent")
     p_set.add_argument("--db", default=str(DEFAULT_DB))

@@ -481,13 +481,13 @@ def summarize_argv(argv):
     Captain keeps the script name, a leading subcommand, and option names. It
     drops all option values and later positional arguments because those may
     contain Slack text, ClickUp content, names, email addresses, or secrets.
-    Inline forms such as ``--owner=Alex`` keep only ``--owner``.
+    Inline forms such as ``--owner=Name`` keep only ``--owner``.
 
     Only ``argv[1]`` can become the subcommand. A later bare token may actually
     be an option value, and safely distinguishing the two would require each
     caller's argument schema.
 
-    Example input: ["clickup_write.py", "create-task", "--owner=Alex"]
+    Example input: ["clickup_write.py", "create-task", "--owner=Name"]
     Example output: {
         "script": "clickup_write.py",
         "subcommand": "create-task",

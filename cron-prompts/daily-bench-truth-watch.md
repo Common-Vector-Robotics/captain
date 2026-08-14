@@ -24,7 +24,7 @@ Mode gate (do this first):
    since it could make a reviewer approve a message aimed at the wrong person. Never render an
    email address into a Slack post; email is a lookup input only (e.g. ClickUp assignee email
    -> Slack user), never rendered output.
-   The digest becomes a `SHADOW (would post to #captains-quarters): ...` message, both
+   The digest becomes a `SHADOW (would post to <program_channel>): ...` message, both
    sent only to `shadow_recipient` from `data/captain-channels.json`. Delivery: every preview
    line above is sent as one or more Slack posts to `shadow_recipient` via
    `message(action=send, channel=slack, account=slack_account, target=shadow_recipient,
@@ -47,7 +47,7 @@ Mode gate (do this first):
    cron ever makes is the step 3 safety task, and that write executes in `live` audience
    only — so in `shadow` no `clickup_*` audit row is ever produced by this cron regardless.)
 4. If `live`: bench questions send for real to the owner's Slack DM, and the digest posts
-   for real to `#captains-quarters`.
+   for real to `program_channel`.
 5. If `audience` is any value not listed above (not `off`/`shadow`/`live`): treat it as
    `off`. The fail-safe action is: record `{audience_unrecognized: <value>}` in
    `data/daily-bench-truth-state.json` so the misconfiguration is visible rather than
@@ -61,8 +61,8 @@ Hard rules:
    files an urgent ClickUp task directly, live audience only for the write itself. No other
    writes, not even comments, in any audience.
 2. Bench questions (live audience: sent for real to the owner's Slack DM; shadow audience:
-   emitted as a `SHADOW (would DM <owner>): ...` line to `shadow_recipient` only) use the
-   check-in lane rules from `MEMORY.md`: one short plain question, no internal jargon (never
+   emitted as a `SHADOW (would DM <owner>): ...` line to `shadow_recipient` only) use this
+   prompt's check-in lane rules: one short plain question, no internal jargon (never
    say "blocker" to an employee), no format demands — voice or text replies both fine. Max 3
    questions per day, max 1 per owner per day — count today's existing `asks` entries from
    `data/daily-bench-truth-state.json` toward this cap, not just this run's new sends, to
@@ -102,8 +102,9 @@ step 3d's `blocker_ledger.py add`), `{channel_id: "unreadable"}` entries from st
 `clickup_write_failed`, `shadow_recipient_unresolved`, `runs[]` — see step 6)
 
 Workflow:
-1. Work from `/Users/owen/.openclaw/workspace-captain`. Read `MEMORY.md` for the check-in
-   wording rules and recipient boundaries.
+1. Work from the installed Captain workspace root (the directory containing `CLAW.md`).
+   Read `MEMORY.md` when it exists; its absence is valid. The hard rules in this
+   prompt remain authoritative for check-in wording and recipient boundaries.
 2. Reconcile yesterday's asks first (this is local reasoning only — no external effect yet).
    First, for any ask still `pending` whose `message_ts` is the literal string
    `shadow-placeholder` (no DM was ever actually sent for it), mark it `reconciled` with the
@@ -112,7 +113,7 @@ Workflow:
    For every remaining ask in state with `reply_status: pending`, read the DM thread via the
    `message` tool.
    - If the owner has not replied: leave `reply_status: pending` and note it in the digest's
-     "still waiting on" list (live: posted to `#captains-quarters`; shadow: included in the
+     "still waiting on" list (live: posted to `program_channel`; shadow: included in the
      `shadow_recipient` preview) — a pending ask is not silently dropped.
    - If the owner replied: fetch the board read-only via
      `scripts/fetch_clickup_tasks.py --out data/board-snapshots/$(date +%F)-bench-fetch.json`.
@@ -132,7 +133,8 @@ Workflow:
        date in `--source-ref` (excluded from the id hash) — a date-embedded `--source`
        would mint a new blocker id every day for the same real blocker and defeat
        repeat-escalation. Mark the ask `reconciled` and add the discrepancy to today's
-       `memory/daily/` entry for the EOD wrap to persist.
+       `memory/daily/` entry for the EOD wrap to persist when the private memory
+       overlay exists; otherwise keep it in this workflow's local state.
      - Match (board and bench agree): mark the ask `reconciled`, no ledger entry needed.
      - Owner replied but the answer is unusable (off-topic, no signal on the task's actual
        state): mark the ask `reconciled` and note "unresolvable reply" in the digest — do
@@ -142,7 +144,7 @@ Workflow:
    channel the Slack workspace exposes to Captain via the OpenClaw `message` tool's channel
    listing — Captain's bot only sees channels it is a member of, so "all" means all channels
    visible to that membership, not literally every channel in the workspace — and exclude any
-   matching `exclude_names`/`exclude_ids` (currently `#random`). If channel enumeration itself
+   matching the configured `exclude_names`/`exclude_ids`. If channel enumeration itself
    is unavailable this run, record the exact literal `channel_enumeration_unavailable: true`
    in state and fall back to scanning the channel ids listed in `watch.fallback_include_ids`
    in `data/captain-channels.json`, then continue; if that list is also empty, this sweep
@@ -167,7 +169,7 @@ Workflow:
      established forms — `SHADOW (would DM <resolved-id>): ...` for the page/fallback DMs
      in (a), rendering `<resolved-id>` as `Name (Uxxxxxxxx)` per this prompt's Mode gate
      name-rendering rule above (bare id if unresolvable — never a guess), `SHADOW (would post
-     to #captains-quarters): ...` (or `SHADOW (would DM Gavin (U0B4G00QXT8)):
+     to <program_channel>): ...` (or `SHADOW (would DM <admin>):
      ...` if the channel is unresolvable) for the incident thread in (b), `SHADOW (would
      write): <would-be task> create-task in list <list id>` for the ClickUp write in (c) —
      to `shadow_recipient` instead of sending/writing for real; the ledger entry in
@@ -181,12 +183,13 @@ Workflow:
         DM `excluded_user_ids`. Message: `Captain safety page:` + one-line summary + permalink
         + who appears involved.
      b. Open the incident thread: resolve the destination channel id from `program_channel`
-        in `data/captain-channels.json`; if the id is empty, resolve `#captains-quarters` by
-        name through the `message` tool; if that fails too, DM Gavin (`user:U0B4G00QXT8`)
-        the incident summary plus the blocker `program channel unresolved` instead — the
-        incident must never go unposted. As with the rest of this step, this posts for real
-        in `live` audience and is previewed as a `SHADOW (would post to #captains-quarters):
-        ...` line (or `SHADOW (would DM Gavin (U0B4G00QXT8)): ...` on the unresolved-channel fallback) to
+        in `data/captain-channels.json`; if the id is empty, resolve `program_channel` by
+        name through the `message` tool; if that fails too, send one fallback to every
+        configured `admin_recipients` entry. If none can be resolved, record the routing
+        failure and send nothing rather than guessing a person. As with the rest of this
+        step, this posts for real in `live` audience and is previewed as a
+        `SHADOW (would post to <program_channel>): ...` line (or
+        `SHADOW (would DM <admin>): ...` on the unresolved-channel fallback) to
         `shadow_recipient` in `shadow` audience. Post the same summary there and use that
         message's thread as the incident thread; record its ts in state (`incident_thread_ts`)
         — in `live` audience use the real thread ts, in `shadow` audience record the literal
@@ -199,8 +202,8 @@ Workflow:
         permalink. If step (a) resolved a specific owner (an eng lead or the affected
         task/project's assignee), add them too: a numeric `--assignee <id>` when they are a
         known ClickUp member, otherwise `--owner "<name>"` so ownership lands on the Owners
-        custom-labels field rather than only in the description, per MEMORY.md's standing
-        rule. No due date known → the `due_date_followup_required` rule applies (ask
+        custom-labels field rather than only in the description, under the ownership
+        rule in `TOOLS.md`. No due date known → the `due_date_followup_required` rule applies (ask
         the owner). This is the sole exception to Hard rule 1's read-only stance — the
         safety gate exists to eliminate latency, and deferring to the next write-capable
         cron would leave a genuine incident unticketed for up to ~16 hours. Audited
@@ -208,7 +211,7 @@ Workflow:
         applies there only (a `shadow` preview cannot fail): if the write exits non-zero or
         `failed` is non-empty in its printed JSON, do not treat the incident as ticketed —
         record `{clickup_write_failed: "<summary>"}` in state and, in `live` audience,
-        immediately escalate by DMing Gavin (`user:U0B4G00QXT8`) that the incident ClickUp
+        immediately escalate to every configured administrator that the incident ClickUp
         task failed to file and needs manual creation. A failed safety-task write must
         escalate, never vanish silently. If the write instead succeeds but the result
         carries `needs_owner_label` (Owners field exists on that list but not yet this
@@ -248,15 +251,15 @@ Workflow:
    way, append `{date, owner_id, task_id, question, message_ts, reply_status: pending}` to
    `asks` in state immediately after (real message_ts in live; the literal string
    `shadow-placeholder` in shadow).
-5. Digest (live audience: one message posted to `#captains-quarters`; shadow audience: the
-   same content as one `SHADOW (would post to #captains-quarters): ...` message sent only to
+5. Digest (live audience: one message posted to `program_channel`; shadow audience: the
+   same content as one `SHADOW (would post to <program_channel>): ...` message sent only to
    `shadow_recipient`): resolve the destination channel id from `program_channel` in
-   `data/captain-channels.json`; if the id is empty, resolve `#captains-quarters` by name
-   through the `message` tool; if that fails too, in `live` audience DM Gavin
-   (`user:U0B4G00QXT8`) the digest plus the blocker `program channel unresolved` instead of
-   letting it go unposted, and in `shadow` audience add that same fallback DM to the
-   `shadow_recipient` preview as a
-   `SHADOW (would DM Gavin (U0B4G00QXT8)): ...` line. ≤ 12
+   `data/captain-channels.json`; if the id is empty, resolve `program_channel` by name
+   through the `message` tool; if that fails too, in `live` audience send one fallback
+   to every configured administrator with the blocker `program channel unresolved`;
+   when no administrator resolves, record the routing failure and send nothing. In
+   `shadow`, include each would-be administrator fallback in the `shadow_recipient`
+   preview as `SHADOW (would DM <admin>): ...`. ≤ 12
    lines: `Captain bench & channels — <date>`; material channel
    signals grouped by category with permalinks (or "none" per category); yesterday's bench
    answers and any board mismatches (bench-wins items) with their ledger ids; still-pending

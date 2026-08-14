@@ -37,7 +37,6 @@ import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 # Allow direct script execution to import neighboring Captain helpers.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -47,7 +46,6 @@ import slack_user_names  # noqa: E402
 
 # Constants
 ROOT = Path(__file__).resolve().parents[1]
-TZ = ZoneInfo("America/Detroit")
 
 # Keep this explanation beside the matching setting, following the
 # ``_comment_*`` convention used in ``data/captain-channels.json``. The digest
@@ -56,13 +54,9 @@ _comment_activity_digest_channel = (
     "Fully-qualified `message` CLI target (`channel:C...` or `user:U...`) "
     "for Action summary reporting -- deliberately a SEPARATE key from "
     "shadow_recipient, because this digest must keep posting after the "
-    "flip to `live` (when shadow previews stop entirely, per README.md's "
-    "shadow-mode rollout). Defaults to channel:C0BKY43FWR5 (#dry-dock) when "
-    "data/captain-channels.json has no activity_digest_channel key."
+    "flip to `live` when shadow previews stop entirely. This required key "
+    "must be configured in data/captain-channels.json."
 )
-
-# Default to #dry-dock when the channel config does not override the target.
-DEFAULT_ACTIVITY_DIGEST_CHANNEL = "channel:C0BKY43FWR5"
 
 # Bound every free-text field folded into the digest.
 _BOUND = 240
@@ -151,19 +145,15 @@ def read_channels_config(channels_path):
 
 
 def resolve_activity_digest_channel(channels_cfg):
-    """Return the configured digest target or the #dry-dock default."""
+    """Return the configured digest target, or None when configuration is absent."""
     target = channels_cfg.get("activity_digest_channel")
-    return target if isinstance(target, str) and target else DEFAULT_ACTIVITY_DIGEST_CHANNEL
+    return target if isinstance(target, str) and target else None
 
 
 def resolve_slack_account(channels_cfg):
-    """Return the Slack account Captain must use for the digest.
-
-    Omitting this account can send as the default AgentOwen app, which is not a
-    member of #dry-dock and fails with a misleading ``channel_not_found``.
-    """
+    """Return the configured Slack account, or None when configuration is absent."""
     account = channels_cfg.get("slack_account")
-    return account if isinstance(account, str) and account else "captain"
+    return account if isinstance(account, str) and account else None
 
 
 # OpenClaw message boundary
@@ -383,7 +373,7 @@ def build_digest(hours, root=None, cron_list_fn=None, cron_runs_fn=None, now=Non
 
     # Return the stable structure consumed by both JSON and Slack renderers.
     return {
-        "date": now.astimezone(TZ).date().isoformat(),
+        "date": now.astimezone().date().isoformat(),
         "hours": hours,
         "generated_at": now.isoformat(),
         "audience": audience,
@@ -569,7 +559,7 @@ def build_arg_parser():
     ap = argparse.ArgumentParser(
         description=(
             "Mechanically-generated summary of what Captain did in the last "
-            "N hours, posted to #dry-dock. Runs in EVERY DailyLoop audience "
+            "N hours. Runs in EVERY DailyLoop audience "
             "-- off, shadow, live -- unlike every other daily-loop cron; see "
             "the module docstring for why that exception is safe."
         )
@@ -655,6 +645,21 @@ def main(argv=None, root=None, cron_list_fn=None, cron_runs_fn=None, send_fn=Non
         send_fn = send_fn or _default_send_fn(openclaw_bin)
         target = resolve_activity_digest_channel(channels_cfg)
         account = resolve_slack_account(channels_cfg)
+
+        # Refuse to guess routing; a fallback could use the wrong Slack app or channel.
+        if not target or not account:
+            # Report every missing key together so the operator can fix config once.
+            missing = []
+            if not target:
+                missing.append("data/captain-channels.json:activity_digest_channel")
+            if not account:
+                missing.append("data/captain-channels.json:slack_account")
+            print(
+                "daily_activity_digest: required routing configuration missing: "
+                + ", ".join(missing),
+                file=stderr,
+            )
+            return 1
         ok, err = send_fn(text, target, account)
 
         if not ok:

@@ -1,7 +1,10 @@
 {
-  "_comment": "Copy this file to captain-channels.json and replace every placeholder before enabling DailyLoop. Keep the configured file local.",
+  "_comment": "Copy this file to captain-channels.json and replace every placeholder before enabling DailyLoop. Keys such as Firstname Lastname are the person's exact full name; the example person is the Operations Lead. Keep the configured file local.",
   "admin_recipients": {
-    "Operations lead": "U0123456789"
+    "Firstname Lastname": "U0123456789"
+  },
+  "mode_toggle_users": {
+    "Firstname Lastname": "U0123456789"
   },
   "shadow_recipient": "channel:C0123456789",
   "activity_digest_channel": "channel:C0123456789",

@@ -5,3 +5,8 @@ agent:
     alsoAllow: [message]
     fs:
       workspaceOnly: true
+  heartbeat:
+    every: 60m
+    lightContext: true
+    isolatedSession: true
+    timeoutSeconds: 120

@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Report OpenClaw cron job failures to Sentry; heartbeat a cron monitor.
+"""Report OpenClaw cron job failures to Sentry.
 
-Runs every 10 minutes via launchd on the Captain host. Diffs each job's
-error counter in `openclaw cron list --json` against local state and sends
-one grouped Sentry event per newly failed job. The check-in doubles as a
-dead-man's switch: host asleep / OpenClaw down / bridge broken => missed
-check-in alert.
+When invoked, the bridge compares each job's error counter with local state
+and reports newly failed jobs. Run it manually or schedule it with the
+generated launchd configuration. Its Sentry check-in also acts as a
+dead-man's switch for the host, OpenClaw, and the bridge itself.
 """
 
 from __future__ import annotations
@@ -28,7 +27,6 @@ MONITOR_CONFIG = {
     "schedule": {"type": "interval", "value": 10, "unit": "minute"},
     "checkin_margin": 10,
     "max_runtime": 5,
-    "timezone": "America/Detroit",
     "failure_issue_threshold": 1,
     "recovery_threshold": 1,
 }
