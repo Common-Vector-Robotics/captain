@@ -662,6 +662,29 @@ systemctl --user disable --now ai.openclaw.captain-sentry-bridge.timer
 
 ### Turning telemetry off
 
-To silence all telemetry, delete `.secrets/sentry.env` or set `CAPTAIN_SENTRY_DISABLED=1`. Either one returns every telemetry call to being a no-op; nothing else about Captain changes.
+To turn off Sentry for all Captain processes, rename the settings file:
+
+```bash
+mv .secrets/sentry.env .secrets/sentry.env.disabled
+```
+
+Without `.secrets/sentry.env`, Captain continues working normally but sends no
+Sentry events or monitor check-ins.
+
+To turn Sentry back on:
+
+```bash
+mv .secrets/sentry.env.disabled .secrets/sentry.env
+```
+
+For a single manual command, you can temporarily disable telemetry like this:
+
+```bash
+CAPTAIN_SENTRY_DISABLED=1 python3 scripts/openclaw_cron_sentry_bridge.py --dry-run
+```
+
+`CAPTAIN_SENTRY_DISABLED` is a process environment variable. Do not add it to
+`.secrets/sentry.env`; that file currently accepts only `SENTRY_DSN` and
+`SENTRY_ENVIRONMENT`.
 
 See [`TOOLS.md`](TOOLS.md) for the telemetry rules new Captain scripts must follow.
