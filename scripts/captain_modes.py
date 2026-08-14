@@ -88,6 +88,8 @@ def save_modes(modes, path=MODE_PATH):
         )
 
     payload = json.dumps(modes, indent=2, sort_keys=True) + "\n"
+
+    # Write beside the destination so the final replacement remains atomic.
     fd, tmp_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
     )
@@ -100,6 +102,8 @@ def save_modes(modes, path=MODE_PATH):
             mode_file.write(payload)
             mode_file.flush()
             os.fsync(mode_file.fileno())
+
+        # Publish the fully written owner-private file atomically.
         os.replace(staged, path)
     finally:
         if fd >= 0:
@@ -112,7 +116,7 @@ DAILYLOOP_AUDIENCES = ("off", "shadow", "live")
 
 def set_dailyloop(
     audience, user_id, source, *, mode_path=MODE_PATH,
-    channels_path=CHANNELS_PATH, init_db_fn=init_db, audit_fn=audit,
+    channels_path=CHANNELS_PATH,
 ):
     """Set DailyLoop to off, shadow, or live for a configured Slack operator.
 
@@ -143,8 +147,8 @@ def set_dailyloop(
         "updated_by": authorized[user_id],
     }
 
-    init_db_fn()
-    audit_fn(
+    init_db()  # Ensure the database and audit log are initialized.
+    audit(
         "captain_mode_toggle",
         mode="DailyLoop",
         audience=audience,
@@ -154,8 +158,8 @@ def set_dailyloop(
         phase="precommit",
         state_authoritative=True,
         authoritative_state="mode_file",
-    )
-    save_modes(modes, mode_path)
+    )  # Record the authorized mode-change attempt in the audit log.
+    save_modes(modes, mode_path)  # Activate the mode only after auditing succeeds.
 
     return modes
 

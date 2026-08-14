@@ -32,28 +32,34 @@ def test_load_toggle_users_fails_closed(tmp_path, value):
         captain_modes.load_toggle_users(path)
 
 
-def test_set_dailyloop_rejects_blank_or_unknown_user(tmp_path):
+def test_set_dailyloop_rejects_blank_or_unknown_user(tmp_path, monkeypatch):
     channels = tmp_path / "captain-channels.json"
     modes = tmp_path / "captain-modes.json"
     write_json(channels, {"mode_toggle_users": {"Operator": "U0123456789"}})
+    monkeypatch.setattr(captain_modes, "init_db", lambda: None)
+    monkeypatch.setattr(captain_modes, "audit", lambda *args, **kwargs: None)
     for user_id in ("", "U9999999999"):
         with pytest.raises(SystemExit, match="Unauthorized"):
             captain_modes.set_dailyloop(
                 "shadow", user_id, "test", mode_path=modes,
-                channels_path=channels, init_db_fn=lambda: None,
-                audit_fn=lambda *args, **kwargs: None,
+                channels_path=channels,
             )
 
 
-def test_set_dailyloop_records_configured_operator(tmp_path):
+def test_set_dailyloop_records_configured_operator(tmp_path, monkeypatch):
     channels = tmp_path / "captain-channels.json"
     modes = tmp_path / "captain-modes.json"
     events = []
     write_json(channels, {"mode_toggle_users": {"Operator": "U0123456789"}})
+    monkeypatch.setattr(captain_modes, "init_db", lambda: None)
+    monkeypatch.setattr(
+        captain_modes,
+        "audit",
+        lambda event, **fields: events.append((event, fields)),
+    )
     result = captain_modes.set_dailyloop(
         "shadow", "U0123456789", "test", mode_path=modes,
-        channels_path=channels, init_db_fn=lambda: None,
-        audit_fn=lambda event, **fields: events.append((event, fields)),
+        channels_path=channels,
     )
     assert result["DailyLoop"]["updated_by"] == "Operator"
     assert json.loads(modes.read_text(encoding="utf-8")) == result
@@ -66,7 +72,9 @@ def test_set_dailyloop_records_configured_operator(tmp_path):
     assert events[0][1].get("authoritative_state") == "mode_file"
 
 
-def test_set_dailyloop_does_not_change_mode_file_when_audit_fails(tmp_path):
+def test_set_dailyloop_does_not_change_mode_file_when_audit_fails(
+    tmp_path, monkeypatch
+):
     """Catch an unaudited mode transition becoming live after audit failure."""
     channels = tmp_path / "captain-channels.json"
     modes = tmp_path / "captain-modes.json"
@@ -77,11 +85,13 @@ def test_set_dailyloop_does_not_change_mode_file_when_audit_fails(tmp_path):
     def fail_audit(*args, **kwargs):
         raise RuntimeError("audit unavailable")
 
+    monkeypatch.setattr(captain_modes, "init_db", lambda: None)
+    monkeypatch.setattr(captain_modes, "audit", fail_audit)
+
     with pytest.raises(RuntimeError, match="audit unavailable"):
         captain_modes.set_dailyloop(
             "live", "U0123456789", "test", mode_path=modes,
-            channels_path=channels, init_db_fn=lambda: None,
-            audit_fn=fail_audit,
+            channels_path=channels,
         )
 
     assert modes.read_bytes() == original
