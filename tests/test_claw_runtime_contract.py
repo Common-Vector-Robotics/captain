@@ -83,7 +83,6 @@ def test_setup_docs_state_the_explicit_default_schedule_timezone():
         "python3 scripts/configure_timezone.py --timezone <IANA_TIMEZONE>"
         in readme
     )
-    assert "To change the 14:00 cadence" in readme
 
 
 def test_timezone_configurator_is_packaged_before_claw_inspection():

@@ -379,9 +379,7 @@ scheduled job never starts an interactive OAuth flow. `sender`, `subject_prefixe
 The default reconciliation schedule is 14:00 on weekdays in
 `America/Detroit`. It should run after Gemini has produced the Transcript. Use
 `python3 scripts/configure_timezone.py --timezone <IANA_TIMEZONE>` to set its
-timezone together with the other five jobs. To change the 14:00 cadence, edit
-only the `meeting-transcript-reconciliation` cron expression in `CLAW.md` before
-inspecting and installing the package.
+timezone together with the other five jobs.
 
 ### 7. Connect Captain to Slack
 
