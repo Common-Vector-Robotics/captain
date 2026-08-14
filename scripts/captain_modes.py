@@ -31,6 +31,7 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+# Slack users allowed to toggle DailyLoop are loaded from private configuration.
 def load_toggle_users():
     """Load private DailyLoop operators, keyed by Slack user ID."""
     try:
@@ -75,6 +76,7 @@ def save_modes(modes):
     Returns: None
     """
 
+    # Write beside the destination so the final replace remains atomic.
     MODE_PATH.parent.mkdir(parents=True, exist_ok=True)
     temporary = MODE_PATH.with_suffix(".tmp")
     temporary.touch(mode=0o600, exist_ok=False)
@@ -83,6 +85,8 @@ def save_modes(modes):
             json.dumps(modes, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+
+        # Atomic replace
         temporary.replace(MODE_PATH)
     finally:
         temporary.unlink(missing_ok=True)
@@ -108,6 +112,7 @@ def set_dailyloop(audience, user_id, source):
             % (audience, ", ".join(DAILYLOOP_AUDIENCES))
         )
 
+    # Ensure user ID is authorized.
     authorized = load_toggle_users()
     if not user_id or user_id not in authorized:
         raise SystemExit(f"Unauthorized DailyLoop toggle user: {user_id}")
