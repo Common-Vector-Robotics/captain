@@ -516,8 +516,9 @@ Captain can report hard failures — script crashes, session-report server error
 
 Captain's scripts send an event to Sentry when they crash. The optional cron
 bridge compares each OpenClaw job's error counter against the previous run and
-reports newly failed jobs. You can run it manually or, on macOS, generate a
-host-specific `launchd` definition for it.
+reports newly failed jobs. You can run it manually or generate a host-specific
+background service: `launchd` on macOS or a systemd user service and timer on
+Linux.
 
 Each bridge run also checks in with the `captain-openclaw-bridge` Sentry monitor, which acts as a dead-man's switch: a missed check-in means the host, OpenClaw, or the bridge itself is down.
 
