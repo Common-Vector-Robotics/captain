@@ -92,12 +92,18 @@ done
 5. Review the six scheduled jobs plus one Claw-managed hourly heartbeat. The five
    weekday operational schedules run at 07:30, 14:00, 15:15, 15:45, and 17:45 in
    `America/Detroit`; the daily reporting job runs at 18:30. OpenClaw
-   `v2026.7.2-beta.5` requires this explicit IANA timezone in every Claw cron
-   declaration. The 14:00 meeting job must run after Gemini has produced the
-   Transcript. The heartbeat continues to route through the configured `captain`
-   Slack binding. Edit all six `timezone` fields in `CLAW.md` before installation
-   if your team uses another timezone, and edit the cron expressions if your
-   operating cadence differs.
+   `v2026.7.2-beta.5` requires an explicit IANA timezone in every Claw cron
+   declaration. Before inspection, configure and verify all six entries with:
+
+   ```bash
+   python3 scripts/configure_timezone.py --timezone America/Detroit
+   python3 scripts/configure_timezone.py --timezone America/Detroit --check
+   ```
+
+   Replace `America/Detroit` with your team's IANA timezone. The 14:00 meeting
+   job must run after Gemini has produced the Transcript. The heartbeat continues
+   to route through the configured `captain` Slack binding. Edit the cron
+   expressions before installation if your operating cadence differs.
 
 6. Run the first cycle in shadow mode and inspect the output destination:
 

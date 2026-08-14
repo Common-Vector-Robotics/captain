@@ -78,8 +78,15 @@ def test_claw_sources_are_in_the_package_file_list():
 def test_readme_google_auth_is_least_privilege_and_fails_closed():
     """Catch setup guidance that authorizes broad or unverified Google access."""
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    section = readme.split("### 4. Configure meeting ingestion", 1)[1].split(
-        "### 5. Connect Captain to Slack", 1
+    section = re.split(
+        r"(?m)^### \d+\. Configure meeting ingestion$",
+        readme,
+        maxsplit=1,
+    )[1]
+    section = re.split(
+        r"(?m)^### \d+\. Connect Captain to Slack$",
+        section,
+        maxsplit=1,
     )[0]
     normalized = " ".join(section.split())
 

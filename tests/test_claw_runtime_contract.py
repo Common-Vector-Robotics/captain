@@ -79,6 +79,20 @@ def test_setup_docs_state_the_explicit_default_schedule_timezone():
         assert "host computer's timezone" not in document
 
 
+def test_timezone_configurator_is_packaged_before_claw_inspection():
+    package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    command = (
+        "python3 scripts/configure_timezone.py "
+        "--timezone America/Detroit"
+    )
+
+    assert "scripts/configure_timezone.py" in package["files"]
+    assert command in readme
+    assert readme.index(command) < readme.index("openclaw claws inspect .")
+    assert "--check" in readme
+
+
 def test_runtime_code_contains_no_fixed_deployment_timezone():
     runtime_paths = (
         "scripts/daily_activity_digest.py",

@@ -99,15 +99,14 @@ Captain is packaged as an OpenClaw Claw (note: `.claw` packages are still experi
 
 - A working [OpenClaw installation](https://docs.openclaw.ai/) with its Gateway and Slack channel configured
 - OpenClaw `v2026.7.2-beta.5` requires every Claw cron declaration to name an
-  explicit IANA timezone. Captain defaults to `America/Detroit`; before
-  installation, edit all six `timezone` fields in `CLAW.md` if your team uses a
-  different timezone.
+  explicit IANA timezone. Captain defaults to `America/Detroit`; the setup step
+  below configures and validates all six declarations for your team.
 - Python 3
 - A ClickUp API key and ClickUp team ID
 - A Slack account dedicated to Captain, plus the user and channel IDs used in `data/captain-channels.json`
 - The `gog` Google CLI, authenticated to a Gmail account with Gmail, Drive, and Docs access
 
-### 1. Install the Claw
+### 1. Clone Captain
 
 Clone this repository outside of your openclaw folder:
 
@@ -122,6 +121,29 @@ git clone <repository-url> captain
 # Change wd to captain's folder
 cd captain
 ```
+
+### 2. Configure the scheduled-job timezone
+
+Choose the IANA timezone your team uses for Captain's schedule. This command
+validates the timezone and atomically updates all six cron declarations:
+
+```bash
+python3 scripts/configure_timezone.py --timezone America/Detroit
+```
+
+Replace `America/Detroit` with your team's timezone, such as `Europe/London` or
+`America/Los_Angeles`. Verify the resulting manifest without changing it:
+
+```bash
+python3 scripts/configure_timezone.py --timezone America/Detroit --check
+```
+
+Both commands fail closed if the timezone is invalid or `CLAW.md` does not
+contain exactly the six expected Captain jobs. The configuration command
+intentionally changes your local `CLAW.md`; inspect and install that exact local
+manifest in the next step.
+
+### 3. Inspect and install the Claw
 
 Run these commands from this package directory (the directory containing `CLAW.md`). Before enabling DailyLoop, copy `data/captain-channels.example.json` to the private `data/captain-channels.json` and configure its `mode_toggle_users` name-to-Slack-ID mapping. Only those Slack users can switch Captain between `off`, `shadow`, and `live`.
 
@@ -192,7 +214,7 @@ status.
 openclaw doctor
 ```
 
-### 2. Install Python dependencies
+### 4. Install Python dependencies
 
 ```bash
 # Move into Captain's installed workspace.
@@ -209,7 +231,7 @@ Homebrew-managed Python may reject that command with `error: externally-managed-
 python3 -m pip install --user --break-system-packages -r requirements.txt
 ```
 
-### 3. Configure ClickUp
+### 5. Configure ClickUp
 
 Create a local secrets file without committing it:
 
@@ -237,7 +259,7 @@ Verify the credentials with a read-only board fetch:
 python3 scripts/fetch_clickup_tasks.py --out /tmp/captain-clickup-smoke.json
 ```
 
-### 4. Configure meeting ingestion
+### 6. Configure meeting ingestion
 
 Captain supports Gemini meeting-note emails in Gmail whose links open Notes and Transcript
 sections in Google Docs. Copy the example, then replace the sample account and meeting-title
@@ -361,7 +383,7 @@ entry in `CLAW.md` before inspecting and installing the package. Keep all six
 Claw cron declarations on the same intended team timezone unless a job has an
 explicit operational reason to differ.
 
-### 5. Connect Captain to Slack
+### 7. Connect Captain to Slack
 
 Captain requires a dedicated Slack app and bot. Follow the maintained [OpenClaw Slack setup guide](https://docs.openclaw.ai/channels/slack) to create the app, configure its scopes and events, install the Slack plugin, and store its tokens securely.
 
@@ -395,7 +417,7 @@ Verify the connection before configuring Captain's routing:
 openclaw channels status --probe --json
 ```
 
-### 6. Configure Slack routing and operators
+### 8. Configure Slack routing and operators
 
 ```bash
 # Copy the example Slack settings into a local configuration file.
@@ -445,7 +467,7 @@ exact live target. The live `data/captain-modes.json` file is runtime state: it
 is not installed from this package, remains off when absent, and is created by
 the first authorized mode change.
 
-### 7. Validate in shadow mode
+### 9. Validate in shadow mode
 
 Confirm that Captain starts in `off`, then enable `shadow` using an authorized Slack user ID:
 
