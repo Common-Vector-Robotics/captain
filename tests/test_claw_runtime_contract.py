@@ -78,6 +78,13 @@ def test_setup_docs_state_the_explicit_default_schedule_timezone():
         assert "America/Detroit" in document
         assert "host computer's timezone" not in document
 
+    assert "use another timezone or cadence" not in readme.lower()
+    assert (
+        "python3 scripts/configure_timezone.py --timezone <IANA_TIMEZONE>"
+        in readme
+    )
+    assert "To change the 14:00 cadence" in readme
+
 
 def test_timezone_configurator_is_packaged_before_claw_inspection():
     package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))

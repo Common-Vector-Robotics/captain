@@ -377,11 +377,11 @@ scheduled job never starts an interactive OAuth flow. `sender`, `subject_prefixe
 `local_summary_directory` may be a readable local directory or `null`.
 
 The default reconciliation schedule is 14:00 on weekdays in
-`America/Detroit`. It should run after Gemini has produced the Transcript. To
-use another timezone or cadence, edit the `meeting-transcript-reconciliation`
-entry in `CLAW.md` before inspecting and installing the package. Keep all six
-Claw cron declarations on the same intended team timezone unless a job has an
-explicit operational reason to differ.
+`America/Detroit`. It should run after Gemini has produced the Transcript. Use
+`python3 scripts/configure_timezone.py --timezone <IANA_TIMEZONE>` to set its
+timezone together with the other five jobs. To change the 14:00 cadence, edit
+only the `meeting-transcript-reconciliation` cron expression in `CLAW.md` before
+inspecting and installing the package.
 
 ### 7. Connect Captain to Slack
 
