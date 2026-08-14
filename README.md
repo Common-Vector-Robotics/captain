@@ -272,11 +272,9 @@ In the returned JSON, locate exactly one record for `captain@example.com`, requi
 - `https://www.googleapis.com/auth/drive.readonly`
 - `https://www.googleapis.com/auth/documents.readonly`
 
-No other stored scope is allowed. If broader historical grants appear, do not proceed.
-Remove the local token with `gog auth remove captain@example.com`, revoke the
-application's prior Google account grants in Google Account security, then reauthorize
-non-incrementally with the exact least-privilege command above. Prefer a dedicated Google
-account so unrelated grants cannot accumulate on Captain's identity.
+If broader historical grants appear, you can remove the token with
+`gog auth remove captain@example.com`, and revoke the application's prior grants in
+Google Account security.
 
 For a headless service, `gog auth keyring file` selects the encrypted file keyring;
 `GOG_KEYRING_BACKEND=file` can enforce that backend. Inject `GOG_KEYRING_PASSWORD` from
