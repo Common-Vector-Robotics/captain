@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Manually run the optional OpenClaw cron-failure bridge.
+"""Report OpenClaw cron job failures to Sentry.
 
-When invoked, it diffs each job's error counter in `openclaw cron list --json`
-against local state and sends one grouped Sentry event per newly failed job.
-The check-in doubles as a dead-man's switch: host asleep / OpenClaw down /
-bridge broken => missed check-in alert. This package does not install or
-configure a scheduler for the bridge.
+When invoked, the bridge compares each job's error counter with local state
+and reports newly failed jobs. Run it manually or schedule it with the
+generated launchd configuration. Its Sentry check-in also acts as a
+dead-man's switch for the host, OpenClaw, and the bridge itself.
 """
 
 from __future__ import annotations
