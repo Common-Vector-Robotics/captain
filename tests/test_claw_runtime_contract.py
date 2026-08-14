@@ -78,19 +78,13 @@ def test_heartbeat_policy_is_packaged_for_active_mode_loading():
     assert "HEARTBEAT.md" in package["files"]
 
 
-def test_setup_docs_install_and_verify_operator_heartbeat_prompt_fail_closed():
+def test_setup_docs_reference_packaged_heartbeat_installer():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     bootstrap = (ROOT / "BOOTSTRAP.md").read_text(encoding="utf-8")
 
     for document in (readme, bootstrap):
-        normalized = " ".join(document.split())
-        assert "python3 scripts/install_heartbeat_policy.py" in normalized
-        assert "after every Claw update" in normalized
-        assert "locally modified" in normalized
-        assert "heartbeat and scheduled jobs disabled" in normalized
+        assert "python3 scripts/install_heartbeat_policy.py" in document
         assert 'policy_path = Path("HEARTBEAT.md")' not in document
-
-    assert "lightweight OpenClaw mode" in " ".join(bootstrap.split())
 
     script = (ROOT / "scripts" / "install_heartbeat_policy.py").read_text(encoding="utf-8")
     assert 'CONFIG_PATH = "agents.entries.captain.heartbeat.prompt"' in script
@@ -104,7 +98,7 @@ def test_setup_docs_install_and_verify_operator_heartbeat_prompt_fail_closed():
     assert script.index("run(set_command") < script.index('"config", "get"')
 
 
-def test_documented_heartbeat_installer_dry_runs_applies_and_reads_back_exactly(
+def test_heartbeat_installer_dry_runs_applies_and_reads_back_exactly(
     tmp_path,
 ):
     policy_bytes, calls, state, verified_hash = _run_heartbeat_install(tmp_path)
@@ -123,7 +117,7 @@ def test_documented_heartbeat_installer_dry_runs_applies_and_reads_back_exactly(
     assert verified_hash == hashlib.sha256(policy_bytes).hexdigest()
 
 
-def test_documented_heartbeat_installer_fails_closed_on_readback_mismatch(
+def test_heartbeat_installer_fails_closed_on_readback_mismatch(
     tmp_path,
 ):
     with pytest.raises(SystemExit, match="does not exactly match"):

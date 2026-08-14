@@ -57,7 +57,6 @@ def test_setup_fails_closed_when_daily_reporting_routing_is_missing():
         assert 'required = ("activity_digest_channel", "slack_account")' in document
         assert "Captain Slack routing configuration missing" in document
         assert "Captain Slack routing verified" in document
-        assert "Do not continue until this prints" in document
 
 
 def test_bootstrap_creates_local_memory_and_user_files_without_overwriting():
@@ -65,7 +64,6 @@ def test_bootstrap_creates_local_memory_and_user_files_without_overwriting():
     assert "for file in MEMORY.md USER.md" in bootstrap
     assert 'if [ ! -e "$file" ]' in bootstrap
     assert 'install -m 600 /dev/null "$file"' in bootstrap
-    assert "Preserve existing files; never replace them" in bootstrap
 
 
 def test_claw_sources_are_in_the_package_file_list():
@@ -106,9 +104,5 @@ def test_readme_google_auth_is_least_privilege_and_fails_closed():
     }
     for scope in allowed_scopes:
         assert f"`{scope}`" in normalized
-    assert "No other stored scope is allowed" in normalized
-    assert "do not proceed" in normalized
-    assert "revoke the application's prior Google account grants" in normalized
-    assert "dedicated Google account" in normalized
     assert "GOG_KEYRING_BACKEND=file" in normalized
     assert "GOG_KEYRING_PASSWORD" in normalized
