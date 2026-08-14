@@ -585,7 +585,7 @@ mkdir -p logs
 
 # Render a plist for this workspace and Python installation.
 PLIST_PATH="$HOME/Library/LaunchAgents/ai.openclaw.captain-sentry-bridge.plist"
-python3 scripts/render_sentry_launchd.py \
+python3 scripts/render_sentry_service.py \
   --workspace "$PWD" \
   --python "$(command -v python3)" \
   --output "$PLIST_PATH"
@@ -609,7 +609,7 @@ From the Captain workspace, run:
 
 ```bash
 UNIT_DIR="$HOME/.config/systemd/user"
-python3 scripts/render_sentry_launchd.py \
+python3 scripts/render_sentry_service.py \
   --platform linux \
   --workspace "$PWD" \
   --python "$(command -v python3)" \

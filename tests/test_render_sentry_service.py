@@ -5,7 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from render_sentry_launchd import (
+from render_sentry_service import (
     build_launchd_config,
     build_systemd_units,
     write_plist,

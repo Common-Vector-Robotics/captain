@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Render host-specific service files for Captain's Sentry bridge.
 
-The historical filename is retained for compatibility. On macOS this script
-renders a launchd plist; on Linux it renders a systemd user service and timer.
+On macOS this script renders a launchd plist; on Linux it renders a systemd
+user service and timer.
 """
 
 import argparse

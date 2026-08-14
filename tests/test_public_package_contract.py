@@ -37,9 +37,9 @@ def test_guidance_does_not_require_unshipped_private_files():
     assert "Read `MEMORY.md`." not in combined
 
 
-def test_product_text_describes_only_the_rendered_launchd_scheduler():
+def test_product_text_describes_only_the_rendered_service_scheduler():
     combined = "\n".join(path.read_text(encoding="utf-8") for path in product_text_paths())
-    assert "scripts/render_sentry_launchd.py" in combined
+    assert "scripts/render_sentry_service.py" in combined
     assert "ai.openclaw.captain-sentry-bridge.plist" in combined
     assert "launchd/com" + ".intermode.captain-sentry-bridge.plist" not in combined
 
