@@ -52,7 +52,31 @@ def test_claw_owns_exact_scheduled_jobs():
         "morning-cycle", "meeting-transcript-reconciliation", "blocker-chase",
         "bench-truth-watch", "eod-wrap", "action-summary-reporting",
     }
-    assert "timezone:" not in manifest
+
+
+def test_claw_cron_jobs_declare_beta5_compatible_timezone():
+    manifest = (ROOT / "CLAW.md").read_text(encoding="utf-8")
+    job_blocks = re.findall(
+        r"(?ms)^  - id: [a-z0-9-]+\n.*?(?=^  - id: |\Z)",
+        manifest,
+    )
+
+    assert len(job_blocks) == 6
+    for block in job_blocks:
+        assert re.search(
+            r"(?m)^    schedule:\n      cron: \"[^\"]+\"\n"
+            r"      timezone: America/Detroit$",
+            block,
+        )
+
+
+def test_setup_docs_state_the_explicit_default_schedule_timezone():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    bootstrap = (ROOT / "BOOTSTRAP.md").read_text(encoding="utf-8")
+
+    for document in (readme, bootstrap):
+        assert "America/Detroit" in document
+        assert "host computer's timezone" not in document
 
 
 def test_runtime_code_contains_no_fixed_deployment_timezone():

@@ -98,7 +98,10 @@ Captain is packaged as an OpenClaw Claw (note: `.claw` packages are still experi
 ### Prerequisites
 
 - A working [OpenClaw installation](https://docs.openclaw.ai/) with its Gateway and Slack channel configured
-- The host computer set to the timezone Captain should use for its scheduled jobs
+- OpenClaw `v2026.7.2-beta.5` requires every Claw cron declaration to name an
+  explicit IANA timezone. Captain defaults to `America/Detroit`; before
+  installation, edit all six `timezone` fields in `CLAW.md` if your team uses a
+  different timezone.
 - Python 3
 - A ClickUp API key and ClickUp team ID
 - A Slack account dedicated to Captain, plus the user and channel IDs used in `data/captain-channels.json`
@@ -351,10 +354,12 @@ scheduled job never starts an interactive OAuth flow. `sender`, `subject_prefixe
 `meeting_title_patterns` control discovery; `lookback_days` controls partial-note retries;
 `local_summary_directory` may be a readable local directory or `null`.
 
-The default reconciliation schedule is 14:00 on weekdays in the host computer's
-timezone. It should run after Gemini has produced the Transcript. To use another
-cadence, edit the `meeting-transcript-reconciliation` entry in `CLAW.md` before
-inspecting and installing the package.
+The default reconciliation schedule is 14:00 on weekdays in
+`America/Detroit`. It should run after Gemini has produced the Transcript. To
+use another timezone or cadence, edit the `meeting-transcript-reconciliation`
+entry in `CLAW.md` before inspecting and installing the package. Keep all six
+Claw cron declarations on the same intended team timezone unless a job has an
+explicit operational reason to differ.
 
 ### 5. Connect Captain to Slack
 
