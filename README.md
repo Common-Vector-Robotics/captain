@@ -605,7 +605,11 @@ python3 -m pytest tests/test_openclaw_cron_sentry_bridge.py -v
 python3 scripts/openclaw_cron_sentry_bridge.py --dry-run
 ```
 
-### 4. Run the Sentry bridge automatically (optional)
+### 4. Run cron monitoring automatically (optional)
+
+Complete this step if you want Captain to check its scheduled OpenClaw jobs
+every 10 minutes and report new failures to Sentry automatically. Skip it if
+you only want individual Captain scripts to report their own crashes.
 
 The setup command automatically creates the right service files for macOS or
 Linux. It does not start anything until you run the final operating-system
