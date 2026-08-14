@@ -97,6 +97,32 @@ fi
    file. A missing `data/captain-modes.json` remains fail-closed/off until an
    authorized operator explicitly initializes it with the mode command.
 
+   Before continuing, verify that daily reporting has an explicit Slack account
+   and destination:
+
+   ```bash
+   python3 - <<'PY'
+   import json
+   from pathlib import Path
+
+   path = Path("data/captain-channels.json")
+   try:
+       config = json.loads(path.read_text(encoding="utf-8"))
+   except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+       raise SystemExit(f"Cannot read {path}: {error}") from error
+   if not isinstance(config, dict):
+       raise SystemExit(f"Captain Slack routing configuration in {path} must be a JSON object")
+
+   required = ("activity_digest_channel", "slack_account")
+   missing = [key for key in required if not isinstance(config.get(key), str) or not config[key]]
+   if missing:
+       raise SystemExit(f"Captain Slack routing configuration missing in {path}: {', '.join(missing)}")
+   print("Captain Slack routing verified: " + ", ".join(required))
+   PY
+   ```
+
+   Do not continue until this prints `Captain Slack routing verified`.
+
 5. Review the six scheduled jobs plus one Claw-managed hourly heartbeat. The five
    weekday operational schedules run at 07:30, 14:00, 15:15, 15:45, and 17:45 in
    `America/Detroit`; the daily reporting job runs at 18:30. The 14:00 meeting job

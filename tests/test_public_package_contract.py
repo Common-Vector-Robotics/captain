@@ -51,6 +51,15 @@ def test_tools_references_only_shipped_scripts():
     assert missing == []
 
 
+def test_setup_fails_closed_when_daily_reporting_routing_is_missing():
+    for name in ("README.md", "BOOTSTRAP.md"):
+        document = (ROOT / name).read_text(encoding="utf-8")
+        assert 'required = ("activity_digest_channel", "slack_account")' in document
+        assert "Captain Slack routing configuration missing" in document
+        assert "Captain Slack routing verified" in document
+        assert "Do not continue until this prints" in document
+
+
 def test_claw_sources_are_in_the_package_file_list():
     package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
     packaged = set(package["files"])

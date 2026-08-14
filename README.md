@@ -372,6 +372,32 @@ nano data/captain-channels.json
 python3 -m json.tool data/captain-channels.json >/dev/null
 ```
 
+Before continuing, verify that daily reporting has an explicit Slack account
+and destination:
+
+```bash
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+path = Path("data/captain-channels.json")
+try:
+    config = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+    raise SystemExit(f"Cannot read {path}: {error}") from error
+if not isinstance(config, dict):
+    raise SystemExit(f"Captain Slack routing configuration in {path} must be a JSON object")
+
+required = ("activity_digest_channel", "slack_account")
+missing = [key for key in required if not isinstance(config.get(key), str) or not config[key]]
+if missing:
+    raise SystemExit(f"Captain Slack routing configuration missing in {path}: {', '.join(missing)}")
+print("Captain Slack routing verified: " + ", ".join(required))
+PY
+```
+
+Do not continue until this prints `Captain Slack routing verified`.
+
 Replace every placeholder in `data/captain-channels.json`, including the
 `mode_toggle_users` name-to-Slack-ID mapping. That private mapping is the only
 authorization for DailyLoop mode changes; missing or invalid entries fail
