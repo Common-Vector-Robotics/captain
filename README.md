@@ -512,6 +512,9 @@ Runtime state remains on the Captain host unless explicitly exported through a r
 
 ## Sentry telemetry
 
+Sentry integration is optional. If you are not using Sentry, skip this entire
+section; Captain will continue working normally.
+
 Captain can report hard failures — script crashes, session-report server errors, and OpenClaw cron job failures — to a Sentry project.
 
 Captain's scripts send an event to Sentry when they crash. The optional cron
@@ -604,9 +607,9 @@ python3 scripts/openclaw_cron_sentry_bridge.py --dry-run
 
 ### 4. Run the Sentry bridge automatically (optional)
 
-Skip this section if you are not using Sentry monitoring. The setup command
-automatically creates the right service files for macOS or Linux. It does not
-start anything until you run the final operating-system command shown below.
+The setup command automatically creates the right service files for macOS or
+Linux. It does not start anything until you run the final operating-system
+command shown below.
 
 #### macOS
 
