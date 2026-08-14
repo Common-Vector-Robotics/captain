@@ -1,27 +1,19 @@
+import hashlib
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+from install_heartbeat_policy import install_policy
 
 
-def _heartbeat_install_block(document: str) -> str:
-    section = document.split("#### Install the operator-owned heartbeat policy", 1)[1]
-    return section.split("```bash\n", 1)[1].split("\n```", 1)[0]
-
-
-def _heartbeat_install_source(document: str) -> str:
-    block = _heartbeat_install_block(document)
-    assert block.startswith("python3 - <<'PY'\n")
-    assert block.endswith("\nPY")
-    return block.removeprefix("python3 - <<'PY'\n").removesuffix("\nPY")
-
-
-def _run_documented_heartbeat_install(tmp_path, monkeypatch, *, alter_readback=False):
+def _run_heartbeat_install(tmp_path, *, alter_readback=False):
     policy_bytes = "# policy\nHARD GATE — exact UTF-8\n".encode("utf-8")
     (tmp_path / "HEARTBEAT.md").write_bytes(policy_bytes)
     calls = []
@@ -38,12 +30,11 @@ def _run_documented_heartbeat_install(tmp_path, monkeypatch, *, alter_readback=F
         prompt = state["prompt"] + ("changed" if alter_readback else "")
         return subprocess.CompletedProcess(command, 0, stdout=json.dumps(prompt))
 
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    source = _heartbeat_install_source(readme)
-    exec(compile(source, "README.md heartbeat installer", "exec"), {})
-    return policy_bytes, calls, state
+    verified_hash = install_policy(
+        tmp_path / "HEARTBEAT.md",
+        run=fake_run,
+    )
+    return policy_bytes, calls, state, verified_hash
 
 
 def test_claw_references_its_openclaw_runtime_profile():
@@ -93,43 +84,29 @@ def test_setup_docs_install_and_verify_operator_heartbeat_prompt_fail_closed():
 
     for document in (readme, bootstrap):
         normalized = " ".join(document.split())
-        assert "`lightContext: true`" in normalized
-        assert "the Claw profile schema does not own `heartbeat.prompt`" in normalized
-        assert (
-            "Do not enable or run Captain's heartbeat or scheduled jobs until this "
-            "verification succeeds."
-        ) in normalized
-        assert "Reapply and reverify the prompt after every Claw update" in normalized
-        assert "operator-controlled modification" in normalized
+        assert "lightweight OpenClaw mode" in normalized
+        assert "python3 scripts/install_heartbeat_policy.py" in normalized
+        assert "after every Claw update" in normalized
+        assert "locally modified" in normalized
+        assert "heartbeat and scheduled jobs disabled" in normalized
+        assert 'policy_path = Path("HEARTBEAT.md")' not in document
 
-        assert "```bash\npython3 - <<'PY'\n" in document
-        source = _heartbeat_install_source(document)
-        assert 'policy_path = Path("HEARTBEAT.md").resolve(strict=True)' in source
-        assert "policy_bytes = policy_path.read_bytes()" in source
-        assert 'policy = policy_bytes.decode("utf-8")' in source
-        assert "json.dumps(policy, ensure_ascii=False)" in source
-        assert '"agents.entries.captain.heartbeat.prompt"' in source
-        assert '"--strict-json"' in source
-        assert 'subprocess.run([*set_command, "--dry-run"], check=True)' in source
-        assert "subprocess.run(set_command, check=True)" in source
-        assert '"config", "get", config_path, "--json"' in source
-        assert "actual_bytes != policy_bytes" in source
-        assert 'hashlib.sha256(policy_bytes).hexdigest()' in source
-        assert 'hashlib.sha256(actual_bytes).hexdigest()' in source
-        assert "shell=True" not in source
-        assert source.index('"--dry-run"') < source.index("subprocess.run(set_command")
-        assert source.index("subprocess.run(set_command") < source.index('"config", "get"')
-
-    assert _heartbeat_install_block(readme) == _heartbeat_install_block(bootstrap)
-    fail_closed = "Do not enable or run Captain's heartbeat or scheduled jobs"
-    assert readme.index(fail_closed) < readme.index("openclaw claws add . --yes")
-    assert bootstrap.index(fail_closed) < bootstrap.index("1. Install")
+    script = (ROOT / "scripts" / "install_heartbeat_policy.py").read_text(encoding="utf-8")
+    assert 'CONFIG_PATH = "agents.entries.captain.heartbeat.prompt"' in script
+    assert 'json.dumps(policy, ensure_ascii=False)' in script
+    assert 'run([*set_command, "--dry-run"], check=True)' in script
+    assert "run(set_command, check=True)" in script
+    assert '"config", "get", CONFIG_PATH, "--json"' in script
+    assert "actual_bytes != policy_bytes" in script
+    assert "shell=True" not in script
+    assert script.index('"--dry-run"') < script.index("run(set_command")
+    assert script.index("run(set_command") < script.index('"config", "get"')
 
 
 def test_documented_heartbeat_installer_dry_runs_applies_and_reads_back_exactly(
-    tmp_path, monkeypatch
+    tmp_path,
 ):
-    policy_bytes, calls, state = _run_documented_heartbeat_install(tmp_path, monkeypatch)
+    policy_bytes, calls, state, verified_hash = _run_heartbeat_install(tmp_path)
 
     assert len(calls) == 3
     dry_run, apply, read_back = (call[0] for call in calls)
@@ -142,14 +119,14 @@ def test_documented_heartbeat_installer_dry_runs_applies_and_reads_back_exactly(
     ]
     assert state["prompt"].encode("utf-8") == policy_bytes
     assert all(call[1].get("check") is True for call in calls)
+    assert verified_hash == hashlib.sha256(policy_bytes).hexdigest()
 
 
 def test_documented_heartbeat_installer_fails_closed_on_readback_mismatch(
-    tmp_path, monkeypatch
+    tmp_path,
 ):
     with pytest.raises(SystemExit, match="does not exactly match"):
-        _run_documented_heartbeat_install(
+        _run_heartbeat_install(
             tmp_path,
-            monkeypatch,
             alter_readback=True,
         )

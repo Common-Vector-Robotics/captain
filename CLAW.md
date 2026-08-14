@@ -54,6 +54,8 @@ workspace:
       path: scripts/captain_telemetry.py
     - source: scripts/openclaw_cron_sentry_bridge.py
       path: scripts/openclaw_cron_sentry_bridge.py
+    - source: scripts/install_heartbeat_policy.py
+      path: scripts/install_heartbeat_policy.py
     - source: scripts/render_sentry_service.py
       path: scripts/render_sentry_service.py
     - source: scripts/clickup_credentials.py

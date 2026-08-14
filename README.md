@@ -95,11 +95,9 @@ flowchart TB
 
 Captain is packaged as an OpenClaw Claw (note: `.claw` packages are still experimental). It installs Captain as a new agent with six scheduled jobs plus one Claw-managed hourly heartbeat in every `DailyLoop` mode, including `off`. The five weekday operational jobs remain off until you configure them locally. Heartbeat routing still uses the configured `captain` Slack binding.
 
-The heartbeat uses isolated lightweight context (`lightContext: true`). In the current
-experimental Claw format, the Claw profile schema does not own `heartbeat.prompt`, so an
-operator must install the managed `HEARTBEAT.md` policy into Captain's runtime prompt after
-the Claw is installed. Without an exact prompt match, lightweight heartbeats receive no
-workspace bootstrap files and must remain disabled.
+Captain's heartbeat uses a lightweight OpenClaw mode. After installing Captain,
+you will run one included setup command that gives OpenClaw Captain's heartbeat
+safety rules and verifies that they were copied correctly.
 
 ### Prerequisites
 
@@ -163,57 +161,31 @@ openclaw claws status captain --json
 
 The default workspace is `~/.openclaw/workspace-captain`. If the install plan reported a different path, use that path in the remaining commands.
 
-#### Install the operator-owned heartbeat policy
+#### Install Captain's heartbeat safety rules
 
-Change to the installed workspace, then run this block exactly. It does not interpolate the
-policy through a shell: Python passes the JSON value directly as one process argument. The
-dry run must succeed before the write, and the read-back must match the managed file byte for
-byte. Any command error, invalid UTF-8, type mismatch, byte mismatch, or hash mismatch exits
-nonzero; keep the heartbeat and schedules disabled.
+Move into Captain's installed workspace, then run the included setup command:
 
 ```bash
-python3 - <<'PY'
-from pathlib import Path
-import hashlib
-import json
-import subprocess
-
-policy_path = Path("HEARTBEAT.md").resolve(strict=True)
-policy_bytes = policy_path.read_bytes()
-policy = policy_bytes.decode("utf-8")
-config_path = "agents.entries.captain.heartbeat.prompt"
-encoded_policy = json.dumps(policy, ensure_ascii=False)
-set_command = [
-    "openclaw", "config", "set", config_path, encoded_policy, "--strict-json",
-]
-
-subprocess.run([*set_command, "--dry-run"], check=True)
-subprocess.run(set_command, check=True)
-result = subprocess.run(
-    ["openclaw", "config", "get", config_path, "--json"],
-    check=True,
-    capture_output=True,
-    text=True,
-)
-actual = json.loads(result.stdout)
-if not isinstance(actual, str):
-    raise SystemExit("Captain heartbeat prompt read-back is not a string")
-actual_bytes = actual.encode("utf-8")
-if actual_bytes != policy_bytes:
-    raise SystemExit("Captain heartbeat prompt does not exactly match HEARTBEAT.md")
-expected_hash = hashlib.sha256(policy_bytes).hexdigest()
-actual_hash = hashlib.sha256(actual_bytes).hexdigest()
-if actual_hash != expected_hash:
-    raise SystemExit("Captain heartbeat prompt SHA-256 verification failed")
-print(f"Captain heartbeat prompt verified: sha256={actual_hash}")
-PY
+cd ~/.openclaw/workspace-captain
+python3 scripts/install_heartbeat_policy.py
 ```
 
-Only after this succeeds may you start the Gateway or enable/run Captain jobs. The prompt is
-operator-owned outside the Claw digest, so `claws status` may report an expected
-operator-controlled modification alongside other local agent overrides such as a model.
-Reapply and reverify the prompt after every Claw update before restarting Captain. Do not
-remove the prompt to make the agent state appear unmodified.
+It safely previews the OpenClaw configuration change, installs the exact rules
+from `HEARTBEAT.md`, and reads them back to make sure nothing changed. Success
+looks like this:
+
+```text
+Captain heartbeat policy installed and verified.
+SHA-256: <a long verification code>
+```
+
+If the command reports an error, stop and keep Captain's heartbeat and scheduled
+jobs disabled. Do not continue until it succeeds.
+
+Run this command again after every Claw update, before restarting Captain.
+OpenClaw may then describe Captain as locally modified; that is expected because
+this safety setting is stored on your machine. Do not delete it to clear that
+status.
 
 ```bash
 # Check the rest of your OpenClaw setup for problems after prompt verification.
@@ -570,10 +542,11 @@ python3 -m pytest tests/test_openclaw_cron_sentry_bridge.py -v
 python3 scripts/openclaw_cron_sentry_bridge.py --dry-run
 ```
 
-### 4. Run the bridge automatically (optional)
+### 4. Run the Sentry bridge automatically (optional)
 
-The renderer uses launchd on macOS and systemd user units on Linux. It writes
-service files using your workspace and Python paths, but does not activate them.
+Skip this section if you are not using Sentry monitoring. The setup command
+automatically creates the right service files for macOS or Linux. It does not
+start anything until you run the final operating-system command shown below.
 
 #### macOS
 
@@ -583,11 +556,10 @@ From the Captain workspace, run:
 # launchd needs the log directory before the bridge starts.
 mkdir -p logs
 
-# Render a plist for this workspace and Python installation.
+# Create the macOS service file.
 PLIST_PATH="$HOME/Library/LaunchAgents/ai.openclaw.captain-sentry-bridge.plist"
 python3 scripts/render_sentry_service.py \
   --workspace "$PWD" \
-  --python "$(command -v python3)" \
   --output "$PLIST_PATH"
 
 # Replace an existing bridge job, if any, and load the generated plist.
@@ -610,9 +582,7 @@ From the Captain workspace, run:
 ```bash
 UNIT_DIR="$HOME/.config/systemd/user"
 python3 scripts/render_sentry_service.py \
-  --platform linux \
   --workspace "$PWD" \
-  --python "$(command -v python3)" \
   --output "$UNIT_DIR"
 
 systemctl --user daemon-reload
