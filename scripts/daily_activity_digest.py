@@ -37,7 +37,6 @@ import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 # Allow direct script execution to import neighboring Captain helpers.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -47,7 +46,6 @@ import slack_user_names  # noqa: E402
 
 # Constants
 ROOT = Path(__file__).resolve().parents[1]
-TZ = ZoneInfo("America/Detroit")
 
 # Keep this explanation beside the matching setting, following the
 # ``_comment_*`` convention used in ``data/captain-channels.json``. The digest
@@ -375,7 +373,7 @@ def build_digest(hours, root=None, cron_list_fn=None, cron_runs_fn=None, now=Non
 
     # Return the stable structure consumed by both JSON and Slack renderers.
     return {
-        "date": now.astimezone(TZ).date().isoformat(),
+        "date": now.astimezone().date().isoformat(),
         "hours": hours,
         "generated_at": now.isoformat(),
         "audience": audience,

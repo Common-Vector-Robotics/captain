@@ -52,6 +52,20 @@ def test_claw_owns_exact_scheduled_jobs():
         "morning-cycle", "meeting-transcript-reconciliation", "blocker-chase",
         "bench-truth-watch", "eod-wrap", "action-summary-reporting",
     }
+    assert "timezone:" not in manifest
+
+
+def test_runtime_code_contains_no_fixed_deployment_timezone():
+    runtime_paths = (
+        "scripts/daily_activity_digest.py",
+        "scripts/daily_context.py",
+        "scripts/daily_wrap.py",
+        "scripts/openclaw_cron_sentry_bridge.py",
+        "scripts/personal_top2.py",
+    )
+    for relative_path in runtime_paths:
+        source = (ROOT / relative_path).read_text(encoding="utf-8")
+        assert "America/Detroit" not in source
 
 
 def test_profile_declares_hourly_isolated_lightweight_heartbeat():

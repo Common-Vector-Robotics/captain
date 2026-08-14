@@ -11,9 +11,8 @@ import argparse
 import json
 import sqlite3
 import sys
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import captain_telemetry
 
@@ -23,8 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent)) # Add scripts/ to sys.p
 from captain_db import DB as DEFAULT_DB, AUDIT as DEFAULT_AUDIT  # noqa: E402
 from daily_context import is_open, due_local_date, slim  # noqa: E402
 
-# Timezone and status constants
-TZ = ZoneInfo("America/Detroit")
+# Status constants
 NON_PROGRESS = {"to do", "backlog", "not started", "intake", "open"}
 
 
@@ -42,14 +40,10 @@ def _tasks(path):
 
 def _audit_counts(audit_path, date_str):
     """Count the task and blocker actions recorded during the chosen local day."""
-    # Use the full calendar day, matching _blocker_day's date comparison.
-    # A non-midnight cutoff would classify overnight activity inconsistently.
-    start = datetime.combine(
-        datetime.strptime(date_str, "%Y-%m-%d").date(),
-        time(0, 0),
-        tzinfo=TZ,
-    )
-    end = start + timedelta(days=1)
+    # Compare calendar dates after converting each event to the host timezone.
+    # This stays correct when daylight-saving changes make a local day shorter
+    # or longer than 24 hours.
+    target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
     counts = {}
 
     path = Path(audit_path)
@@ -69,15 +63,16 @@ def _audit_counts(audit_path, date_str):
             if isinstance(raw_ts, (int, float)):
                 timestamp = datetime.fromtimestamp(
                     raw_ts / 1000 if raw_ts > 10_000_000_000 else raw_ts,
-                    tz=TZ,
+                    tz=timezone.utc,
                 )
             else:
                 timestamp = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
         except (ValueError, TypeError):
             continue
 
-        # Naive or out-of-window timestamps do not belong in the chosen day.
-        if timestamp.tzinfo is None or timestamp < start or timestamp >= end:
+        # Naive timestamps have no reliable timezone. Every aware timestamp is
+        # converted through the host timezone before its calendar date is used.
+        if timestamp.tzinfo is None or timestamp.astimezone().date() != target_date:
             continue
 
         # The wrap reports only task, blocker, and outbound-send mutations.
@@ -93,10 +88,10 @@ def _audit_counts(audit_path, date_str):
 
 
 def _local_date(iso_ts):
-    """Convert an ISO timestamp to a Detroit date string, or return ``None``."""
+    """Convert an ISO timestamp to the host's local date, or return ``None``."""
     try:
         timestamp = datetime.fromisoformat((iso_ts or "").replace("Z", "+00:00"))
-        return timestamp.astimezone(TZ).date().isoformat()
+        return timestamp.astimezone().date().isoformat()
     except ValueError:
         return None
 
@@ -257,7 +252,7 @@ def main():
     parser.add_argument("--eod", required=True)
     parser.add_argument("--db", default=str(DEFAULT_DB))
     parser.add_argument("--audit", default=str(DEFAULT_AUDIT))
-    parser.add_argument("--date", default=datetime.now(TZ).date().isoformat())
+    parser.add_argument("--date", default=datetime.now().astimezone().date().isoformat())
     parser.add_argument(
         "--critical-paths",
         default=str(ROOT / "data" / "critical-paths.json"),

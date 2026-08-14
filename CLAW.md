@@ -87,7 +87,6 @@ cronJobs:
     name: Captain daily morning cycle
     schedule:
       cron: "30 7 * * 1-5"
-      timezone: America/Detroit
     session: isolated
     delivery:
       mode: none
@@ -96,7 +95,6 @@ cronJobs:
     name: Captain daily blocker chase
     schedule:
       cron: "15 15 * * 1-5"
-      timezone: America/Detroit
     session: isolated
     delivery:
       mode: none
@@ -105,7 +103,6 @@ cronJobs:
     name: Captain meeting transcript reconciliation
     schedule:
       cron: "0 14 * * 1-5"
-      timezone: America/Detroit
     session: isolated
     delivery:
       mode: none
@@ -114,7 +111,6 @@ cronJobs:
     name: Captain daily bench truth and channel watch
     schedule:
       cron: "45 15 * * 1-5"
-      timezone: America/Detroit
     session: isolated
     delivery:
       mode: none
@@ -123,7 +119,6 @@ cronJobs:
     name: Captain daily EOD wrap
     schedule:
       cron: "45 17 * * 1-5"
-      timezone: America/Detroit
     session: isolated
     delivery:
       mode: none
@@ -132,7 +127,6 @@ cronJobs:
     name: Action summary reporting
     schedule:
       cron: "30 18 * * *"
-      timezone: America/Detroit
     session: isolated
     delivery:
       mode: none

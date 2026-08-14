@@ -410,7 +410,7 @@ def main():
     p_rank.add_argument("--critical-paths",
                         default=str(ROOT / "data" / "critical-paths.json"))
     p_rank.add_argument("--date",
-                        default=datetime.now(daily_context.TZ).date().isoformat())
+                        default=datetime.now().astimezone().date().isoformat())
 
     p_set = sub.add_parser("set", help="persist the top-2 that was actually sent")
     p_set.add_argument("--db", default=str(DEFAULT_DB))

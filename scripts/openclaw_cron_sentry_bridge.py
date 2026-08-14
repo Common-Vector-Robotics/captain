@@ -27,7 +27,6 @@ MONITOR_CONFIG = {
     "schedule": {"type": "interval", "value": 10, "unit": "minute"},
     "checkin_margin": 10,
     "max_runtime": 5,
-    "timezone": "America/Detroit",
     "failure_issue_threshold": 1,
     "recovery_threshold": 1,
 }

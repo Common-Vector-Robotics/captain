@@ -14,9 +14,8 @@ import argparse
 import json
 import shutil
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import captain_telemetry
 
@@ -27,8 +26,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from captain_db import DB as DEFAULT_DB  # noqa: E402
 import blocker_ledger  # noqa: E402
 import daily_cycle  # noqa: E402
-
-TZ = ZoneInfo("America/Detroit")
 
 # ClickUp may describe a finished task by either its display name or its broad
 # status type. Both sets are checked before a task is included in the report.
@@ -61,7 +58,7 @@ def is_open(task):
 
 
 def due_local_date(task):
-    """Return a task's due date in Detroit, or ``None`` when unavailable.
+    """Return a task's due date in the host timezone, or ``None`` when unavailable.
 
     ClickUp stores due dates as Unix time in milliseconds. Missing and ordinary
     non-numeric values return ``None``; timestamps outside the host platform's
@@ -72,7 +69,10 @@ def due_local_date(task):
         return None
 
     try:
-        return datetime.fromtimestamp(int(raw) / 1000.0, tz=TZ).date()
+        return datetime.fromtimestamp(
+            int(raw) / 1000.0,
+            tz=timezone.utc,
+        ).astimezone().date()
     except (TypeError, ValueError):
         return None
 
@@ -162,7 +162,7 @@ def main():
     ap = argparse.ArgumentParser(description="Captain morning context builder")
     ap.add_argument("--clickup", required=True)
     ap.add_argument("--db", default=str(DEFAULT_DB))
-    ap.add_argument("--date", default=datetime.now(TZ).date().isoformat())
+    ap.add_argument("--date", default=datetime.now().astimezone().date().isoformat())
     ap.add_argument("--critical-paths", default=str(ROOT / "data" / "critical-paths.json"))
     ap.add_argument("--snapshot-out")
     args = ap.parse_args()

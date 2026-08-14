@@ -39,7 +39,7 @@ def test_ingestion_cron_contract():
     block = _cron_block("meeting-transcript-reconciliation")
     assert "    name: Captain meeting transcript reconciliation\n" in block
     assert '      cron: "0 14 * * 1-5"\n' in block
-    assert "      timezone: America/Detroit\n" in block
+    assert "      timezone:" not in block
     assert "    session: isolated\n" in block
     assert "      mode: none\n" in block
     assert "meeting-transcript-clickup-reconciliation.md" in block
