@@ -249,18 +249,84 @@ nano data/meeting-ingestion.json
 python3 -m json.tool data/meeting-ingestion.json >/dev/null
 ```
 
-The configured `google_cli` defaults to `gog`. Authenticate `google_account` with only
-the Gmail, Drive, and Docs read scopes Captain needs:
+The configured `google_cli` defaults to `gog`. Choose the setup that matches the
+computer running Captain.
+
+#### Desktop computer
+
+If the computer has a desktop session and an unlocked login keychain, authenticate
+`google_account` with only the Gmail, Drive, and Docs read scopes Captain needs:
 
 ```bash
 gog auth add captain@example.com --services gmail,drive,docs --readonly --drive-scope readonly
 ```
 
-Validate both the refresh token and its stored scopes non-interactively:
+Then validate the login and its stored scopes:
 
 ```bash
 gog auth list --check --account captain@example.com --no-input --json
 ```
+
+#### Server without a desktop
+
+On a server without a desktop or unlocked login keychain, keep the file-keyring
+password in Captain's private `.secrets` directory. From Captain's installed workspace:
+
+```bash
+mkdir -p .secrets
+chmod 700 .secrets
+nano .secrets/gog-keyring.env
+```
+
+Add these two lines, replacing the example password with a strong password:
+
+```text
+GOG_KEYRING_BACKEND=file
+GOG_KEYRING_PASSWORD=replace-with-a-strong-password
+```
+
+Protect the file so only your user account can read it:
+
+```bash
+chmod 600 .secrets/gog-keyring.env
+```
+
+Next, create a private wrapper that loads those settings before it runs `gog`:
+
+```bash
+nano .secrets/captain-gog
+```
+
+Paste this into the wrapper:
+
+```sh
+#!/bin/sh
+set -a
+. "$(dirname "$0")/gog-keyring.env"
+set +a
+exec gog "$@"
+```
+
+Make the wrapper executable, select the encrypted file keyring, and authenticate:
+
+```bash
+chmod 500 .secrets/captain-gog
+./.secrets/captain-gog auth keyring file
+./.secrets/captain-gog auth add captain@example.com \
+  --services gmail,drive,docs --readonly --drive-scope readonly
+./.secrets/captain-gog auth list --check \
+  --account captain@example.com --no-input --json
+```
+
+Print the wrapper's absolute path:
+
+```bash
+python3 -c 'from pathlib import Path; print(Path(".secrets/captain-gog").resolve())'
+```
+
+Copy the printed path into the `google_cli` field in
+`data/meeting-ingestion.json`. This keeps the keyring password available only to
+Captain's Google commands instead of every process started by OpenClaw.
 
 In the returned JSON, locate exactly one record for `captain@example.com`, require
 `valid: true`, and require its `scopes` set to contain exactly:
@@ -276,12 +342,8 @@ If broader historical grants appear, you can remove the token with
 `gog auth remove captain@example.com`, and revoke the application's prior grants in
 Google Account security.
 
-If Captain runs on a server without a desktop or unlocked login keychain, run
-`gog auth keyring file` to store its Google login in an encrypted file. Set
-`GOG_KEYRING_BACKEND=file` for the Captain service so it continues using that file. The
-file is protected by `GOG_KEYRING_PASSWORD`; store this password in a private service
-environment file or secret manager. Never save the password in this repository, type it
-as a command-line argument, or allow it to appear in shell history or logs.
+Never commit `.secrets/gog-keyring.env`, type its password as a command-line
+argument, or allow the password to appear in shell history or logs.
 
 Do not put a password, OAuth token, or client secret in `meeting-ingestion.json`. The
 scheduled job never starts an interactive OAuth flow. `sender`, `subject_prefixes`, and
