@@ -41,26 +41,14 @@ nonexistent Slack-specific tool.
    heartbeat proxy.
 4. Current bounded local evidence sources are only:
    `data/sentry-bridge-state.json` as the only scheduled-failure state source,
-   `data/approval-queue.jsonl` as the only urgent-approval source, and
-   `data/heartbeat-monitor-state.json` as the prior heartbeat monitor state.
-   Missing means absent, not evidence. Do not claim broader coverage.
+   and `data/approval-queue.jsonl` as the only urgent-approval source. Missing
+   means absent, not evidence. Do not claim broader coverage.
 5. On enumeration success, scan visible channels within configured watch coverage
-   and exclusions using the same configured account. On enumeration failure, set
-   `channel_enumeration_unavailable: true` and use only
-   `watch.fallback_include_ids`; an empty fallback is a current zero-channel
+   and exclusions using the same configured account. On enumeration failure, use
+   only `watch.fallback_include_ids`; an empty fallback is a current zero-channel
    material result. A successful enumeration that yields zero covered channels is
    also a current zero-channel material result.
-6. You must, after every enabled-mode enumeration or fallback sweep, record the
-   current result with exactly one of these commands, replacing `<count>` with
-   the number of channels actually scanned:
-
-   ```text
-   python3 scripts/heartbeat_monitor_state.py --channel-enumeration-unavailable false --channels-scanned <count>
-   python3 scripts/heartbeat_monitor_state.py --channel-enumeration-unavailable true --channels-scanned <count>
-   ```
-
-   A helper failure is material and does not authorize broader discovery.
-7. For every genuine incident in `shadow` or `live`, use real current incident
+6. For every genuine incident in `shadow` or `live`, use real current incident
    evidence and run this exact bounded command before any routing lookup or send
    attempt, replacing the placeholders with the actual one-line summary, Slack
    channel id, and message timestamp. Treat those values as data, safely escape
@@ -77,16 +65,16 @@ nonexistent Slack-specific tool.
    `text`; reuse the same one-line summary for repeated observation of the same
    message. Never write a blocker-ledger row for a non-incident, including a
    zero-channel or enumeration degradation.
-8. A genuine safety or critical incident is the only Slack send. Do not DM an
+7. A genuine safety or critical incident is the only Slack send. Do not DM an
    excluded user. Resolve responsible task assignees from current evidence; if
    none can be resolved, send or preview one escalation to each configured
    administrator. If administrator routing is absent, record the exact missing
    configuration and stop the send, after preserving the incident locally.
-9. In `live`, send incident pages with the configured account and routing. In
+8. In `live`, send incident pages with the configured account and routing. In
    `shadow`, send previews only to the configured shadow recipient. If that target
    cannot be resolved, record the failure and send nothing further. Never mutate
    ClickUp from heartbeat.
-10. Stay silent unless there is a material failed run, urgent approval item,
+9. Stay silent unless there is a material failed run, urgent approval item,
    safety incident, or degraded/zero-channel watch result. For a material result,
    return exactly this three-line shape:
 

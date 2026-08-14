@@ -26,8 +26,6 @@ workspace:
       path: tests/test_openclaw_cron_sentry_bridge.py
     - source: tests/test_render_sentry_launchd.py
       path: tests/test_render_sentry_launchd.py
-    - source: tests/test_heartbeat_monitor_state.py
-      path: tests/test_heartbeat_monitor_state.py
     - source: data/captain-modes.example.json
       path: data/captain-modes.example.json
     - source: data/captain-channels.example.json
@@ -58,8 +56,6 @@ workspace:
       path: scripts/openclaw_cron_sentry_bridge.py
     - source: scripts/render_sentry_launchd.py
       path: scripts/render_sentry_launchd.py
-    - source: scripts/heartbeat_monitor_state.py
-      path: scripts/heartbeat_monitor_state.py
     - source: scripts/clickup_credentials.py
       path: scripts/clickup_credentials.py
     - source: scripts/clickup_write.py

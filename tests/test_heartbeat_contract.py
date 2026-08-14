@@ -116,29 +116,16 @@ def test_enabled_heartbeat_uses_only_bounded_current_evidence_sources():
     assert "the only scheduled-failure state source" in enabled
     assert "`data/approval-queue.jsonl`" in enabled
     assert "the only urgent-approval source" in enabled
-    assert "`data/heartbeat-monitor-state.json`" in enabled
     assert "Missing means absent, not evidence" in enabled
     assert "Do not claim broader coverage" in enabled
 
 
-def test_enabled_heartbeat_enumeration_fallback_and_state_update_are_exact():
+def test_enabled_heartbeat_enumeration_fallback_is_exact():
     enabled = " ".join(_enabled_behavior().split())
 
     assert "On enumeration success, scan visible channels within configured watch coverage" in enabled
-    assert "channel_enumeration_unavailable: true" in enabled
     assert "use only `watch.fallback_include_ids`" in enabled
     assert "an empty fallback is a current zero-channel material result" in enabled
-    assert (
-        "python3 scripts/heartbeat_monitor_state.py "
-        "--channel-enumeration-unavailable false --channels-scanned <count>"
-        in enabled
-    )
-    assert (
-        "python3 scripts/heartbeat_monitor_state.py "
-        "--channel-enumeration-unavailable true --channels-scanned <count>"
-        in enabled
-    )
-    assert "after every enabled-mode enumeration or fallback sweep" in enabled
 
 
 def test_material_heartbeat_output_is_evidence_led_and_sends_only_incidents():

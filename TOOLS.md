@@ -84,9 +84,6 @@ timestamped paraphrases as evidence.
   rendering above: `SlackNameResolver` resolves a Slack user id to `Name (Uxxxxxxxx)` via
   `admin_recipients` in `data/captain-channels.json`, then `data/slack-user-cache.json`, then
   falls back to the bare id — never fabricating a name.
-- `scripts/heartbeat_monitor_state.py --channel-enumeration-unavailable true|false
-  --channels-scanned <count>` — atomically records one bounded heartbeat sweep.
-
 ## ClickUp batch writes
 
 Use one batch command rather than a shell loop. The JSON input is an array (or an object with an `operations` array) of `create-task`, `update-task`, or `comment-task` objects. Every object needs an `operation_id` so the result can identify the safe retry subset.

@@ -14,8 +14,6 @@ data/clickup-tasks.json
 data/critical-paths.json
 data/meeting-transcript-clickup-reconciliation-state.json
 data/sentry-bridge-state.json
-data/heartbeat-monitor-state.json
-data/.heartbeat-monitor-state.json.*.tmp
 
 # Local config derived from the tracked *.example.json files
 data/captain-channels.json
