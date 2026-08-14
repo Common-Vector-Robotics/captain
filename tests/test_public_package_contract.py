@@ -60,6 +60,14 @@ def test_setup_fails_closed_when_daily_reporting_routing_is_missing():
         assert "Do not continue until this prints" in document
 
 
+def test_bootstrap_creates_local_memory_and_user_files_without_overwriting():
+    bootstrap = (ROOT / "BOOTSTRAP.md").read_text(encoding="utf-8")
+    assert "for file in MEMORY.md USER.md" in bootstrap
+    assert 'if [ ! -e "$file" ]' in bootstrap
+    assert 'install -m 600 /dev/null "$file"' in bootstrap
+    assert "Preserve existing files; never replace them" in bootstrap
+
+
 def test_claw_sources_are_in_the_package_file_list():
     package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
     packaged = set(package["files"])

@@ -62,13 +62,15 @@ reverify the prompt after every Claw update before restarting Captain; do not re
 to make agent state appear unmodified. Continue only after the command prints the verified
 SHA-256. Any error or mismatch is a fail-closed stop.
 
-Create a blank local `MEMORY.md` for Captain to maintain. Preserve an existing
-memory file; never replace it during installation or an update.
+Create blank local `MEMORY.md` and `USER.md` files for Captain to maintain.
+Preserve existing files; never replace them during installation or an update.
 
 ```bash
-if [ ! -e MEMORY.md ]; then
-  install -m 600 /dev/null MEMORY.md
-fi
+for file in MEMORY.md USER.md; do
+  if [ ! -e "$file" ]; then
+    install -m 600 /dev/null "$file"
+  fi
+done
 ```
 
 1. Install Python requirements:
