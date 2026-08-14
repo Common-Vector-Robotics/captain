@@ -69,7 +69,11 @@ def load_modes():
 
 
 def save_modes(modes):
-    """Atomically replace the saved operating-mode file with owner-only access."""
+    """Atomically replace the saved operating-mode file with owner-only access.
+
+    Input example: {"DailyLoop": {"audience": "live", "updated_at": "2023-10-01T12:00:00Z"}}
+    Returns: None
+    """
 
     MODE_PATH.parent.mkdir(parents=True, exist_ok=True)
     temporary = MODE_PATH.with_suffix(".tmp")
