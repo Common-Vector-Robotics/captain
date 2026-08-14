@@ -84,12 +84,13 @@ def test_setup_docs_install_and_verify_operator_heartbeat_prompt_fail_closed():
 
     for document in (readme, bootstrap):
         normalized = " ".join(document.split())
-        assert "lightweight OpenClaw mode" in normalized
         assert "python3 scripts/install_heartbeat_policy.py" in normalized
         assert "after every Claw update" in normalized
         assert "locally modified" in normalized
         assert "heartbeat and scheduled jobs disabled" in normalized
         assert 'policy_path = Path("HEARTBEAT.md")' not in document
+
+    assert "lightweight OpenClaw mode" in " ".join(bootstrap.split())
 
     script = (ROOT / "scripts" / "install_heartbeat_policy.py").read_text(encoding="utf-8")
     assert 'CONFIG_PATH = "agents.entries.captain.heartbeat.prompt"' in script

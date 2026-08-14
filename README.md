@@ -95,10 +95,6 @@ flowchart TB
 
 Captain is packaged as an OpenClaw Claw (note: `.claw` packages are still experimental). It installs Captain as a new agent with six scheduled jobs plus one Claw-managed hourly heartbeat in every `DailyLoop` mode, including `off`. The five weekday operational jobs remain off until you configure them locally. Heartbeat routing still uses the configured `captain` Slack binding.
 
-Captain's heartbeat uses a lightweight OpenClaw mode. After installing Captain,
-you will run one included setup command that gives OpenClaw Captain's heartbeat
-safety rules and verifies that they were copied correctly.
-
 ### Prerequisites
 
 - A working [OpenClaw installation](https://docs.openclaw.ai/) with its Gateway and Slack channel configured
