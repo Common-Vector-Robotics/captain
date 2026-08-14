@@ -647,7 +647,10 @@ def main(argv=None, root=None, cron_list_fn=None, cron_runs_fn=None, send_fn=Non
         send_fn = send_fn or _default_send_fn(openclaw_bin)
         target = resolve_activity_digest_channel(channels_cfg)
         account = resolve_slack_account(channels_cfg)
+
+        # Refuse to guess routing; a fallback could use the wrong Slack app or channel.
         if not target or not account:
+            # Report every missing key together so the operator can fix config once.
             missing = []
             if not target:
                 missing.append("data/captain-channels.json:activity_digest_channel")
