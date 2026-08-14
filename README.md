@@ -570,11 +570,14 @@ python3 -m pytest tests/test_openclaw_cron_sentry_bridge.py -v
 python3 scripts/openclaw_cron_sentry_bridge.py --dry-run
 ```
 
-### 4. Run the bridge automatically on macOS (optional)
+### 4. Run the bridge automatically (optional)
 
-The renderer generates a private plist using your workspace and Python paths;
-it does not install or modify any host configuration itself. From the Captain
-workspace, run:
+The renderer uses launchd on macOS and systemd user units on Linux. It writes
+service files using your workspace and Python paths, but does not activate them.
+
+#### macOS
+
+From the Captain workspace, run:
 
 ```bash
 # launchd needs the log directory before the bridge starts.
@@ -598,6 +601,30 @@ every 10 minutes. To stop it later, run:
 ```bash
 launchctl bootout "gui/$(id -u)" \
   "$HOME/Library/LaunchAgents/ai.openclaw.captain-sentry-bridge.plist"
+```
+
+#### Linux
+
+From the Captain workspace, run:
+
+```bash
+UNIT_DIR="$HOME/.config/systemd/user"
+python3 scripts/render_sentry_launchd.py \
+  --platform linux \
+  --workspace "$PWD" \
+  --python "$(command -v python3)" \
+  --output "$UNIT_DIR"
+
+systemctl --user daemon-reload
+systemctl --user enable --now ai.openclaw.captain-sentry-bridge.timer
+```
+
+The timer runs the bridge immediately and then 10 minutes after each completed
+run. Inspect it with `journalctl --user -u ai.openclaw.captain-sentry-bridge`.
+To stop it later, run:
+
+```bash
+systemctl --user disable --now ai.openclaw.captain-sentry-bridge.timer
 ```
 
 ### Turning telemetry off
