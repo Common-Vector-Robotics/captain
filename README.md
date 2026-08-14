@@ -276,10 +276,12 @@ If broader historical grants appear, you can remove the token with
 `gog auth remove captain@example.com`, and revoke the application's prior grants in
 Google Account security.
 
-For a headless service, `gog auth keyring file` selects the encrypted file keyring;
-`GOG_KEYRING_BACKEND=file` can enforce that backend. Inject `GOG_KEYRING_PASSWORD` from
-an owner-only service environment or secret manager. Never put its value in this file,
-tracked configuration, command-line arguments, shell history, or logs.
+If Captain runs on a server without a desktop or unlocked login keychain, run
+`gog auth keyring file` to store its Google login in an encrypted file. Set
+`GOG_KEYRING_BACKEND=file` for the Captain service so it continues using that file. The
+file is protected by `GOG_KEYRING_PASSWORD`; store this password in a private service
+environment file or secret manager. Never save the password in this repository, type it
+as a command-line argument, or allow it to appear in shell history or logs.
 
 Do not put a password, OAuth token, or client secret in `meeting-ingestion.json`. The
 scheduled job never starts an interactive OAuth flow. `sender`, `subject_prefixes`, and
