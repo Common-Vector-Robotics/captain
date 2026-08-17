@@ -48,6 +48,7 @@ IMMUTABLE_STORED_STATUSES = {
 }
 RESERVED_INPUT_KEYS = {
     "access_token",
+    "auth",
     "authentication",
     "authenticated_email",
     "authenticated_user",
@@ -58,6 +59,10 @@ RESERVED_INPUT_KEYS = {
     "identity_claims",
     "user_claims",
 }
+
+
+class _ProcessStartError(Exception):
+    """The real subprocess adapter could not start OpenClaw."""
 
 
 def _redact_external_text(value: str) -> str:
@@ -252,7 +257,7 @@ def build_status_update_prompt(
 
 Process this report with your normal PM capabilities. Use normal PM judgment to identify what changed, what is missing, who owns it, and what decision or action is needed. Audit every ClickUp write. Do not claim identity, authentication, hosted services, or actions that are not supported by the supplied evidence.
 
-Do not invoke `/captain`; do not load or invoke the `captain` skill; and do not call `captain_session_report` or `captain__captain_session_report`. Those are sender-side reporting entrypoints, and invoking them here would recurse. Process the supplied report yourself and return the required JSON directly.
+Do not invoke `/captain`; do not load or invoke the `captain` skill; and do not call `captain_session_report`, `Captain:captain_session_report`, or `captain__captain_session_report`. Those are sender-side reporting entrypoints, and invoking them here would recurse. Process the supplied report yourself and return the required JSON directly.
 
 Return JSON only, matching this public result contract:
 {{
@@ -314,15 +319,18 @@ def run_openclaw_agent(
     prompt: str,
     timeout_seconds: int,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        list(command),
-        input=prompt,
-        capture_output=True,
-        text=True,
-        timeout=timeout_seconds + 30,
-        check=False,
-        shell=False,
-    )
+    try:
+        return subprocess.run(
+            list(command),
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds + 30,
+            check=False,
+            shell=False,
+        )
+    except OSError as error:
+        raise _ProcessStartError(error) from error
 
 
 def _json_object_from_text(value: str) -> Mapping[str, Any] | None:
@@ -475,7 +483,7 @@ def invoke_openclaw(
         completed = runner(command, prompt, timeout)
     except subprocess.TimeoutExpired as error:
         return _unknown_outcome(report_id, "OpenClaw timed out", error)
-    except OSError as error:
+    except _ProcessStartError as error:
         return canonical_result(
             report_id,
             "needs_configuration",
@@ -567,7 +575,16 @@ def _claim_report(
                     (report_id,),
                 ).fetchone()
 
-                if row is None:
+                if report_id in _ACTIVE_REPORT_IDS:
+                    outcome = (
+                        False,
+                        canonical_result(
+                            report_id,
+                            "queued",
+                            captain_feedback="This report is already processing.",
+                        ),
+                    )
+                elif row is None:
                     now = _now()
                     connection.execute(
                         """
@@ -606,15 +623,6 @@ def _claim_report(
                         outcome = (
                             False,
                             CaptainReportResult.model_validate_json(stored_result),
-                        )
-                    elif stored_status == "processing" and report_id in _ACTIVE_REPORT_IDS:
-                        outcome = (
-                            False,
-                            canonical_result(
-                                report_id,
-                                "queued",
-                                captain_feedback="This report is already processing.",
-                            ),
                         )
                     else:
                         result = canonical_result(

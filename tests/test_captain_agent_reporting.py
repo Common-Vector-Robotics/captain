@@ -137,6 +137,33 @@ def test_validation_rejects_reserved_auth_metadata_nested_in_tuple():
 
 
 @pytest.mark.parametrize(
+    ("object_name", "report", "metadata", "secret"),
+    [
+        (
+            "report",
+            {**VALID_REPORT, "context": [{"auth": "report-secret"}]},
+            {"client": "codex"},
+            "report-secret",
+        ),
+        (
+            "metadata",
+            VALID_REPORT,
+            {"client": "codex", "nested": ({"auth": "metadata-secret"},)},
+            "metadata-secret",
+        ),
+    ],
+)
+def test_validation_rejects_exact_auth_key_recursively_without_reflection(
+    object_name, report, metadata, secret
+):
+    result = validate_report_input("report-1", report, metadata)
+
+    assert result.status == "failed"
+    assert object_name in result.captain_feedback
+    assert secret not in result.captain_feedback
+
+
+@pytest.mark.parametrize(
     "reserved_report",
     [
         {**VALID_REPORT, "context": [{"identityClaims": {"subject": "private"}}]},
@@ -169,6 +196,20 @@ def test_prompt_strips_reserved_claims_from_both_input_objects():
     assert "metadata-secret" not in prompt
 
 
+def test_prompt_strips_exact_auth_key_from_both_input_objects():
+    report = {**VALID_REPORT, "context": [{"auth": "report-secret"}]}
+    metadata = {
+        "client": "codex",
+        "nested": ({"auth": "metadata-secret"},),
+    }
+
+    prompt = build_status_update_prompt("report-1", report, metadata)
+
+    assert '"auth":' not in prompt
+    assert "report-secret" not in prompt
+    assert "metadata-secret" not in prompt
+
+
 def test_prompt_delimits_local_report_without_identity_claims():
     prompt = build_status_update_prompt(
         "report-1", VALID_REPORT, {"client": "codex", "repo": "captain"}
@@ -186,6 +227,7 @@ def test_prompt_forbids_recursive_captain_reporting_calls():
 
     assert "Do not invoke `/captain`" in prompt
     assert "do not load or invoke the `captain` skill" in prompt
+    assert "`Captain:captain_session_report`" in prompt
     assert "do not call `captain_session_report`" in prompt
     assert "`captain__captain_session_report`" in prompt
     assert "return the required JSON directly" in prompt
@@ -292,12 +334,14 @@ def test_timeout_after_dispatch_is_unknown():
     assert result.status == "unknown_outcome"
 
 
-def test_missing_openclaw_is_configuration_error():
-    def missing_runner(command, prompt, timeout):
+def test_missing_openclaw_in_real_adapter_is_configuration_error(monkeypatch):
+    def missing_subprocess(*args, **kwargs):
         raise FileNotFoundError("openclaw")
 
+    monkeypatch.setattr(reporting.subprocess, "run", missing_subprocess)
+
     result = reporting.invoke_openclaw(
-        "report-1", VALID_REPORT, {}, env={}, runner=missing_runner
+        "report-1", VALID_REPORT, {}, env={}
     )
     assert result.status == "needs_configuration"
 
@@ -309,15 +353,28 @@ def test_missing_openclaw_is_configuration_error():
         OSError(errno.ENOEXEC, "invalid executable format"),
     ],
 )
-def test_prelaunch_os_errors_are_configuration_errors(launch_error):
-    def failing_runner(command, prompt, timeout):
+def test_real_adapter_start_os_errors_are_configuration_errors(
+    monkeypatch, launch_error
+):
+    def failing_subprocess(*args, **kwargs):
         raise launch_error
 
-    result = reporting.invoke_openclaw(
-        "report-1", VALID_REPORT, {}, env={}, runner=failing_runner
-    )
+    monkeypatch.setattr(reporting.subprocess, "run", failing_subprocess)
+    result = reporting.invoke_openclaw("report-1", VALID_REPORT, {}, env={})
 
     assert result.status == "needs_configuration"
+    assert "external-secret" not in " ".join(result.warnings)
+
+
+def test_arbitrary_runner_oserror_after_dispatch_is_unknown():
+    def post_dispatch_runner(command, prompt, timeout):
+        raise OSError(errno.EIO, "write failed for token=external-secret")
+
+    result = reporting.invoke_openclaw(
+        "report-1", VALID_REPORT, {}, env={}, runner=post_dispatch_runner
+    )
+
+    assert result.status == "unknown_outcome"
     assert "external-secret" not in " ".join(result.warnings)
 
 
@@ -432,6 +489,18 @@ def _seed_stored_result(path, report_id, status):
             )
 
 
+def _stored_row(path, report_id):
+    with closing(sqlite3.connect(path)) as connection:
+        return connection.execute(
+            """
+            SELECT project, status, result_json, created_at, updated_at
+            FROM session_reports
+            WHERE report_id = ?
+            """,
+            (report_id,),
+        ).fetchone()
+
+
 def test_processing_report_in_this_process_returns_queued(tmp_path):
     path = tmp_path / "reports.sqlite3"
     _seed_processing(path, "report-1")
@@ -449,6 +518,49 @@ def test_processing_report_in_this_process_returns_queued(tmp_path):
         with reporting._ACTIVE_REPORTS_LOCK:
             reporting._ACTIVE_REPORT_IDS.discard("report-1")
     assert result.status == "queued"
+
+
+@pytest.mark.parametrize(
+    "retryable_status",
+    ["failed", "needs_configuration", "needs_clarification", "queued"],
+)
+def test_active_id_prevents_retryable_row_reclaim_until_marker_is_removed(
+    tmp_path, retryable_status
+):
+    path = tmp_path / "reports.sqlite3"
+    _seed_stored_result(path, "report-1", retryable_status)
+    original_row = _stored_row(path, "report-1")
+
+    with reporting._ACTIVE_REPORTS_LOCK:
+        reporting._ACTIVE_REPORT_IDS.add("report-1")
+    try:
+        claimed, result = reporting._claim_report(
+            path, "report-1", VALID_REPORT, {"client": "codex"}
+        )
+        active_row = _stored_row(path, "report-1")
+    finally:
+        with reporting._ACTIVE_REPORTS_LOCK:
+            reporting._ACTIVE_REPORT_IDS.discard("report-1")
+
+    assert claimed is False
+    assert result is not None
+    assert result.status == "queued"
+    assert active_row == original_row
+
+    try:
+        reclaimed, existing = reporting._claim_report(
+            path, "report-1", VALID_REPORT, {"client": "codex"}
+        )
+        reclaimed_row = _stored_row(path, "report-1")
+    finally:
+        with reporting._ACTIVE_REPORTS_LOCK:
+            reporting._ACTIVE_REPORT_IDS.discard("report-1")
+
+    assert reclaimed is True
+    assert existing is None
+    assert reclaimed_row[0:3] == ("Captain", "processing", None)
+    assert reclaimed_row[3] == original_row[3]
+    assert reclaimed_row[4] != original_row[4]
 
 
 def test_orphaned_processing_report_becomes_unknown(tmp_path):
