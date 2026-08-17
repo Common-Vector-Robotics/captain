@@ -7,6 +7,7 @@ sys.path.insert(0, str(ROOT / "agent-plugin"))
 
 from captain_agent.reporting import (
     CaptainReportResult,
+    MAX_REPORT_BYTES,
     build_status_update_prompt,
     canonical_result,
     validate_report_input,
@@ -64,6 +65,48 @@ def test_validation_rejects_more_than_one_megabyte():
     result = validate_report_input("report-1", report, {})
     assert result.status == "failed"
     assert "1,000,000" in result.captain_feedback
+
+
+def test_validation_accepts_report_at_exact_byte_limit():
+    metadata = {"client": "codex"}
+
+    def payload_size(summary_length):
+        report = {"summary": ["x" * summary_length]}
+        return sum(
+            len(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+            for value in (report, metadata)
+        )
+
+    low, high = 0, MAX_REPORT_BYTES
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        if payload_size(midpoint) <= MAX_REPORT_BYTES:
+            low = midpoint
+        else:
+            high = midpoint - 1
+    report = {"summary": ["x" * low]}
+    assert payload_size(low) == MAX_REPORT_BYTES
+    assert validate_report_input("report-1", report, metadata) is None
+
+
+def test_validation_rejects_nested_reserved_auth_metadata():
+    result = validate_report_input(
+        "report-1",
+        VALID_REPORT,
+        {"client": "codex", "context": {"authenticated_email": "user@example.com"}},
+    )
+    assert result.status == "failed"
+    assert "authentication" in result.captain_feedback
+
+
+def test_prompt_strips_reserved_auth_metadata():
+    prompt = build_status_update_prompt(
+        "report-1",
+        VALID_REPORT,
+        {"client": "codex", "nested": {"authorization": "Bearer secret"}},
+    )
+    assert "authorization" not in prompt
+    assert "Bearer secret" not in prompt
 
 
 def test_prompt_delimits_local_report_without_identity_claims():

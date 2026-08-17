@@ -20,6 +20,16 @@ ReportStatus = Literal[
 ALLOWED_STATUSES = set(ReportStatus.__args__)
 REPORT_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 MAX_REPORT_BYTES = 1_000_000
+RESERVED_METADATA_KEYS = {
+    "access_token",
+    "authenticated_email",
+    "authenticated_user",
+    "authorization",
+    "auth_claims",
+    "identity",
+    "identity_claims",
+    "user_claims",
+}
 
 
 class CaptainReportResult(BaseModel):
@@ -63,6 +73,47 @@ def _summary_lines(report: Mapping[str, Any]) -> list[str]:
     return []
 
 
+def _is_reserved_metadata_key(key: Any) -> bool:
+    if not isinstance(key, str):
+        return False
+    normalized = re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
+    return (
+        normalized in RESERVED_METADATA_KEYS
+        or normalized.startswith("authenticated_")
+        or normalized.startswith("authorization_")
+        or normalized.startswith("auth_")
+        or normalized.endswith("_claims")
+    )
+
+
+def _reserved_metadata_key(value: Any) -> str | None:
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            if _is_reserved_metadata_key(key):
+                return str(key)
+            found = _reserved_metadata_key(nested)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for nested in value:
+            found = _reserved_metadata_key(nested)
+            if found:
+                return found
+    return None
+
+
+def _strip_reserved_metadata(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            key: _strip_reserved_metadata(nested)
+            for key, nested in value.items()
+            if not _is_reserved_metadata_key(key)
+        }
+    if isinstance(value, list):
+        return [_strip_reserved_metadata(nested) for nested in value]
+    return value
+
+
 def validate_report_input(
     report_id: Any,
     report: Any,
@@ -87,12 +138,20 @@ def validate_report_input(
             "needs_clarification",
             captain_feedback="metadata must be an object.",
         )
-    payload_size = len(
-        json.dumps(
-            {"report": report, "metadata": metadata},
-            ensure_ascii=False,
-            sort_keys=True,
-        ).encode("utf-8")
+    reserved_key = _reserved_metadata_key(metadata)
+    if reserved_key:
+        return canonical_result(
+            report_id,
+            "failed",
+            captain_feedback=(
+                f"metadata contains reserved authentication field {reserved_key!r}."
+            ),
+        )
+    payload_size = sum(
+        len(
+            json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        )
+        for value in (report, metadata)
     )
     if payload_size > MAX_REPORT_BYTES:
         return canonical_result(
@@ -116,7 +175,12 @@ def build_status_update_prompt(
     metadata: Mapping[str, Any],
 ) -> str:
     report_json = json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False)
-    metadata_json = json.dumps(metadata, indent=2, sort_keys=True, ensure_ascii=False)
+    metadata_json = json.dumps(
+        _strip_reserved_metadata(metadata),
+        indent=2,
+        sort_keys=True,
+        ensure_ascii=False,
+    )
     return f"""You are Captain preparing a local `/captain` status update for a user-operated workspace.
 
 Use normal PM judgment to identify what changed, what is missing, who owns it, and what decision or action is needed. Audit every ClickUp write. Do not claim identity, authentication, hosted services, or actions that are not supported by the supplied evidence.
