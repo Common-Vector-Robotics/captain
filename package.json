@@ -13,6 +13,8 @@
     "AGENTS.md",
     "HEARTBEAT.md",
     "TOOLS.md",
+    ".agents/plugins/marketplace.json",
+    "agent-plugin",
     "requirements.txt",
     "fixtures/openclaw_cron_list_sample.json",
     "tests/test_openclaw_cron_sentry_bridge.py",

@@ -32,6 +32,10 @@ logs/
 memory/daily/
 reports/
 
+# Optional local Captain agent plugin environment and state
+agent-plugin/.venv/
+agent-plugin/*.sqlite3
+
 # macOS
 .DS_Store
 

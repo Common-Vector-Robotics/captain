@@ -40,6 +40,8 @@ def is_gitignored(path: str) -> bool:
         "data/captain.sqlite-journal",
         "data/captain.sqlite-wal",
         "data/captain.sqlite-shm",
+        "agent-plugin/.venv/bin/python",
+        "agent-plugin/local.sqlite3",
         "logs/captain.log",
         "memory/daily/2026-08-13.md",
         "reports/daily-activity.md",

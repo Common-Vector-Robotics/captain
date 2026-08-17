@@ -4,14 +4,23 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PLACEHOLDER_IDS = {"U0123456789", "C0123456789"}
-TEXT_SUFFIXES = {".md", ".json", ".py", ".yml", ".yaml", ".plist"}
+TEXT_SUFFIXES = {".md", ".json", ".py", ".sh", ".yml", ".yaml", ".plist"}
 
 
 def product_text_paths():
     package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
-    paths = {ROOT / name for name in package["files"]}
-    paths.update({ROOT / "README.md", ROOT / "BOOTSTRAP.md"})
-    return sorted(path for path in paths if path.is_file() and path.suffix in TEXT_SUFFIXES)
+    paths = []
+    for name in package["files"]:
+        path = ROOT / name
+        if path.is_dir():
+            paths.extend(
+                child for child in path.rglob("*")
+                if child.is_file() and child.suffix in TEXT_SUFFIXES
+            )
+        elif path.is_file() and path.suffix in TEXT_SUFFIXES:
+            paths.append(path)
+    paths.extend((ROOT / "README.md", ROOT / "BOOTSTRAP.md"))
+    return sorted(set(paths))
 
 
 def test_product_files_contain_no_private_deployment_literals():

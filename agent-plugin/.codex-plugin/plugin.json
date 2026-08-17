@@ -1,0 +1,27 @@
+{
+  "name": "captain",
+  "version": "0.1.0",
+  "description": "Report local coding-agent work to your own Captain project manager.",
+  "author": {
+    "name": "Common Vector Robotics",
+    "url": "https://github.com/Common-Vector-Robotics"
+  },
+  "homepage": "https://github.com/Common-Vector-Robotics/captain",
+  "repository": "https://github.com/Common-Vector-Robotics/captain",
+  "license": "MIT",
+  "keywords": ["captain", "project-management", "mcp", "openclaw", "clickup"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Captain",
+    "shortDescription": "Report completed work to your local Captain agent",
+    "longDescription": "Use a local MCP server and the /captain skill to report completed coding-agent work to your own OpenClaw Captain agent. No CVR or Intermode service handles the report.",
+    "developerName": "Common Vector Robotics",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "websiteURL": "https://github.com/Common-Vector-Robotics/captain",
+    "defaultPrompt": ["Report this session to my local Captain agent"],
+    "brandColor": "#0F766E",
+    "screenshots": []
+  }
+}

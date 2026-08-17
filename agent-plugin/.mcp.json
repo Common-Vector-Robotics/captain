@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "captain": {
+      "command": "./bin/captain-agent-mcp",
+      "args": [],
+      "cwd": "."
+    }
+  }
+}
