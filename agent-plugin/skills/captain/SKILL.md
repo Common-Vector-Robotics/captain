@@ -1,6 +1,6 @@
 ---
 name: captain
-description: Use when the user asks to report completed coding-agent work to their local Captain project manager.
+description: Use when the user asks to report completed coding-agent work to their Captain project manager.
 ---
 
 # Report coding work to Captain
@@ -82,7 +82,7 @@ Safe retry guidance: <guidance>
 | Result status | Header | Safe retry guidance |
 | --- | --- | --- |
 | `created`, `updated`, `partial` | `CAPTAIN REPORT SENT` | Follow Captain's questions or warnings; do not send a duplicate report. |
-| `needs_clarification`, `needs_configuration` | `CAPTAIN REPORT NOT SENT` | Resolve the listed questions or local configuration, then reuse the same `report_id`. |
+| `needs_clarification`, `needs_configuration` | `CAPTAIN REPORT NOT SENT` | Resolve the listed questions or OpenClaw configuration, then reuse the same `report_id`. |
 | `failed` | `CAPTAIN REPORT FAILED` | Correct the reported failure, then retry with the same `report_id` when safe. |
 | `unknown_outcome` | `CAPTAIN OUTCOME UNKNOWN` | Do not claim success or auto-dispatch. Check ClickUp first; this ID safely replays the stored uncertainty rather than dispatching again. |
 

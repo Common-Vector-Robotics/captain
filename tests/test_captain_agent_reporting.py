@@ -212,11 +212,11 @@ def test_prompt_strips_exact_auth_key_from_both_input_objects():
     assert "metadata-secret" not in prompt
 
 
-def test_prompt_delimits_local_report_without_identity_claims():
+def test_prompt_delimits_user_operated_report_without_identity_claims():
     prompt = build_status_update_prompt(
         "report-1", VALID_REPORT, {"client": "codex", "repo": "captain"}
     )
-    assert "local `/captain` status update" in prompt
+    assert "user-operated `/captain` status update" in prompt
     assert "report-1" in prompt
     assert "Audit every ClickUp write." in prompt
     assert "authenticated_email" not in prompt

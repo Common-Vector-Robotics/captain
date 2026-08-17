@@ -1,9 +1,9 @@
-"""Validate, dispatch, and replay local Captain session reports.
+"""Validate, dispatch, and replay Captain session reports.
 
 The public MCP tool calls :func:`handle_session_report`. This module rejects or
 strips reserved authentication, authorization, identity, and claims fields,
-runs one local OpenClaw turn, normalizes its reply, and stores enough local
-state to make retries idempotent.
+runs one OpenClaw turn through the local CLI, normalizes its reply, and stores
+enough local state to make retries idempotent.
 """
 
 from __future__ import annotations
@@ -298,7 +298,7 @@ def build_status_update_prompt(
         sort_keys=True,
         ensure_ascii=False,
     )
-    return f"""You are Captain preparing a local `/captain` status update for a user-operated workspace.
+    return f"""You are Captain preparing a user-operated `/captain` status update.
 
 Process this report with your normal PM capabilities. Use normal PM judgment to identify what changed, what is missing, who owns it, and what decision or action is needed. Audit every ClickUp write. Do not claim identity, authentication, hosted services, or actions that are not supported by the supplied evidence.
 
@@ -337,7 +337,7 @@ def build_openclaw_command(
     report_id: str,
     env: Mapping[str, str],
 ) -> tuple[list[str], int]:
-    """Build the local OpenClaw command and return its effective timeout."""
+    """Build the OpenClaw CLI command and return its effective timeout."""
 
     timeout = _timeout_seconds(env)
     command = str(env.get("CAPTAIN_AGENT_OPENCLAW_COMMAND", "")).strip()
@@ -368,7 +368,7 @@ def run_openclaw_agent(
     prompt: str,
     timeout_seconds: int,
 ) -> subprocess.CompletedProcess[str]:
-    """Run one local OpenClaw turn without invoking a shell.
+    """Run one OpenClaw turn through the local CLI without invoking a shell.
 
     Process construction is deliberately separate from communication. A start
     error proves that nothing ran, while an error after ``Popen`` succeeds has
@@ -576,7 +576,7 @@ def invoke_openclaw(
     env: Mapping[str, str],
     runner: Runner = run_openclaw_agent,
 ) -> CaptainReportResult:
-    """Validate, dispatch, and normalize one local OpenClaw request.
+    """Validate, dispatch, and normalize one OpenClaw request.
 
     Only a process-start failure is known to be safe to retry immediately.
     Every failure after launch becomes ``unknown_outcome`` because Captain may

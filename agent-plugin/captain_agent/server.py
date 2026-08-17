@@ -1,4 +1,4 @@
-"""MCP stdio entrypoint for local Captain session reports."""
+"""MCP stdio entrypoint for Captain session reports."""
 
 from typing import Any
 
@@ -9,7 +9,7 @@ from .reporting import CaptainReportResult, handle_session_report
 mcp = MCPServer(
     "Captain",
     instructions=(
-        "Report completed coding-agent work to the user's local Captain agent."
+        "Report completed coding-agent work to the user's configured Captain agent."
     ),
 )
 
@@ -20,7 +20,7 @@ def captain_session_report(
     report: dict[str, Any],
     metadata: dict[str, Any],
 ) -> CaptainReportResult:
-    """Send one idempotent, redacted session report to local Captain."""
+    """Send one idempotent, redacted session report to Captain."""
 
     return handle_session_report(report_id, report, metadata)
 

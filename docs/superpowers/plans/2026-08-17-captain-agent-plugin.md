@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship a local-only `/captain` Codex/OpenClaw plugin that reports coding-agent work to the user's own Captain agent over MCP `stdio`, then open a pull request into `Common-Vector-Robotics/captain:main`.
+**Goal:** Ship a user-operated `/captain` Codex/OpenClaw plugin that reports coding-agent work through the user's configured OpenClaw Gateway over MCP `stdio`, then open a pull request into `Common-Vector-Robotics/captain:main`.
 
-**Architecture:** A Codex-format bundle exposes one typed MCP tool. The tool validates a structured report, claims its identifier in a user-local SQLite database, invokes `openclaw agent --agent captain` without a shell, normalizes Captain's JSON response, and replays stored results without duplicate OpenClaw turns. A portable `SKILL.md` owns report gathering and user-facing output; Captain retains all ClickUp judgment and writes.
+**Architecture:** A Codex-format bundle exposes one typed MCP tool. The tool validates a structured report, claims its identifier in a user-local SQLite database, invokes the local OpenClaw CLI without a shell, and lets that CLI route through its configured local or remote Gateway. It normalizes Captain's JSON response and replays stored results without duplicate OpenClaw turns. A portable `SKILL.md` owns report gathering and user-facing output; Captain retains all ClickUp judgment and writes.
 
 **Tech Stack:** Python 3.10+, MCP Python SDK `mcp>=2,<3`, Pydantic v2, SQLite, pytest, POSIX shell launcher, Codex plugin marketplace manifests, OpenClaw CLI.
 
@@ -115,7 +115,7 @@ from captain_agent.reporting import (
 VALID_REPORT = {
     "project": "Captain",
     "context": {"cwd": "/work/captain", "branch": "feature"},
-    "summary": ["Implemented the local Captain agent plugin."],
+    "summary": ["Implemented the Captain agent plugin."],
     "changed_files": ["agent-plugin/captain_agent/reporting.py"],
     "verification": [{"command": "pytest", "result": "pass"}],
     "decisions": ["Use local MCP stdio only."],
@@ -165,11 +165,11 @@ def test_validation_rejects_more_than_one_megabyte():
     assert "1,000,000" in result.captain_feedback
 
 
-def test_prompt_delimits_local_report_without_identity_claims():
+def test_prompt_delimits_user_operated_report_without_identity_claims():
     prompt = build_status_update_prompt(
         "report-1", VALID_REPORT, {"client": "codex", "repo": "captain"}
     )
-    assert "local `/captain` status update" in prompt
+    assert "user-operated `/captain` status update" in prompt
     assert "report-1" in prompt
     assert "Audit every ClickUp write." in prompt
     assert "authenticated_email" not in prompt
@@ -302,7 +302,7 @@ def validate_report_input(
     return None
 ```
 
-Implement `build_status_update_prompt()` in the same file. It must describe a local user-operated report, include the exact output contract, embed `report_id`, `report`, and `metadata` as sorted indented JSON, instruct Captain to use normal PM judgment, audit every ClickUp write, and return JSON only. It must not include an email, hosted gateway, or authenticated-user claim. It must also tell terminal-recipient Captain not to invoke `/captain`, load the `captain` skill, or call either reporting-tool name; Captain processes the report with normal PM capabilities and returns the required JSON directly.
+Implement `build_status_update_prompt()` in the same file. It must describe a user-operated report, include the exact output contract, embed `report_id`, `report`, and `metadata` as sorted indented JSON, instruct Captain to use normal PM judgment, audit every ClickUp write, and return JSON only. It must not include an email, hosted gateway, or authenticated-user claim. It must also tell terminal-recipient Captain not to invoke `/captain`, load the `captain` skill, or call either reporting-tool name; Captain processes the report with normal PM capabilities and returns the required JSON directly.
 
 Create `agent-plugin/captain_agent/__init__.py`:
 
@@ -362,7 +362,7 @@ def test_openclaw_command_uses_safe_defaults_and_no_report_text():
         "--json", "--message-file", "-",
     ]
     assert timeout == 300
-    assert "Implemented the local Captain agent plugin" not in " ".join(command)
+    assert "Implemented the Captain agent plugin" not in " ".join(command)
 
 
 def test_openclaw_command_uses_bounded_environment_overrides():
@@ -901,7 +901,7 @@ Create `agent-plugin/.mcp.json` with the exact object asserted by the test. Crea
 {
   "name": "captain",
   "version": "0.1.0",
-  "description": "Report local coding-agent work to your own Captain project manager.",
+  "description": "Report coding-agent work to your own Captain project manager.",
   "author": {
     "name": "Common Vector Robotics",
     "url": "https://github.com/Common-Vector-Robotics"
@@ -914,13 +914,13 @@ Create `agent-plugin/.mcp.json` with the exact object asserted by the test. Crea
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Captain",
-    "shortDescription": "Report completed work to your local Captain agent",
-    "longDescription": "Use a local MCP server and the /captain skill to report completed coding-agent work to your own OpenClaw Captain agent.",
+    "shortDescription": "Report completed work to your Captain agent",
+    "longDescription": "Use the /captain skill and a local MCP server to report completed coding-agent work through your configured OpenClaw Gateway.",
     "developerName": "Common Vector Robotics",
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],
     "websiteURL": "https://github.com/Common-Vector-Robotics/captain",
-    "defaultPrompt": ["Report this session to my local Captain agent"],
+    "defaultPrompt": ["Report this session to my Captain agent"],
     "brandColor": "#0F766E",
     "screenshots": []
   }
@@ -978,7 +978,7 @@ Run `chmod 755 agent-plugin/bin/captain-agent-mcp`.
 Create `agent-plugin/captain_agent/server.py`:
 
 ```python
-"""MCP stdio entrypoint for local Captain session reports."""
+"""MCP stdio entrypoint for Captain session reports."""
 
 from typing import Any
 
@@ -989,7 +989,7 @@ from .reporting import CaptainReportResult, handle_session_report
 mcp = MCPServer(
     "Captain",
     instructions=(
-        "Report completed coding-agent work to the user's local Captain agent."
+        "Report completed coding-agent work to the user's configured Captain agent."
     ),
 )
 
@@ -1000,7 +1000,7 @@ def captain_session_report(
     report: dict[str, Any],
     metadata: dict[str, Any],
 ) -> CaptainReportResult:
-    """Send one idempotent, redacted session report to local Captain."""
+    """Send one idempotent, redacted session report to Captain."""
 
     return handle_session_report(report_id, report, metadata)
 
@@ -1018,7 +1018,7 @@ if __name__ == "__main__":
 Add `.agents/plugins/marketplace.json` and `agent-plugin` to `package.json#files`. Add these lines to `.gitignore`:
 
 ```text
-# Optional local Captain agent plugin environment and state
+# Optional Captain coding-agent plugin environment and local state
 agent-plugin/.venv/
 agent-plugin/*.sqlite3*
 ```
@@ -1072,7 +1072,7 @@ git add .agents agent-plugin/.codex-plugin agent-plugin/.mcp.json \
   agent-plugin/bin agent-plugin/captain_agent/server.py .gitignore package.json \
   tests/test_captain_agent_package.py tests/test_gitignore_privacy_contract.py \
   tests/test_public_package_contract.py
-git commit -m "feat: package Captain as a local agent plugin"
+git commit -m "feat: package the Captain agent plugin"
 ```
 
 ### Task 5: Add the `/captain` Skill and User Documentation
@@ -1102,9 +1102,11 @@ def test_captain_skill_uses_only_the_local_tool():
     assert "Google OAuth" not in skill
 
 
-def test_plugin_docs_make_the_local_data_path_explicit():
+def test_plugin_docs_make_the_gateway_topology_explicit():
     docs = (PLUGIN / "README.md").read_text(encoding="utf-8")
-    assert "coding agent → local MCP process → local Captain → ClickUp" in docs
+    assert "coding agent → local MCP process → local OpenClaw CLI" in docs
+    assert "configured Gateway → Captain → ClickUp" in docs
+    assert "Gateway and Captain agent can run on that machine or on a remote host" in docs
     assert "codex plugin marketplace add Common-Vector-Robotics/captain --ref main" in docs
     assert "codex plugin add captain@captain" in docs
     assert "openclaw plugins install ./agent-plugin" in docs
@@ -1123,7 +1125,7 @@ Create `agent-plugin/skills/captain/SKILL.md` with frontmatter:
 ```yaml
 ---
 name: captain
-description: Report this coding session to the user's local Captain agent so Captain can reconcile the work into ClickUp.
+description: Report this coding session to the user's Captain agent so Captain can reconcile the work into ClickUp.
 ---
 ```
 
@@ -1142,8 +1144,8 @@ Use the concise report object from the design spec. Do not include a user email 
 
 Create `agent-plugin/README.md` with:
 
-- the exact local data-path sentence asserted by the test;
-- prerequisites: local OpenClaw Gateway, installed `captain` agent, and either `uv` or Python 3 with nested requirements installed;
+- the exact local-MCP/configured-Gateway data path asserted by the test;
+- prerequisites: a local OpenClaw CLI configured for a local or remote Gateway with the `captain` agent installed, and either `uv` or Python 3 with nested requirements installed;
 - Codex marketplace commands from the test;
 - `openclaw plugins install ./agent-plugin` for a cloned repository;
 - generic MCP-host command `./agent-plugin/bin/captain-agent-mcp`;
@@ -1176,7 +1178,7 @@ Expected: all tests pass and the public scanner reports no private deployment li
 ```bash
 git add agent-plugin/skills agent-plugin/README.md README.md \
   tests/test_captain_agent_package.py
-git commit -m "docs: add local Captain reporting workflow"
+git commit -m "docs: add Captain reporting workflow"
 ```
 
 ### Task 6: Verify the Release and Open the GitHub Pull Request
@@ -1278,11 +1280,11 @@ gh pr create \
   --repo Common-Vector-Robotics/captain \
   --base main \
   --head codex/captain-agent-plugin \
-  --title "Add a local Captain agent plugin" \
+  --title "Add a Captain coding-agent plugin" \
   --body-file /tmp/captain-agent-plugin-pr.md
 ```
 
-Create `/tmp/captain-agent-plugin-pr.md` with `apply_patch` before running the command. The body must summarize the local-only architecture, one-tool MCP contract, idempotency and uncertainty behavior, installation paths, focused/full test counts, MCP Inspector result, and the explicit fact that no live ClickUp write was run unless separately authorized.
+Create `/tmp/captain-agent-plugin-pr.md` with `apply_patch` before running the command. The body must summarize the local MCP and CLI boundary, configured local-or-remote Gateway routing, one-tool MCP contract, idempotency and uncertainty behavior, installation paths, focused/full test counts, MCP Inspector result, and whether a live ClickUp write was separately authorized and run.
 
 - [ ] **Step 10: Inspect the PR and initial checks**
 

@@ -10,8 +10,8 @@ Add an open-source, user-operated agent plugin to Captain. The plugin lets an
 MCP-capable coding agent report completed work to the user's own Captain agent
 through a `/captain` skill.
 
-The plugin is a complete product by itself. There is no planned hosted or
-remote-HTTP version.
+The plugin is a complete product by itself. It uses the Gateway selected by the
+user's OpenClaw CLI rather than implementing its own network transport.
 
 ## Source and Delivery
 
@@ -32,17 +32,19 @@ The user owns and operates every Captain component:
 ```mermaid
 flowchart LR
     A["User's coding agent"] --> B["Local /captain skill"]
-    B --> C["Local MCP process over stdio"]
-    C --> D["User's OpenClaw Captain agent"]
-    D --> E["User's ClickUp workspace"]
+    B --> C["Local MCP process and OpenClaw CLI"]
+    C --> D["Configured Gateway (local or remote)"]
+    D --> E["User's Captain agent"]
+    E --> F["User's ClickUp workspace"]
+    F --> E
     E --> D
     D --> C
     C --> A
 ```
 
-The coding agent and MCP server run on the same machine. The MCP server opens no
-network listener. ClickUp and the user's selected model provider remain direct
-user-configured dependencies.
+The coding agent, MCP server, and OpenClaw CLI run on the same machine. The
+configured Gateway and Captain agent may run there or on a remote host. ClickUp
+and the user's selected model provider remain user-configured dependencies.
 
 ## User Experience
 
@@ -55,8 +57,9 @@ user-configured dependencies.
    `Captain:captain_session_report` in Codex or
    `captain__captain_session_report` in OpenClaw. It never guesses or calls
    both names.
-5. The MCP server sends the structured report to the local `captain` OpenClaw
-   agent and waits for its canonical response.
+5. The MCP server passes the structured report to the local OpenClaw CLI. The
+   CLI routes it through the configured Gateway to the `captain` agent and
+   waits for its canonical response.
 6. The skill renders the result, including any ClickUp changes, clarification
    questions, warnings, or uncertain outcome.
 
@@ -117,10 +120,10 @@ captain_session_report(report_id, report, metadata) -> CaptainReportResult
 
 The caller cannot supply authentication, authorization, identity, or claims
 fields in either `report` or `metadata`, including nested or camelCase forms.
-This is a single-user local integration, so the trust boundary is the MCP host
-process that launches the server. Captain may use report evidence to identify
-relevant work; it must ask for clarification rather than guess when identity or
-task mapping matters.
+This is a single-user integration. Its execution boundary includes the MCP host
+process, local OpenClaw CLI, and configured Gateway. Captain may use report
+evidence to identify relevant work; it must ask for clarification rather than
+guess when identity or task mapping matters.
 
 ### Output
 
@@ -155,7 +158,11 @@ The prompt is written to standard input so report content does not appear in a
 shell command or process argument. The defaults are `openclaw`, `captain`,
 `high`, and 300 seconds. `CAPTAIN_AGENT_OPENCLAW_COMMAND`, `CAPTAIN_AGENT_ID`,
 `CAPTAIN_AGENT_THINKING`, and `CAPTAIN_AGENT_TIMEOUT_SECONDS` override those
-values for nonstandard local installations.
+values for nonstandard CLI installations.
+
+The command omits `--local`, so OpenClaw routes the turn through the Gateway
+selected by the CLI configuration. That Gateway may run locally or remotely;
+the plugin does not need a separate Gateway URL option.
 
 The adapter accepts direct canonical JSON and documented OpenClaw JSON result
 envelopes. Invalid or non-zero responses are bounded before being returned in a
@@ -252,13 +259,13 @@ Focused tests cover:
 - an in-process MCP client call using the official Python SDK.
 
 Release verification includes the full Captain test suite plus an MCP Inspector
-smoke test against the packaged launcher. A local OpenClaw/ClickUp live write is
+smoke test against the packaged launcher. A live OpenClaw/ClickUp write is
 reported separately and is never implied by mocked tests.
 
 ## Non-Goals
 
-- Hosting, remote access, HTTP transport, OAuth, telemetry, or multi-user
-  identity.
+- A plugin-owned network transport, hosting layer, OAuth flow, telemetry, or
+  multi-user identity. Gateway connectivity remains OpenClaw's responsibility.
 - A2A support, background workers, or a general agent-to-agent framework.
 - Reimplementing Captain's ClickUp matching or PM judgment in the plugin.
 - Automatic installation of OpenClaw, Captain, ClickUp credentials, or a model
@@ -267,10 +274,10 @@ reported separately and is never implied by mocked tests.
 
 ## Acceptance Criteria
 
-The feature is complete when a clean local installation can invoke `/captain`,
-call the one bundled MCP tool over `stdio`, receive Captain's canonical result,
-and safely replay the same report identifier without a second OpenClaw turn.
-All new focused tests and the existing Captain suite must pass. Documentation
-must make the local-only data path explicit. The final reviewed changes must be
-pushed and opened as a pull request against
+The feature is complete when a clean installation can invoke `/captain`, call
+the one bundled MCP tool over `stdio`, receive Captain's canonical result, and
+safely replay the same report identifier without a second OpenClaw turn. All
+new focused tests and the existing Captain suite must pass. Documentation must
+distinguish the local MCP/CLI components from the local-or-remote Gateway. The
+final reviewed changes must be pushed and opened as a pull request against
 `Common-Vector-Robotics/captain:main`.

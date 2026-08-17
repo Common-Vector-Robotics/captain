@@ -6,10 +6,9 @@ Captain is an openclaw-based project manager for technical teams. Captain automa
 
 ## Report coding-agent work with `/captain`
 
-The optional local coding-agent plugin sends a concise, redacted session report
-to your own Captain agent over MCP stdio. See
-[the plugin installation and operation guide](agent-plugin/README.md) for the
-local-only setup.
+The optional coding-agent plugin sends a concise, redacted session report over
+MCP stdio through your configured OpenClaw Gateway, which can run locally or on
+a remote host. See the [plugin installation and operation guide](agent-plugin/README.md).
 
 ## What Captain does
 

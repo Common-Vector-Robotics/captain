@@ -1,18 +1,22 @@
 # Captain coding-agent plugin
 
-Use `/captain` to give your locally installed Captain agent concise evidence
-about completed coding work. The data path is **coding agent → local MCP
-process → local Captain → ClickUp**.
+Use `/captain` to give your Captain agent concise evidence about completed
+coding work. The data path is **coding agent → local MCP process → local
+OpenClaw CLI → configured Gateway → Captain → ClickUp**.
+
+The MCP process and OpenClaw CLI run on the coding-agent machine. The Gateway
+and Captain agent can run on that machine or on a remote host.
 
 ## Prerequisites
 
-- A local OpenClaw Gateway with the `captain` agent installed and configured.
+- An OpenClaw CLI on the coding-agent machine, configured to reach a local or
+  remote Gateway with the `captain` agent installed.
 - Either [`uv`](https://docs.astral.sh/uv/) or Python 3 with this bundle's
   requirements installed.
 
-The MCP server starts the local `captain` OpenClaw agent, which uses your local
-Captain and ClickUp configuration. It does not install or configure those
-dependencies for you.
+The MCP server calls the local OpenClaw CLI. OpenClaw routes the turn through
+its configured Gateway to the `captain` agent. The plugin does not install or
+configure OpenClaw, Captain, or ClickUp.
 
 ## Install
 
@@ -58,6 +62,17 @@ python3 -m venv agent-plugin/.venv
 agent-plugin/.venv/bin/python -m pip install -r agent-plugin/requirements.txt
 ```
 
+## Gateway location
+
+The plugin works with local and remote OpenClaw Gateways. It invokes
+[`openclaw agent`](https://docs.openclaw.ai/cli/agent) without `--local`, so
+OpenClaw sends the turn through the Gateway selected by the local CLI
+configuration.
+
+For a remote Gateway, configure the OpenClaw CLI using the official
+[remote access guide](https://docs.openclaw.ai/gateway/remote). The plugin does
+not require a separate Gateway URL setting.
+
 ## Operation
 
 Invoke `/captain` after completed coding work. The included skill gathers a
@@ -78,7 +93,7 @@ The adapter calls your local OpenClaw CLI with these defaults:
 | Override | Default | Purpose |
 | --- | --- | --- |
 | `CAPTAIN_AGENT_OPENCLAW_COMMAND` | `openclaw` | OpenClaw executable |
-| `CAPTAIN_AGENT_ID` | `captain` | Local Captain agent name |
+| `CAPTAIN_AGENT_ID` | `captain` | Captain agent name in the configured Gateway |
 | `CAPTAIN_AGENT_THINKING` | `high` | OpenClaw thinking level |
 | `CAPTAIN_AGENT_TIMEOUT_SECONDS` | `300` | Report timeout, bounded to 30–3600 seconds |
 | `CAPTAIN_AGENT_PYTHON` | unset | Python interpreter for the launcher |
@@ -131,9 +146,9 @@ official [agent configuration](https://docs.openclaw.ai/gateway/config-agents),
 - **MCP SDK v2 or `uv` is missing:** create the optional venv above, or install
   `uv` and run the launcher again. A system Python is used only for the stable
   MCP 2.x runtime required by this bundle.
-- **`needs_configuration`:** configure and start the local OpenClaw Gateway
-  and `captain` agent, including Captain's normal ClickUp configuration, then
-  retry with the same report ID.
+- **`needs_configuration`:** make sure the local OpenClaw CLI can reach the
+  configured Gateway and that its `captain` agent has the required ClickUp
+  configuration, then retry with the same report ID.
 - **`unknown_outcome`:** the local adapter cannot prove whether Captain
   completed the handoff. Do not claim success or auto-dispatch with a fresh ID.
   Check ClickUp first; the same report ID replays the stored uncertainty
