@@ -26,6 +26,31 @@
 - Defaults: command `openclaw`, agent `captain`, thinking `high`, timeout 300 seconds.
 - Do not claim a live OpenClaw/ClickUp write unless one is separately authorized and actually run.
 
+### Final-review contract amendments
+
+- Recursively reject authentication, authorization, identity, and claims keys
+  from both `report` and `metadata`, including camelCase keys and keys nested in
+  lists or tuples. Strip them from both objects again before serialization.
+- Stored `failed`, `needs_configuration`, `needs_clarification`, and `queued`
+  results are retryable same-ID claims. Stored `created`, `updated`, `partial`,
+  and `unknown_outcome` results are immutable replays. Keep active-ID and
+  orphaned-`processing` behavior process-local; V1 adds no cross-process lease.
+- The skill selects exactly one host-catalog name:
+  `Captain:captain_session_report` for Codex or
+  `captain__captain_session_report` for OpenClaw. Neither or both is
+  `needs_configuration`, not a reason to guess or call both.
+- Unsafe host session identifiers become stable `captain-<sha256>` report IDs
+  and are not included or displayed. Missing host IDs still use a UUID.
+- The terminal Captain prompt forbids `/captain`, the `captain` skill, and both
+  reporting-tool names. The `id: "captain"` OpenClaw agent excludes the skill
+  and denies `captain__captain_session_report`; deny wins.
+- A system `python3` is eligible only when `from mcp.server import MCPServer`
+  works and `importlib.metadata.version("mcp")` has major version 2.
+- Pre-launch `OSError` values are `needs_configuration`. Timeouts, launched
+  non-zero exits, malformed output, and uncertain post-dispatch exceptions stay
+  `unknown_outcome`. All external status and process diagnostics are bounded
+  and redacted.
+
 ## File Map
 
 - `.agents/plugins/marketplace.json`: makes the repository installable as a Codex marketplace.
@@ -278,7 +303,7 @@ def validate_report_input(
     return None
 ```
 
-Implement `build_status_update_prompt()` in the same file. It must describe a local user-operated report, include the exact output contract, embed `report_id`, `report`, and `metadata` as sorted indented JSON, instruct Captain to use normal PM judgment, audit every ClickUp write, and return JSON only. It must not include an email, hosted gateway, or authenticated-user claim.
+Implement `build_status_update_prompt()` in the same file. It must describe a local user-operated report, include the exact output contract, embed `report_id`, `report`, and `metadata` as sorted indented JSON, instruct Captain to use normal PM judgment, audit every ClickUp write, and return JSON only. It must not include an email, hosted gateway, or authenticated-user claim. It must also tell terminal-recipient Captain not to invoke `/captain`, load the `captain` skill, or call either reporting-tool name; Captain processes the report with normal PM capabilities and returns the required JSON directly.
 
 Create `agent-plugin/captain_agent/__init__.py`:
 
@@ -506,9 +531,10 @@ Port only the observable response-envelope behavior into new code: recurse throu
 Implement `invoke_openclaw()` with this decision table:
 
 ```text
-FileNotFoundError before launch        -> needs_configuration
+FileNotFoundError/PermissionError/
+other pre-launch OSError               -> needs_configuration
 subprocess.TimeoutExpired              -> unknown_outcome
-other runner exception                 -> unknown_outcome
+uncertain post-dispatch exception       -> unknown_outcome
 non-zero process exit                  -> unknown_outcome
 CLI stdout is not a JSON object         -> unknown_outcome
 Captain canonical status failed         -> failed
@@ -675,10 +701,11 @@ Implement an internal atomic claim while `_ACTIVE_REPORTS_LOCK` is held:
 
 ```text
 BEGIN IMMEDIATE
-no row              -> insert status=processing; add id to active set; commit; claimed
-result_json present -> deserialize CaptainReportResult; commit; replay
-processing + active -> commit; return queued
-processing + absent -> persist/return unknown_outcome; commit
+no row                    -> insert status=processing; add id to active set; commit; claimed
+retryable stored status   -> set processing, clear result, refresh project/time; claim
+immutable stored status   -> deserialize CaptainReportResult; commit; replay
+processing + active       -> commit; return queued
+processing + absent       -> persist/return unknown_outcome; commit
 ```
 
 The stored project is `report.project`, then `metadata.project`, then `metadata.repo`, then `Session report`.
@@ -924,7 +951,11 @@ if [ -x "$plugin_root/.venv/bin/python" ]; then
   run_python "$plugin_root/.venv/bin/python"
 fi
 
-if command -v python3 >/dev/null 2>&1 && python3 -c 'import mcp' >/dev/null 2>&1; then
+if command -v python3 >/dev/null 2>&1 && python3 -c '
+from importlib.metadata import version
+from mcp.server import MCPServer
+raise SystemExit(0 if version("mcp").split(".", 1)[0] == "2" else 1)
+' >/dev/null 2>&1; then
   run_python "$(command -v python3)"
 fi
 
@@ -990,7 +1021,7 @@ Add `.agents/plugins/marketplace.json` and `agent-plugin` to `package.json#files
 ```text
 # Optional local Captain agent plugin environment and state
 agent-plugin/.venv/
-agent-plugin/*.sqlite3
+agent-plugin/*.sqlite3*
 ```
 
 Change `product_text_paths()` in `tests/test_public_package_contract.py` so a packaged directory is traversed:
@@ -1102,9 +1133,9 @@ description: Report this coding session to the user's local Captain agent so Cap
 The body must instruct the calling agent to:
 
 1. Gather Git root, branch/upstream, short status, recent commits, diff stats, completed work, changed files, verification actually run, decisions, blockers, risks, and next steps once.
-2. Create one stable report ID from the host session identifier when available, otherwise a locally generated UUID, and reuse it for any retry.
+2. Use a host session identifier directly only when it matches `[A-Za-z0-9._-]{1,128}`. Hash an unsafe identifier into stable `captain-<sha256>` form without exposing it; use a UUID only when no host identifier exists. Reuse the safe ID for every retry.
 3. Exclude tokens, passwords, private keys, OAuth material, credentialed URLs, customer PII, unrelated personal data, and raw transcripts.
-4. Call local `captain_session_report` immediately with `report_id`, `report`, and `metadata`; never call Captain, ClickUp, or a private endpoint directly.
+4. Inspect the host catalog and call exactly one available name: `Captain:captain_session_report` in Codex or `captain__captain_session_report` in OpenClaw. Neither or both returns `needs_configuration`; never guess or call both. Never call Captain, ClickUp, or a private endpoint directly.
 5. Wait for a terminal result. Do not claim `queued` is complete. Treat `unknown_outcome` as uncertain and advise checking ClickUp before any new report identifier is used.
 6. Render one of `CAPTAIN REPORT SENT`, `CAPTAIN REPORT FAILED`, `CAPTAIN OUTCOME UNKNOWN`, or `CAPTAIN REPORT NOT SENT`, followed by status, ClickUp summary, Captain feedback, questions, warnings, and safe retry guidance.
 

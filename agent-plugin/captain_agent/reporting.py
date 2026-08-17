@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import threading
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -33,16 +34,57 @@ DEFAULT_TIMEOUT_SECONDS = 300
 Runner = Callable[[Sequence[str], str, int], subprocess.CompletedProcess[str]]
 _ACTIVE_REPORT_IDS: set[str] = set()
 _ACTIVE_REPORTS_LOCK = threading.Lock()
-RESERVED_METADATA_KEYS = {
+RETRYABLE_STORED_STATUSES = {
+    "failed",
+    "needs_clarification",
+    "needs_configuration",
+    "queued",
+}
+IMMUTABLE_STORED_STATUSES = {
+    "created",
+    "partial",
+    "unknown_outcome",
+    "updated",
+}
+RESERVED_INPUT_KEYS = {
     "access_token",
+    "authentication",
     "authenticated_email",
     "authenticated_user",
     "authorization",
     "auth_claims",
+    "claims",
     "identity",
     "identity_claims",
     "user_claims",
 }
+
+
+def _redact_external_text(value: str) -> str:
+    """Remove common credential forms from untrusted diagnostics."""
+    text = re.sub(
+        r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+",
+        "Bearer [redacted]",
+        value,
+    )
+    text = re.sub(
+        r"(?i)([a-z][a-z0-9+.-]*://)[^/\s:@]+:[^@/\s]+@",
+        r"\1[redacted]@",
+        text,
+    )
+    return re.sub(
+        r"(?i)\b(access[_-]?token|api[_-]?key|authorization|auth|password|secret|token)"
+        r"(\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)",
+        r"\1\2[redacted]",
+        text,
+    )
+
+
+def _bounded_external_text(value: Any, *, limit: int = 1_000) -> str:
+    text = _redact_external_text(str(value))
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}... [truncated]"
 
 
 class CaptainReportResult(BaseModel):
@@ -65,7 +107,8 @@ def canonical_result(
 ) -> CaptainReportResult:
     active_warnings = list(warnings or [])
     if status not in ALLOWED_STATUSES:
-        active_warnings.append(f"Unexpected Captain status: {status!r}")
+        safe_status = _bounded_external_text(status, limit=200)
+        active_warnings.append(f"Unexpected Captain status: {safe_status}")
         status = "unknown_outcome"
     return CaptainReportResult(
         report_id=report_id,
@@ -86,47 +129,49 @@ def _summary_lines(report: Mapping[str, Any]) -> list[str]:
     return []
 
 
-def _is_reserved_metadata_key(key: Any) -> bool:
+def _is_reserved_input_key(key: Any) -> bool:
     if not isinstance(key, str):
         return False
     snake_case = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key)
     normalized = re.sub(r"[^a-z0-9]+", "_", snake_case.lower()).strip("_")
     return (
-        normalized in RESERVED_METADATA_KEYS
+        normalized in RESERVED_INPUT_KEYS
         or normalized.startswith("authenticated_")
+        or normalized.startswith("authentication_")
         or normalized.startswith("authorization_")
         or normalized.startswith("auth_")
+        or normalized.startswith("identity_")
         or normalized.endswith("_claims")
     )
 
 
-def _reserved_metadata_key(value: Any) -> str | None:
+def _reserved_input_key(value: Any) -> str | None:
     if isinstance(value, Mapping):
         for key, nested in value.items():
-            if _is_reserved_metadata_key(key):
+            if _is_reserved_input_key(key):
                 return str(key)
-            found = _reserved_metadata_key(nested)
+            found = _reserved_input_key(nested)
             if found:
                 return found
     elif isinstance(value, (list, tuple)):
         for nested in value:
-            found = _reserved_metadata_key(nested)
+            found = _reserved_input_key(nested)
             if found:
                 return found
     return None
 
 
-def _strip_reserved_metadata(value: Any) -> Any:
+def _strip_reserved_input(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {
-            key: _strip_reserved_metadata(nested)
+            key: _strip_reserved_input(nested)
             for key, nested in value.items()
-            if not _is_reserved_metadata_key(key)
+            if not _is_reserved_input_key(key)
         }
     if isinstance(value, list):
-        return [_strip_reserved_metadata(nested) for nested in value]
+        return [_strip_reserved_input(nested) for nested in value]
     if isinstance(value, tuple):
-        return tuple(_strip_reserved_metadata(nested) for nested in value)
+        return tuple(_strip_reserved_input(nested) for nested in value)
     return value
 
 
@@ -154,15 +199,16 @@ def validate_report_input(
             "needs_clarification",
             captain_feedback="metadata must be an object.",
         )
-    reserved_key = _reserved_metadata_key(metadata)
-    if reserved_key:
-        return canonical_result(
-            report_id,
-            "failed",
-            captain_feedback=(
-                f"metadata contains reserved authentication field {reserved_key!r}."
-            ),
-        )
+    for object_name, value in (("report", report), ("metadata", metadata)):
+        if _reserved_input_key(value):
+            return canonical_result(
+                report_id,
+                "failed",
+                captain_feedback=(
+                    f"{object_name} contains a reserved authentication, "
+                    "authorization, identity, or claims field."
+                ),
+            )
     payload_size = sum(
         len(
             json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -190,16 +236,23 @@ def build_status_update_prompt(
     report: Mapping[str, Any],
     metadata: Mapping[str, Any],
 ) -> str:
-    report_json = json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False)
+    report_json = json.dumps(
+        _strip_reserved_input(report),
+        indent=2,
+        sort_keys=True,
+        ensure_ascii=False,
+    )
     metadata_json = json.dumps(
-        _strip_reserved_metadata(metadata),
+        _strip_reserved_input(metadata),
         indent=2,
         sort_keys=True,
         ensure_ascii=False,
     )
     return f"""You are Captain preparing a local `/captain` status update for a user-operated workspace.
 
-Use normal PM judgment to identify what changed, what is missing, who owns it, and what decision or action is needed. Audit every ClickUp write. Do not claim identity, authentication, hosted services, or actions that are not supported by the supplied evidence.
+Process this report with your normal PM capabilities. Use normal PM judgment to identify what changed, what is missing, who owns it, and what decision or action is needed. Audit every ClickUp write. Do not claim identity, authentication, hosted services, or actions that are not supported by the supplied evidence.
+
+Do not invoke `/captain`; do not load or invoke the `captain` skill; and do not call `captain_session_report` or `captain__captain_session_report`. Those are sender-side reporting entrypoints, and invoking them here would recurse. Process the supplied report yourself and return the required JSON directly.
 
 Return JSON only, matching this public result contract:
 {{
@@ -391,13 +444,6 @@ def normalize_captain_agent_response(
     )
 
 
-def _bounded_external_text(value: Any, *, limit: int = 1_000) -> str:
-    text = str(value)
-    if len(text) <= limit:
-        return text
-    return f"{text[:limit]}... [truncated]"
-
-
 def _unknown_outcome(report_id: str, reason: str, detail: Any = "") -> CaptainReportResult:
     message = reason
     if str(detail):
@@ -427,15 +473,15 @@ def invoke_openclaw(
     command, timeout = build_openclaw_command(report_id, env)
     try:
         completed = runner(command, prompt, timeout)
-    except FileNotFoundError as error:
+    except subprocess.TimeoutExpired as error:
+        return _unknown_outcome(report_id, "OpenClaw timed out", error)
+    except OSError as error:
         return canonical_result(
             report_id,
             "needs_configuration",
-            captain_feedback="OpenClaw executable is not available.",
+            captain_feedback="The OpenClaw process could not start.",
             warnings=[_bounded_external_text(error)],
         )
-    except subprocess.TimeoutExpired as error:
-        return _unknown_outcome(report_id, "OpenClaw timed out", error)
     except Exception as error:
         return _unknown_outcome(report_id, "OpenClaw runner failed", error)
 
@@ -465,19 +511,20 @@ def state_path(env: Mapping[str, str]) -> Path:
 def _initialize_store(path: Path) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.parent.chmod(0o700)
-    with sqlite3.connect(path) as connection:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS session_reports(
-                report_id TEXT PRIMARY KEY,
-                project TEXT NOT NULL,
-                status TEXT NOT NULL,
-                result_json TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+    with closing(sqlite3.connect(path)) as connection:
+        with connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS session_reports(
+                    report_id TEXT PRIMARY KEY,
+                    project TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    result_json TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
             )
-            """
-        )
     path.chmod(0o600)
 
 
@@ -507,85 +554,106 @@ def _claim_report(
 ) -> tuple[bool, CaptainReportResult | None]:
     # Keep the process lock outside SQLite so every caller uses one lock order.
     with _ACTIVE_REPORTS_LOCK:
-        with sqlite3.connect(path, isolation_level=None) as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                """
-                SELECT status, result_json
-                FROM session_reports
-                WHERE report_id = ?
-                """,
-                (report_id,),
-            ).fetchone()
-
-            if row is None:
-                now = _now()
-                connection.execute(
+        with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+            added_active_id = False
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
                     """
-                    INSERT INTO session_reports(
-                        report_id, project, status, result_json, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    SELECT status, result_json
+                    FROM session_reports
+                    WHERE report_id = ?
                     """,
-                    (
-                        report_id,
-                        _stored_project(report, metadata),
-                        "processing",
-                        None,
-                        now,
-                        now,
-                    ),
-                )
-                _ACTIVE_REPORT_IDS.add(report_id)
-                try:
-                    connection.commit()
-                except Exception:
+                    (report_id,),
+                ).fetchone()
+
+                if row is None:
+                    now = _now()
+                    connection.execute(
+                        """
+                        INSERT INTO session_reports(
+                            report_id, project, status, result_json, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            report_id,
+                            _stored_project(report, metadata),
+                            "processing",
+                            None,
+                            now,
+                            now,
+                        ),
+                    )
+                    _ACTIVE_REPORT_IDS.add(report_id)
+                    added_active_id = True
+                    outcome = (True, None)
+                else:
+                    stored_status, stored_result = row
+                    if stored_status in RETRYABLE_STORED_STATUSES:
+                        connection.execute(
+                            """
+                            UPDATE session_reports
+                            SET project = ?, status = 'processing', result_json = NULL,
+                                updated_at = ?
+                            WHERE report_id = ?
+                            """,
+                            (_stored_project(report, metadata), _now(), report_id),
+                        )
+                        _ACTIVE_REPORT_IDS.add(report_id)
+                        added_active_id = True
+                        outcome = (True, None)
+                    elif stored_status in IMMUTABLE_STORED_STATUSES and stored_result:
+                        outcome = (
+                            False,
+                            CaptainReportResult.model_validate_json(stored_result),
+                        )
+                    elif stored_status == "processing" and report_id in _ACTIVE_REPORT_IDS:
+                        outcome = (
+                            False,
+                            canonical_result(
+                                report_id,
+                                "queued",
+                                captain_feedback="This report is already processing.",
+                            ),
+                        )
+                    else:
+                        result = canonical_result(
+                            report_id,
+                            "unknown_outcome",
+                            captain_feedback=(
+                                "A previous attempt may have completed; this report "
+                                "was not re-dispatched."
+                            ),
+                        )
+                        connection.execute(
+                            """
+                            UPDATE session_reports
+                            SET status = ?, result_json = ?, updated_at = ?
+                            WHERE report_id = ?
+                            """,
+                            (result.status, _result_json(result), _now(), report_id),
+                        )
+                        outcome = (False, result)
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                if added_active_id:
                     _ACTIVE_REPORT_IDS.discard(report_id)
-                    raise
-                return True, None
+                raise
+            return outcome
 
-            _, stored_result = row
-            if stored_result is not None:
-                result = CaptainReportResult.model_validate_json(stored_result)
-                connection.commit()
-                return False, result
 
-            if report_id in _ACTIVE_REPORT_IDS:
-                connection.commit()
-                return False, canonical_result(
-                    report_id,
-                    "queued",
-                    captain_feedback="This report is already processing.",
-                )
-
-            result = canonical_result(
-                report_id,
-                "unknown_outcome",
-                captain_feedback=(
-                    "A previous attempt may have completed; this report was not re-dispatched."
-                ),
-            )
+def _finish_report(path: Path, result: CaptainReportResult) -> None:
+    with closing(sqlite3.connect(path)) as connection:
+        with connection:
             connection.execute(
                 """
                 UPDATE session_reports
                 SET status = ?, result_json = ?, updated_at = ?
                 WHERE report_id = ?
                 """,
-                (result.status, _result_json(result), _now(), report_id),
+                (result.status, _result_json(result), _now(), result.report_id),
             )
-            connection.commit()
-            return False, result
-
-
-def _finish_report(path: Path, result: CaptainReportResult) -> None:
-    with sqlite3.connect(path) as connection:
-        connection.execute(
-            """
-            UPDATE session_reports
-            SET status = ?, result_json = ?, updated_at = ?
-            WHERE report_id = ?
-            """,
-            (result.status, _result_json(result), _now(), result.report_id),
-        )
 
 
 def handle_session_report(

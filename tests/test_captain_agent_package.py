@@ -1,10 +1,9 @@
 import json
-import os
 import stat
 import subprocess
 import sys
-from uuid import uuid4
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from mcp import Client
@@ -96,6 +95,57 @@ def test_launcher_is_executable_and_valid_shell():
     launcher = PLUGIN / "bin/captain-agent-mcp"
     assert launcher.stat().st_mode & stat.S_IXUSR
     subprocess.run(["sh", "-n", str(launcher)], check=True)
+
+
+def test_launcher_rejects_importable_mcp_v1_and_falls_back_to_uv(tmp_path):
+    plugin = tmp_path / "agent-plugin"
+    launcher = plugin / "bin" / "captain-agent-mcp"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_bytes((PLUGIN / "bin/captain-agent-mcp").read_bytes())
+    launcher.chmod(0o755)
+    (plugin / "requirements.txt").write_text("mcp>=2,<3\n", encoding="utf-8")
+
+    fake_site = tmp_path / "site-packages"
+    (fake_site / "mcp/server").mkdir(parents=True)
+    (fake_site / "mcp/__init__.py").write_text("", encoding="utf-8")
+    (fake_site / "mcp/server/__init__.py").write_text(
+        "class MCPServer:\n    pass\n", encoding="utf-8"
+    )
+    dist_info = fake_site / "mcp-1.9.0.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: mcp\nVersion: 1.9.0\n",
+        encoding="utf-8",
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "python3").symlink_to(Path(sys.executable))
+    uv_marker = tmp_path / "uv-args.txt"
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$CAPTAIN_AGENT_UV_MARKER\"\n",
+        encoding="utf-8",
+    )
+    fake_uv.chmod(0o755)
+
+    result = subprocess.run(
+        [str(launcher)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "PYTHONPATH": str(fake_site),
+            "CAPTAIN_AGENT_UV_MARKER": str(uv_marker),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert uv_marker.read_text(encoding="utf-8").strip() == (
+        f"run --quiet --no-project --with-requirements "
+        f"{plugin / 'requirements.txt'} python -m captain_agent.server"
+    )
 
 
 @pytest.mark.anyio

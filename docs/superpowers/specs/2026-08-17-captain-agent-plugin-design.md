@@ -53,7 +53,10 @@ passes through Intermode or CVR infrastructure.
 3. The user's MCP host launches the bundled server over `stdio` on demand.
 4. When the user invokes `/captain`, the skill gathers readily available Git and
    verification evidence, removes sensitive or unrelated content, creates one
-   report identifier, and calls `captain_session_report`.
+   safe report identifier, and calls the exact tool exposed by its host catalog:
+   `Captain:captain_session_report` in Codex or
+   `captain__captain_session_report` in OpenClaw. It never guesses or calls
+   both names.
 5. The MCP server sends the structured report to the local `captain` OpenClaw
    agent and waits for its canonical response.
 6. The skill renders the result, including any ClickUp changes, clarification
@@ -105,18 +108,21 @@ captain_session_report(report_id, report, metadata) -> CaptainReportResult
 ### Input
 
 - `report_id`: a 1-128 character identifier containing only ASCII letters,
-  numbers, `.`, `_`, or `-`. The skill creates it once and reuses it for any
-  retry of that report.
+  numbers, `.`, `_`, or `-`. The skill uses a matching host session identifier
+  directly, derives `captain-<sha256>` without exposing the source when the
+  identifier is unsafe, or uses a UUID when no host identifier exists. It
+  reuses the safe result for every retry.
 - `report`: the existing concise report shape: project, context, summary,
   changed files, verification, decisions, blockers, risks, and next steps.
 - `metadata`: client name, repository, branch, timestamp, and an optional host
   session identifier.
 
-The caller cannot supply an authenticated email or authorization claim. This is
-a single-user local integration, so the trust boundary is the MCP host process
-that launches the server. Captain may use report evidence to identify relevant
-work; it must ask for clarification rather than guess when identity or task
-mapping matters.
+The caller cannot supply authentication, authorization, identity, or claims
+fields in either `report` or `metadata`, including nested or camelCase forms.
+This is a single-user local integration, so the trust boundary is the MCP host
+process that launches the server. Captain may use report evidence to identify
+relevant work; it must ask for clarification rather than guess when identity or
+task mapping matters.
 
 ### Output
 
@@ -167,7 +173,12 @@ The MCP server stores report state in a small SQLite database at
 nonstandard local installations.
 
 - A new `report_id` is recorded before OpenClaw is invoked.
-- A duplicate completed report returns its stored result.
+- Stored `created`, `updated`, `partial`, and `unknown_outcome` results are
+  immutable replays and never start another OpenClaw turn.
+- Stored `failed`, `needs_configuration`, `needs_clarification`, and `queued`
+  results are retryable. A same-ID call transactionally changes the row back to
+  `processing`, clears its result, refreshes the project and timestamp, and
+  starts one new OpenClaw turn.
 - A duplicate report still marked as processing returns `queued` without
   starting a second OpenClaw turn.
 - A timeout or interrupted handoff is recorded as `unknown_outcome`; retrying
@@ -184,6 +195,9 @@ Captain continues to audit actual ClickUp writes in its own workspace.
   endpoint.
 - Launch OpenClaw with an argument array and `shell=False`.
 - Accept at most 1 MiB of serialized report and metadata content.
+- Recursively reject reserved authentication, authorization, identity, and
+  claims keys in both input objects; strip them from both again before prompt
+  serialization as defense in depth.
 - Reject missing summaries and malformed top-level fields before invoking
   OpenClaw.
 - Tell the skill never to include secrets, credentialed URLs, customer PII,
@@ -201,14 +215,23 @@ while other MCP hosts can point at the same launcher command manually. V1 does
 not add separate host-specific implementations of the reporting logic.
 
 The launcher uses `CAPTAIN_AGENT_PYTHON` when set, then
-`agent-plugin/.venv/bin/python` when present, then a `python3` from `PATH` that
-can import the MCP SDK. When none of those are ready, the launcher uses `uv run
---no-project --with-requirements requirements.txt` so dependencies are resolved
-and cached entirely on the user's machine. The nested requirements pin the
-official SDK to `mcp>=2,<3`. The launcher prints one actionable setup message
-when neither a ready Python environment nor `uv` is available. The optional
-manual installation guide creates `agent-plugin/.venv`, so global package
-mutation is unnecessary; the repository ignores that directory.
+`agent-plugin/.venv/bin/python` when present, then a `python3` from `PATH` only
+when `from mcp.server import MCPServer` works and
+`importlib.metadata.version("mcp")` reports major version 2. When none of those
+are ready, the launcher uses `uv run --no-project --with-requirements
+requirements.txt` so dependencies are resolved and cached entirely on the
+user's machine. The nested requirements pin the official SDK to `mcp>=2,<3`.
+The launcher prints one actionable setup message when neither a ready Python
+environment nor `uv` is available. The optional manual installation guide
+creates `agent-plugin/.venv`, so global package mutation is unnecessary; the
+repository ignores that directory.
+
+The terminal-recipient prompt tells Captain to use its normal PM capabilities,
+return the canonical JSON directly, and never invoke `/captain`, the `captain`
+skill, or either reporting-tool name. OpenClaw setup also excludes `captain`
+from the `id: "captain"` agent's skill allowlist and denies
+`captain__captain_session_report` for that agent; deny wins over allow/profile
+rules.
 
 ## Testing
 
@@ -220,7 +243,12 @@ Focused tests cover:
 - direct and nested OpenClaw JSON responses;
 - non-zero exit, invalid JSON, timeout, and bounded diagnostics;
 - same-ID replay without a second OpenClaw invocation;
+- retryable same-ID reclaim and immutable replay categories;
 - processing and uncertain duplicate behavior;
+- nested identity/authorization rejection in both input objects;
+- bounded and redacted unexpected-status diagnostics;
+- process-start configuration failures versus post-dispatch uncertainty;
+- an importable MCP 1.x system Python falling back to `uv`;
 - command construction without a shell or report text in arguments;
 - state-directory and database permissions where portable to assert;
 - an in-process MCP client call using the official Python SDK.

@@ -12,13 +12,31 @@ Use this workflow once the user asks to report completed coding-agent work.
    blockers, risks, and next steps. Do this once; keep the result concise.
    Use only values observed in the session or local inspection. Omit optional
    values that cannot be established; never invent timestamps or diff data.
-2. Make one stable `report_id`: use the host session identifier when available;
-   otherwise generate a local UUID. Reuse that exact ID for every replay.
+2. Make one stable, safe `report_id` and reuse it for every replay:
+
+   - Use the host session identifier directly only when it matches
+     `[A-Za-z0-9._-]{1,128}`.
+   - When a host session identifier is available but unsafe, compute SHA-256
+     over its exact value and use `captain-` followed by the 64 lowercase hex
+     characters. Recompute the same value for a replay. Never include or
+     display the unsafe source identifier.
+   - When no host session identifier is available, generate one local UUID.
+
 3. Remove tokens, passwords, private keys, OAuth material, credentialed URLs,
    customer PII, unrelated personal data, and raw transcripts. Do not put an
-   email, identity claim, authorization claim, or credential in `metadata`.
-4. Immediately call the only reporting tool,
-   `Captain:captain_session_report`, with objects in this shape:
+   authentication, authorization, identity, or claims field in either `report`
+   or `metadata`.
+4. Inspect the current host tool catalog and choose exactly one exposed name:
+
+   - In Codex, use `Captain:captain_session_report`.
+   - In OpenClaw, use `captain__captain_session_report`.
+
+   Call only the one exact name present in the catalog. Never try both names or
+   guess an alias. If neither name is available, or if both make the catalog
+   ambiguous, make no tool call and render `CAPTAIN REPORT NOT SENT` with
+   `Status: needs_configuration` and a concise catalog-configuration message.
+
+   Call the selected tool with objects in this shape:
 
    ```json
    {
@@ -38,7 +56,7 @@ Use this workflow once the user asks to report completed coding-agent work.
    }
    ```
 
-   The tool is the only route: do not call Captain, ClickUp, or an endpoint
+   The selected tool is the only route: do not call Captain, ClickUp, or an endpoint
    directly. `report` and `metadata` must be structured objects, not prose.
    Include `timestamp` only when it is observed from the session or local
    inspection.
@@ -66,6 +84,6 @@ Safe retry guidance: <guidance>
 | `created`, `updated`, `partial` | `CAPTAIN REPORT SENT` | Follow Captain's questions or warnings; do not send a duplicate report. |
 | `needs_clarification`, `needs_configuration` | `CAPTAIN REPORT NOT SENT` | Resolve the listed questions or local configuration, then reuse the same `report_id`. |
 | `failed` | `CAPTAIN REPORT FAILED` | Correct the reported failure, then retry with the same `report_id` when safe. |
-| `unknown_outcome` | `CAPTAIN OUTCOME UNKNOWN` | Do not claim success. Check ClickUp before retrying; if retrying, reuse the same `report_id`. |
+| `unknown_outcome` | `CAPTAIN OUTCOME UNKNOWN` | Do not claim success or auto-dispatch. Check ClickUp first; this ID safely replays the stored uncertainty rather than dispatching again. |
 
 Do not render a final success or failure block while the result is `queued`.

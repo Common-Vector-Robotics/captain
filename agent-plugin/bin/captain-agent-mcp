@@ -16,7 +16,12 @@ if [ -x "$plugin_root/.venv/bin/python" ]; then
   run_python "$plugin_root/.venv/bin/python"
 fi
 
-if command -v python3 >/dev/null 2>&1 && python3 -c 'import mcp' >/dev/null 2>&1; then
+if command -v python3 >/dev/null 2>&1 && python3 -c '
+from importlib.metadata import version
+from mcp.server import MCPServer
+
+raise SystemExit(0 if version("mcp").split(".", 1)[0] == "2" else 1)
+' >/dev/null 2>&1; then
   run_python "$(command -v python3)"
 fi
 

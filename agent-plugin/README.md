@@ -48,8 +48,10 @@ For another MCP host, configure its stdio command from the repository root as:
 ```
 
 The launcher uses `CAPTAIN_AGENT_PYTHON` when set, then
-`agent-plugin/.venv/bin/python`, then `python3` with the MCP SDK installed. If
-none is ready, it uses local `uv` to resolve the bundled requirements.
+`agent-plugin/.venv/bin/python`, then `python3` only when it can import
+`MCPServer` from `mcp.server` and the installed `mcp` distribution is major
+version 2. If none is ready, it uses local `uv` to resolve the bundled
+requirements.
 
 To create the optional isolated environment:
 
@@ -62,8 +64,16 @@ agent-plugin/.venv/bin/python -m pip install -r agent-plugin/requirements.txt
 
 Invoke `/captain` after completed coding work. The included skill gathers a
 short, redacted Git and verification report, creates one stable report ID, and
-calls the local MCP tool. It never sends credentials, customer PII, unrelated
-personal data, credentialed URLs, or raw transcripts.
+calls the one name exposed by the current host: `Captain:captain_session_report`
+in Codex or `captain__captain_session_report` in OpenClaw. It never guesses or
+calls both. OpenClaw's name follows its documented
+[`serverName__toolName` bundle convention](https://docs.openclaw.ai/plugins/bundles).
+The skill also never sends credentials, customer PII, unrelated personal data,
+credentialed URLs, raw transcripts, or identity and authorization claims.
+
+A host session ID is used directly only when it matches
+`[A-Za-z0-9._-]{1,128}`. Otherwise the skill derives the stable safe ID
+`captain-<sha256>` and does not include or display the unsafe source value.
 
 The adapter calls your local OpenClaw CLI with these defaults:
 
@@ -80,16 +90,53 @@ Report replay state is a user-only local SQLite database at
 the default is `~/.local/state/captain-agent/reports.sqlite3`.
 `CAPTAIN_AGENT_STATE_PATH` overrides the complete database path.
 
+Stored `failed`, `needs_configuration`, `needs_clarification`, and `queued`
+results are retryable with the same report ID. A replay reclaims the local row
+before one new dispatch. Stored `created`, `updated`, `partial`, and
+`unknown_outcome` results are immutable replays; in particular, uncertainty is
+never auto-dispatched because Captain may already have completed the write.
+
+## Prevent Captain self-recursion
+
+The OpenClaw agent whose `id` is `captain` must not load this sender-side
+`captain` skill or call its bundle tool. Edit that agent's existing entry in
+`agents.list`; do not create a second agent entry. The relevant shape is:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "captain",
+        // Keep this agent's intended skill allowlist, excluding "captain".
+        skills: [/* existing allowed skill names except "captain" */],
+        tools: { deny: ["captain__captain_session_report"] },
+      },
+    ],
+  },
+}
+```
+
+An explicit per-agent `skills` list replaces inherited defaults, so preserve
+the Captain agent's other intended skills while excluding `captain`. OpenClaw
+tool policy applies deny after allow/profile rules, so this exact deny wins.
+Together with the terminal-recipient prompt, these two controls prevent the
+Captain agent from reporting its received report back into itself. See the
+official [agent configuration](https://docs.openclaw.ai/gateway/config-agents),
+[tool policy](https://docs.openclaw.ai/gateway/config-tools), and
+[skill allowlist](https://docs.openclaw.ai/tools/skills-config) references.
+
 ## Troubleshooting
 
 - **`openclaw` is missing:** install OpenClaw, make its CLI available on
   `PATH`, or set `CAPTAIN_AGENT_OPENCLAW_COMMAND` to its local executable.
-- **MCP SDK or `uv` is missing:** create the optional venv above, or install
-  `uv` and run the launcher again. The launcher needs one local way to import
-  the bundled MCP SDK.
+- **MCP SDK v2 or `uv` is missing:** create the optional venv above, or install
+  `uv` and run the launcher again. A system Python is used only for the stable
+  MCP 2.x runtime required by this bundle.
 - **`needs_configuration`:** configure and start the local OpenClaw Gateway
   and `captain` agent, including Captain's normal ClickUp configuration, then
   retry with the same report ID.
 - **`unknown_outcome`:** the local adapter cannot prove whether Captain
-  completed the handoff. Do not claim success or create a fresh ID. Check
-  ClickUp first; if a replay is needed, reuse the same report ID.
+  completed the handoff. Do not claim success or auto-dispatch with a fresh ID.
+  Check ClickUp first; the same report ID replays the stored uncertainty
+  without another dispatch.
