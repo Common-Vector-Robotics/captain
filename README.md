@@ -4,16 +4,7 @@
 
 Captain is an openclaw-based project manager for technical teams. Captain automatically manages Clickup tasks, checks in with team members over Slack to receive status updates, infers critical paths, and coordinates team members to remove blockers and prioritize important tasks. Captain also reads and infers tasks based on meeting transcripts sent to his configured email address.
 
-## Report coding-agent work to Captain
-
-The optional coding-agent plugin supports Codex, Claude Code, OpenCode, and
-OpenClaw. It sends a concise, redacted session report over MCP stdio through
-your configured OpenClaw Gateway, which can run locally or on a remote host.
-See the [plugin installation and operation guide](agent-plugin/README.md),
-including the [remote team setup](agent-plugin/README.md#set-up-a-remote-team)
-for admitting, verifying, and removing team members.
-
-## What Captain does
+###### What Captain does
 
 <table>
   <tr>
@@ -44,6 +35,14 @@ for admitting, verifying, and removing team members.
     <td width="50%" valign="top">
       🛟 <strong>Rolls out safely</strong><br>
       Moves from <code>off</code> to <code>shadow</code> to <code>live</code> with visible action reporting.
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" valign="top">
+      🤖 <strong>Reports directly from your team's AI coding agents</strong><br>
+      Run <code>/captain</code> in Codex, OpenCode, or OpenClaw—or
+      <code>/captain:captain</code> in Claude Code—to send completed work and
+      verification directly to Captain.
     </td>
   </tr>
 </table>
@@ -99,6 +98,15 @@ flowchart TB
     class REPORT daily
     class MONITOR hourly
 ```
+
+## Report coding-agent work to Captain
+
+The optional coding-agent plugin supports Codex, Claude Code, OpenCode, and
+OpenClaw. It sends a concise, redacted session report over MCP stdio through
+your configured OpenClaw Gateway, which can run locally or on a remote host.
+See the [plugin installation and operation guide](agent-plugin/README.md),
+including the [remote team setup](agent-plugin/README.md#set-up-a-remote-team)
+for admitting, verifying, and removing team members.
 
 ## Install and set up
 

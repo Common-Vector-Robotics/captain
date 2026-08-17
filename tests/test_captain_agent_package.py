@@ -292,6 +292,40 @@ def test_root_readme_names_each_supported_coding_agent():
     assert "remote team setup" in readme.lower()
 
 
+def test_root_readme_places_agent_reporting_after_the_daily_flow():
+    """Keep the plugin callout visible without interrupting Captain's overview."""
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    what_captain_does = readme.index("What Captain does")
+    daily_flow = readme.index("## A day with Captain")
+    reporting = readme.index("## Report coding-agent work to Captain")
+    installation = readme.index("## Install and set up")
+
+    assert what_captain_does < daily_flow < reporting < installation
+    assert readme.count("What Captain does") == 1
+    assert readme.count("## A day with Captain") == 1
+    assert readme.count("## Report coding-agent work to Captain") == 1
+
+    overview_table = readme[what_captain_does:daily_flow]
+    reporting_title = "Reports directly from your team's AI coding agents"
+    table_start = overview_table.index("<table>")
+    table_end = overview_table.index("</table>")
+    callout = overview_table.index('<td colspan="2" valign="top">')
+
+    assert table_start < callout < table_end
+    assert f"🤖 <strong>{reporting_title}</strong>" in overview_table
+    assert overview_table.index(reporting_title) > overview_table.index(
+        "Rolls out safely"
+    )
+
+    normalized_table = " ".join(overview_table.split())
+    assert (
+        "Run <code>/captain</code> in Codex, OpenCode, or OpenClaw—or "
+        "<code>/captain:captain</code> in Claude Code—to send completed work "
+        "and verification directly to Captain. </td> </tr>"
+    ) in normalized_table
+
+
 def test_npm_pack_excludes_plugin_runtime_artifacts(
     temporary_plugin_runtime_artifacts,
 ):
