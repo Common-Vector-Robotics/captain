@@ -109,6 +109,26 @@ def test_prompt_strips_reserved_auth_metadata():
     assert "Bearer secret" not in prompt
 
 
+def test_validation_rejects_camel_case_reserved_identity_metadata():
+    result = validate_report_input(
+        "report-1",
+        VALID_REPORT,
+        {"client": "codex", "identityClaims": {"subject": "user-1"}},
+    )
+    assert result.status == "failed"
+    assert "authentication" in result.captain_feedback
+
+
+def test_validation_rejects_reserved_auth_metadata_nested_in_tuple():
+    result = validate_report_input(
+        "report-1",
+        VALID_REPORT,
+        {"client": "codex", "nested": ({"authenticatedEmail": "user@example.com"},)},
+    )
+    assert result.status == "failed"
+    assert "authentication" in result.captain_feedback
+
+
 def test_prompt_delimits_local_report_without_identity_claims():
     prompt = build_status_update_prompt(
         "report-1", VALID_REPORT, {"client": "codex", "repo": "captain"}

@@ -76,7 +76,8 @@ def _summary_lines(report: Mapping[str, Any]) -> list[str]:
 def _is_reserved_metadata_key(key: Any) -> bool:
     if not isinstance(key, str):
         return False
-    normalized = re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
+    snake_case = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key)
+    normalized = re.sub(r"[^a-z0-9]+", "_", snake_case.lower()).strip("_")
     return (
         normalized in RESERVED_METADATA_KEYS
         or normalized.startswith("authenticated_")
@@ -94,7 +95,7 @@ def _reserved_metadata_key(value: Any) -> str | None:
             found = _reserved_metadata_key(nested)
             if found:
                 return found
-    elif isinstance(value, list):
+    elif isinstance(value, (list, tuple)):
         for nested in value:
             found = _reserved_metadata_key(nested)
             if found:
@@ -111,6 +112,8 @@ def _strip_reserved_metadata(value: Any) -> Any:
         }
     if isinstance(value, list):
         return [_strip_reserved_metadata(nested) for nested in value]
+    if isinstance(value, tuple):
+        return tuple(_strip_reserved_metadata(nested) for nested in value)
     return value
 
 
