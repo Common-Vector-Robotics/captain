@@ -1,8 +1,9 @@
 """Validate, dispatch, and replay local Captain session reports.
 
-The public MCP tool calls :func:`handle_session_report`. This module keeps
-credentials out of the prompt, runs one local OpenClaw turn, normalizes its
-reply, and stores enough local state to make retries idempotent.
+The public MCP tool calls :func:`handle_session_report`. This module rejects or
+strips reserved authentication, authorization, identity, and claims fields,
+runs one local OpenClaw turn, normalizes its reply, and stores enough local
+state to make retries idempotent.
 """
 
 from __future__ import annotations
@@ -32,8 +33,8 @@ ReportStatus = Literal[
     "unknown_outcome",
 ]
 
-# Values above this line form the public result contract. The constants below
-# control local validation and the OpenClaw subprocess adapter.
+# The ReportStatus values above form part of the public result contract. The
+# constants below control validation, dispatch, and replay persistence.
 ALLOWED_STATUSES = set(ReportStatus.__args__)
 REPORT_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 MAX_REPORT_BYTES = 1_000_000
@@ -110,9 +111,10 @@ def _bounded_external_text(value: Any, *, limit: int = 1_000) -> str:
     return f"{text[:limit]}... [truncated]"
 
 
+# This model is the stable result returned by the public MCP tool. A comment is
+# used instead of a class docstring because Pydantic exports docstrings in JSON
+# Schema, which would silently change the public MCP output schema.
 class CaptainReportResult(BaseModel):
-    """Describe the stable result returned by the public MCP tool."""
-
     report_id: str
     status: ReportStatus
     clickup_updates: list[dict[str, Any]] = Field(default_factory=list)
@@ -217,8 +219,8 @@ def validate_report_input(
 ) -> CaptainReportResult | None:
     """Validate public arguments without raising user-facing exceptions.
 
-    A valid payload returns ``None``. Invalid input returns the same structured
-    result type as the MCP tool so callers always have predictable guidance.
+    A valid payload returns ``None``. Invalid JSON-compatible MCP input returns
+    the structured result type so callers receive predictable guidance.
     """
 
     safe_id = report_id if isinstance(report_id, str) else "invalid-report"
@@ -395,8 +397,8 @@ def run_openclaw_agent(
         except subprocess.TimeoutExpired as error:
             process.kill()
 
-            # Windows needs a second communicate call to drain pipe readers.
-            # POSIX only needs to reap the killed child before re-raising.
+            # Preserve the adapter's platform-specific cleanup: Windows drains
+            # pipe-reader threads, while POSIX reaps the terminated child.
             if os.name == "nt":
                 error.stdout, error.stderr = process.communicate()
             else:
@@ -447,7 +449,7 @@ def _json_object_from_text(value: str) -> Mapping[str, Any] | None:
 
 
 def _response_text(response: Mapping[str, Any]) -> str | None:
-    """Find visible result text after unwrapping OpenClaw envelopes."""
+    """Find assistant result text after unwrapping OpenClaw envelopes."""
 
     current = response
     while isinstance(current.get("result"), Mapping):

@@ -29,7 +29,7 @@ raise SystemExit(0 if version("mcp").split(".", 1)[0] == "2" else 1)
   run_python "$(command -v python3)"
 fi
 
-# uv provides a local, reproducible fallback without modifying system Python.
+# uv provides an isolated fallback without modifying system Python.
 if command -v uv >/dev/null 2>&1; then
   cd "$plugin_root"
   exec uv run --quiet --no-project \

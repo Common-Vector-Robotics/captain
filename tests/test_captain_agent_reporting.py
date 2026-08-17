@@ -635,7 +635,7 @@ def _seed_processing(path, report_id):
 
 
 def _seed_stored_result(path, report_id, status):
-    """Insert one completed result for replay and retry tests."""
+    """Insert one stored result for replay and retry tests."""
 
     reporting._initialize_store(path)
     stored_result = json.dumps(
@@ -669,7 +669,7 @@ def _seed_stored_result(path, report_id, status):
 
 
 def _stored_row(path, report_id):
-    """Read the complete persisted row so tests can detect mutation."""
+    """Read the persisted mutable fields so tests can detect changes."""
 
     with closing(sqlite3.connect(path)) as connection:
         return connection.execute(
