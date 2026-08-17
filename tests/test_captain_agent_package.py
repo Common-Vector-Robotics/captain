@@ -235,6 +235,53 @@ def test_plugin_readme_documents_native_claude_and_opencode_installation():
     assert "captain_captain_session_report" in readme
 
 
+def test_plugin_readme_walks_a_team_through_remote_setup():
+    """Keep the operator and team-member setup paths complete and discoverable."""
+
+    readme = (PLUGIN / "README.md").read_text(encoding="utf-8")
+
+    for heading in (
+        "## Set up a remote team",
+        "### 1. Prepare the Captain host",
+        "### 2. Give a team member access",
+        "### 3. Configure the team member's computer",
+        "### 4. Install the coding-agent plugin",
+        "### 5. Verify the complete connection",
+        "### Remove a team member",
+    ):
+        assert heading in readme
+
+    for command in (
+        "openclaw gateway status",
+        "openclaw gateway auth-token --show",
+        "ssh -N -L 18789:127.0.0.1:18789",
+        "openclaw onboard --classic --mode remote",
+        "openclaw status --deep",
+        "openclaw agents list --json",
+        "openclaw devices list",
+        "openclaw devices approve <requestId>",
+        'openclaw devices rename --device <deviceId> --name "Member - Work laptop"',
+        "openclaw devices revoke --device <deviceId> --role operator",
+        "openclaw security audit --deep",
+    ):
+        assert command in readme
+
+    assert "[Captain installation](../README.md#install-and-set-up)" in readme
+    assert "does not complete the verification" in readme
+
+
+def test_plugin_readme_explains_the_remote_team_trust_boundary():
+    """Do not present a shared Gateway as per-user security isolation."""
+
+    readme = (PLUGIN / "README.md").read_text(encoding="utf-8")
+    normalized = " ".join(readme.split()).lower()
+
+    assert "trusted team" in normalized
+    assert "captain-specific user accounts" in normalized
+    assert "separate gateways" in normalized
+    assert "shared gateway credential" in normalized
+
+
 def test_root_readme_names_each_supported_coding_agent():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
@@ -242,6 +289,7 @@ def test_root_readme_names_each_supported_coding_agent():
     assert "Claude Code" in readme
     assert "OpenCode" in readme
     assert "OpenClaw" in readme
+    assert "remote team setup" in readme.lower()
 
 
 def test_npm_pack_excludes_plugin_runtime_artifacts(
