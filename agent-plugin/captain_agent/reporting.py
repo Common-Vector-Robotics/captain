@@ -1,3 +1,10 @@
+"""Validate, dispatch, and replay local Captain session reports.
+
+The public MCP tool calls :func:`handle_session_report`. This module keeps
+credentials out of the prompt, runs one local OpenClaw turn, normalizes its
+reply, and stores enough local state to make retries idempotent.
+"""
+
 from __future__ import annotations
 
 import json
@@ -24,6 +31,9 @@ ReportStatus = Literal[
     "failed",
     "unknown_outcome",
 ]
+
+# Values above this line form the public result contract. The constants below
+# control local validation and the OpenClaw subprocess adapter.
 ALLOWED_STATUSES = set(ReportStatus.__args__)
 REPORT_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 MAX_REPORT_BYTES = 1_000_000
@@ -32,8 +42,14 @@ DEFAULT_AGENT_ID = "captain"
 DEFAULT_THINKING = "high"
 DEFAULT_TIMEOUT_SECONDS = 300
 Runner = Callable[[Sequence[str], str, int], subprocess.CompletedProcess[str]]
+
+# SQLite persists replay state across processes. This in-memory set prevents
+# concurrent calls inside one MCP process from reclaiming the same report.
 _ACTIVE_REPORT_IDS: set[str] = set()
 _ACTIVE_REPORTS_LOCK = threading.Lock()
+
+# Correctable results may be dispatched again with the same report ID. Proven
+# or uncertain outcomes are replayed as-is to avoid duplicate external writes.
 RETRYABLE_STORED_STATUSES = {
     "failed",
     "needs_clarification",
@@ -86,6 +102,8 @@ def _redact_external_text(value: str) -> str:
 
 
 def _bounded_external_text(value: Any, *, limit: int = 1_000) -> str:
+    """Redact untrusted text and cap its length for public diagnostics."""
+
     text = _redact_external_text(str(value))
     if len(text) <= limit:
         return text
@@ -93,6 +111,8 @@ def _bounded_external_text(value: Any, *, limit: int = 1_000) -> str:
 
 
 class CaptainReportResult(BaseModel):
+    """Describe the stable result returned by the public MCP tool."""
+
     report_id: str
     status: ReportStatus
     clickup_updates: list[dict[str, Any]] = Field(default_factory=list)
@@ -110,6 +130,8 @@ def canonical_result(
     questions: list[str] | None = None,
     warnings: list[str] | None = None,
 ) -> CaptainReportResult:
+    """Build a public result and downgrade unknown statuses to uncertainty."""
+
     active_warnings = list(warnings or [])
     if status not in ALLOWED_STATUSES:
         safe_status = _bounded_external_text(status, limit=200)
@@ -126,6 +148,8 @@ def canonical_result(
 
 
 def _summary_lines(report: Mapping[str, Any]) -> list[str]:
+    """Return non-empty summary items in a consistent list form."""
+
     summary = report.get("summary")
     if isinstance(summary, list):
         return [str(item).strip() for item in summary if str(item).strip()]
@@ -135,6 +159,8 @@ def _summary_lines(report: Mapping[str, Any]) -> list[str]:
 
 
 def _is_reserved_input_key(key: Any) -> bool:
+    """Recognize authentication and identity keys in common spellings."""
+
     if not isinstance(key, str):
         return False
     snake_case = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key)
@@ -151,6 +177,8 @@ def _is_reserved_input_key(key: Any) -> bool:
 
 
 def _reserved_input_key(value: Any) -> str | None:
+    """Find the first reserved key anywhere in a nested input value."""
+
     if isinstance(value, Mapping):
         for key, nested in value.items():
             if _is_reserved_input_key(key):
@@ -167,6 +195,8 @@ def _reserved_input_key(value: Any) -> str | None:
 
 
 def _strip_reserved_input(value: Any) -> Any:
+    """Remove reserved keys recursively as a prompt-safety backstop."""
+
     if isinstance(value, Mapping):
         return {
             key: _strip_reserved_input(nested)
@@ -185,6 +215,12 @@ def validate_report_input(
     report: Any,
     metadata: Any,
 ) -> CaptainReportResult | None:
+    """Validate public arguments without raising user-facing exceptions.
+
+    A valid payload returns ``None``. Invalid input returns the same structured
+    result type as the MCP tool so callers always have predictable guidance.
+    """
+
     safe_id = report_id if isinstance(report_id, str) else "invalid-report"
     if not isinstance(report_id, str) or not REPORT_ID_PATTERN.fullmatch(report_id):
         return canonical_result(
@@ -241,6 +277,13 @@ def build_status_update_prompt(
     report: Mapping[str, Any],
     metadata: Mapping[str, Any],
 ) -> str:
+    """Build the terminal Captain prompt from already validated input.
+
+    Reserved fields are stripped again here because this helper can also be
+    called directly. This defense-in-depth step keeps claims and credentials
+    out of the subprocess input even if a future caller skips validation.
+    """
+
     report_json = json.dumps(
         _strip_reserved_input(report),
         indent=2,
@@ -279,6 +322,8 @@ Metadata:
 
 
 def _timeout_seconds(env: Mapping[str, str]) -> int:
+    """Read and clamp the user-configurable OpenClaw timeout."""
+
     try:
         value = int(str(env.get("CAPTAIN_AGENT_TIMEOUT_SECONDS", "300")))
     except ValueError:
@@ -290,6 +335,8 @@ def build_openclaw_command(
     report_id: str,
     env: Mapping[str, str],
 ) -> tuple[list[str], int]:
+    """Build the local OpenClaw command and return its effective timeout."""
+
     timeout = _timeout_seconds(env)
     command = str(env.get("CAPTAIN_AGENT_OPENCLAW_COMMAND", "")).strip()
     agent_id = str(env.get("CAPTAIN_AGENT_ID", "")).strip()
@@ -319,7 +366,15 @@ def run_openclaw_agent(
     prompt: str,
     timeout_seconds: int,
 ) -> subprocess.CompletedProcess[str]:
+    """Run one local OpenClaw turn without invoking a shell.
+
+    Process construction is deliberately separate from communication. A start
+    error proves that nothing ran, while an error after ``Popen`` succeeds has
+    an uncertain outcome and must not be advertised as safely retryable.
+    """
+
     try:
+        # Catch only construction failures as known configuration problems.
         process = subprocess.Popen(
             list(command),
             stdin=subprocess.PIPE,
@@ -339,12 +394,16 @@ def run_openclaw_agent(
             )
         except subprocess.TimeoutExpired as error:
             process.kill()
+
+            # Windows needs a second communicate call to drain pipe readers.
+            # POSIX only needs to reap the killed child before re-raising.
             if os.name == "nt":
                 error.stdout, error.stderr = process.communicate()
             else:
                 process.wait()
             raise
         except BaseException:
+            # Do not leave a child process behind on I/O errors or interrupts.
             process.kill()
             raise
 
@@ -388,7 +447,8 @@ def _json_object_from_text(value: str) -> Mapping[str, Any] | None:
 
 
 def _response_text(response: Mapping[str, Any]) -> str | None:
-    """Find the documented visible result text after unwrapping result envelopes."""
+    """Find visible result text after unwrapping OpenClaw envelopes."""
+
     current = response
     while isinstance(current.get("result"), Mapping):
         current = current["result"]
@@ -412,6 +472,8 @@ def _response_text(response: Mapping[str, Any]) -> str | None:
 
 
 def _captain_response_object(response: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """Return a direct Captain object or parse one from response text."""
+
     if isinstance(response.get("status"), str) and "captain_feedback" in response:
         return response
     response_text = _response_text(response)
@@ -421,6 +483,8 @@ def _captain_response_object(response: Mapping[str, Any]) -> Mapping[str, Any] |
 
 
 def _string_list(value: Any) -> list[str] | None:
+    """Normalize an optional string list, rejecting malformed values."""
+
     if value is None:
         return []
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
@@ -429,6 +493,8 @@ def _string_list(value: Any) -> list[str] | None:
 
 
 def _clickup_updates(value: Any) -> list[dict[str, Any]] | None:
+    """Normalize optional ClickUp update objects into plain dictionaries."""
+
     if value is None:
         return []
     if not isinstance(value, list) or not all(isinstance(item, Mapping) for item in value):
@@ -440,6 +506,8 @@ def normalize_captain_agent_response(
     report_id: str,
     response: Mapping[str, Any],
 ) -> CaptainReportResult:
+    """Convert OpenClaw output into the conservative public result contract."""
+
     captain_response = _captain_response_object(response)
     if captain_response is None:
         return canonical_result(
@@ -475,11 +543,21 @@ def normalize_captain_agent_response(
     )
 
 
-def _unknown_outcome(report_id: str, reason: str, detail: Any = "") -> CaptainReportResult:
+def _unknown_outcome(
+    report_id: str,
+    reason: str,
+    detail: Any = "",
+) -> CaptainReportResult:
+    """Return bounded diagnostics when completion cannot be proven."""
+
     message = reason
     if str(detail):
         # Keep the entire warning compact while safely preserving CLI evidence.
-        message = f"{reason}: {_bounded_external_text(detail, limit=1_000 - len(reason) - 2)}"
+        safe_detail = _bounded_external_text(
+            detail,
+            limit=1_000 - len(reason) - 2,
+        )
+        message = f"{reason}: {safe_detail}"
     return canonical_result(
         report_id,
         "unknown_outcome",
@@ -496,6 +574,13 @@ def invoke_openclaw(
     env: Mapping[str, str],
     runner: Runner = run_openclaw_agent,
 ) -> CaptainReportResult:
+    """Validate, dispatch, and normalize one local OpenClaw request.
+
+    Only a process-start failure is known to be safe to retry immediately.
+    Every failure after launch becomes ``unknown_outcome`` because Captain may
+    already have performed an external write.
+    """
+
     validation_result = validate_report_input(report_id, report, metadata)
     if validation_result is not None:
         return validation_result
@@ -531,6 +616,8 @@ def invoke_openclaw(
 
 
 def state_path(env: Mapping[str, str]) -> Path:
+    """Resolve the local SQLite path from an override or the XDG default."""
+
     override = str(env.get("CAPTAIN_AGENT_STATE_PATH", "")).strip()
     if override:
         return Path(override).expanduser()
@@ -540,6 +627,8 @@ def state_path(env: Mapping[str, str]) -> Path:
 
 
 def _initialize_store(path: Path) -> None:
+    """Create the private local replay database when it does not exist."""
+
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.parent.chmod(0o700)
     with closing(sqlite3.connect(path)) as connection:
@@ -560,13 +649,22 @@ def _initialize_store(path: Path) -> None:
 
 
 def _now() -> str:
+    """Return a UTC timestamp in the format stored by the replay database."""
+
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _stored_project(
     report: Mapping[str, Any], metadata: Mapping[str, Any]
 ) -> str:
-    for value in (report.get("project"), metadata.get("project"), metadata.get("repo")):
+    """Choose a readable project label from the supplied report context."""
+
+    candidates = (
+        report.get("project"),
+        metadata.get("project"),
+        metadata.get("repo"),
+    )
+    for value in candidates:
         project = str(value).strip() if value is not None else ""
         if project:
             return project
@@ -574,6 +672,8 @@ def _stored_project(
 
 
 def _result_json(result: CaptainReportResult) -> str:
+    """Serialize a public result for deterministic SQLite replay."""
+
     return json.dumps(result.model_dump(mode="json"), sort_keys=True)
 
 
@@ -583,7 +683,15 @@ def _claim_report(
     report: Mapping[str, Any],
     metadata: Mapping[str, Any],
 ) -> tuple[bool, CaptainReportResult | None]:
-    # Keep the process lock outside SQLite so every caller uses one lock order.
+    """Claim a report for dispatch or return its safe existing result.
+
+    The boolean is ``True`` only when the caller owns the next OpenClaw turn.
+    Otherwise the second value contains a queued, replayed, or uncertain
+    result that can be returned without dispatching.
+    """
+
+    # Keep the process lock outside SQLite so every caller takes locks in the
+    # same order. This prevents two local threads from deadlocking each other.
     with _ACTIVE_REPORTS_LOCK:
         with closing(sqlite3.connect(path, isolation_level=None)) as connection:
             added_active_id = False
@@ -599,6 +707,8 @@ def _claim_report(
                 ).fetchone()
 
                 if report_id in _ACTIVE_REPORT_IDS:
+                    # Process memory wins over stored retryability. The first
+                    # caller is still responsible for finishing this report.
                     outcome = (
                         False,
                         canonical_result(
@@ -608,6 +718,8 @@ def _claim_report(
                         ),
                     )
                 elif row is None:
+                    # Create the row and marker before commit and dispatch so
+                    # another caller in this process sees this report as owned.
                     now = _now()
                     connection.execute(
                         """
@@ -630,6 +742,7 @@ def _claim_report(
                 else:
                     stored_status, stored_result = row
                     if stored_status in RETRYABLE_STORED_STATUSES:
+                        # Corrected input reuses the stable report ID and row.
                         connection.execute(
                             """
                             UPDATE session_reports
@@ -643,11 +756,15 @@ def _claim_report(
                         added_active_id = True
                         outcome = (True, None)
                     elif stored_status in IMMUTABLE_STORED_STATUSES and stored_result:
+                        # Success, partial success, and uncertainty are replayed
+                        # verbatim so the same ID cannot duplicate a write.
                         outcome = (
                             False,
                             CaptainReportResult.model_validate_json(stored_result),
                         )
                     else:
+                        # A processing row without this process's active marker
+                        # may belong to an interrupted earlier attempt.
                         result = canonical_result(
                             report_id,
                             "unknown_outcome",
@@ -667,6 +784,7 @@ def _claim_report(
                         outcome = (False, result)
                 connection.commit()
             except Exception:
+                # Keep the in-memory marker consistent with a failed claim.
                 connection.rollback()
                 if added_active_id:
                     _ACTIVE_REPORT_IDS.discard(report_id)
@@ -675,6 +793,8 @@ def _claim_report(
 
 
 def _finish_report(path: Path, result: CaptainReportResult) -> None:
+    """Persist the final public result before releasing the active marker."""
+
     with closing(sqlite3.connect(path)) as connection:
         with connection:
             connection.execute(
@@ -695,6 +815,13 @@ def handle_session_report(
     env: Mapping[str, str] | None = None,
     runner: Runner = run_openclaw_agent,
 ) -> CaptainReportResult:
+    """Handle the complete idempotent lifecycle for one session report.
+
+    This is the production entrypoint used by the MCP server. It validates the
+    payload, claims its stable ID, runs at most one OpenClaw turn, stores the
+    result, and always releases the process-local active marker.
+    """
+
     active_env = os.environ if env is None else env
     validation = validate_report_input(report_id, report, metadata)
     if validation is not None:

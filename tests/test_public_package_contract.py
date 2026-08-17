@@ -1,3 +1,5 @@
+"""Scan shipped text for private deployment data and missing artifacts."""
+
 import json
 import re
 from pathlib import Path
@@ -9,11 +11,15 @@ LAUNCHER = ROOT / "agent-plugin/bin/captain-agent-mcp"
 
 
 def product_text_paths():
+    """Return the text files users receive in the public package."""
+
     package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
     paths = []
     for name in package["files"]:
         path = ROOT / name
         if path.is_dir():
+            # A package entry can name a directory, so inspect each shipped
+            # text file beneath it rather than treating the directory as text.
             paths.extend(
                 child for child in path.rglob("*")
                 if child.is_file()

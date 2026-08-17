@@ -1,3 +1,5 @@
+"""Verify runtime-private paths stay out of the public repository."""
+
 import subprocess
 from pathlib import Path
 
@@ -8,6 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def is_gitignored(path: str) -> bool:
+    """Return whether Git ignores the path under the repository rules."""
+
     result = subprocess.run(
         ["git", "check-ignore", "--quiet", "--no-index", path],
         cwd=ROOT,

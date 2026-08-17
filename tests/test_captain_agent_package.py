@@ -1,3 +1,5 @@
+"""Verify the Captain plugin's public package and launcher behavior."""
+
 import json
 import stat
 import subprocess
@@ -47,6 +49,8 @@ def temporary_plugin_runtime_artifacts():
 
 
 def npm_pack_paths():
+    """Return the paths npm would include without creating a tarball."""
+
     result = subprocess.run(
         ["npm", "pack", "--dry-run", "--json"],
         cwd=ROOT,

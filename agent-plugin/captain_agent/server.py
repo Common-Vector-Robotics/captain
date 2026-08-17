@@ -26,6 +26,8 @@ def captain_session_report(
 
 
 def main() -> None:
+    """Start the Captain MCP server over standard input and output."""
+
     mcp.run(transport="stdio")
 
 

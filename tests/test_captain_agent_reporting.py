@@ -1,3 +1,5 @@
+"""Exercise report validation, dispatch, normalization, and replay safety."""
+
 import errno
 import json
 import sqlite3
@@ -525,6 +527,8 @@ def test_unproven_completion_is_unknown_and_bounded(completed):
 
 
 def _completed_response(command, response):
+    """Build a successful subprocess result containing Captain JSON."""
+
     return subprocess.CompletedProcess(
         command,
         0,
@@ -610,6 +614,8 @@ def test_real_adapter_communication_uncertainty_is_not_dispatched_twice(
 
 
 def _seed_processing(path, report_id):
+    """Insert an unfinished row that simulates an interrupted process."""
+
     reporting._initialize_store(path)
     with closing(sqlite3.connect(path)) as connection:
         with connection:
@@ -629,6 +635,8 @@ def _seed_processing(path, report_id):
 
 
 def _seed_stored_result(path, report_id, status):
+    """Insert one completed result for replay and retry tests."""
+
     reporting._initialize_store(path)
     stored_result = json.dumps(
         {
@@ -661,6 +669,8 @@ def _seed_stored_result(path, report_id, status):
 
 
 def _stored_row(path, report_id):
+    """Read the complete persisted row so tests can detect mutation."""
+
     with closing(sqlite3.connect(path)) as connection:
         return connection.execute(
             """
