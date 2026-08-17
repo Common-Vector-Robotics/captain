@@ -474,10 +474,14 @@ def run_openclaw_agent(
             process.kill()
             raise
 
+        # communicate() waited for the process, so a return code must now exist.
+        returncode = process.poll()
+        assert returncode is not None
+
         # Return the same output shape as subprocess.run.
         return subprocess.CompletedProcess(
             process.args,
-            process.poll(),
+            returncode,
             stdout,
             stderr,
         )
