@@ -33,6 +33,14 @@ From the repository root, install the compatible bundle into OpenClaw:
 openclaw plugins install ./agent-plugin
 ```
 
+If the Gateway does not reload plugins automatically, activate the mapped skill
+and MCP tool, then inspect the runtime registration:
+
+```bash
+openclaw gateway restart
+openclaw plugins inspect captain --runtime --json
+```
+
 For another MCP host, configure its stdio command from the repository root as:
 
 ```bash
