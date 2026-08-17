@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import sqlite3
 import subprocess
+import threading
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -26,6 +31,8 @@ DEFAULT_AGENT_ID = "captain"
 DEFAULT_THINKING = "high"
 DEFAULT_TIMEOUT_SECONDS = 300
 Runner = Callable[[Sequence[str], str, int], subprocess.CompletedProcess[str]]
+_ACTIVE_REPORT_IDS: set[str] = set()
+_ACTIVE_REPORTS_LOCK = threading.Lock()
 RESERVED_METADATA_KEYS = {
     "access_token",
     "authenticated_email",
@@ -444,3 +451,169 @@ def invoke_openclaw(
             completed.stdout or completed.stderr,
         )
     return normalize_captain_agent_response(report_id, response)
+
+
+def state_path(env: Mapping[str, str]) -> Path:
+    override = str(env.get("CAPTAIN_AGENT_STATE_PATH", "")).strip()
+    if override:
+        return Path(override).expanduser()
+    root = str(env.get("XDG_STATE_HOME", "")).strip()
+    base = Path(root).expanduser() if root else Path.home() / ".local" / "state"
+    return base / "captain-agent" / "reports.sqlite3"
+
+
+def _initialize_store(path: Path) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.parent.chmod(0o700)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS session_reports(
+                report_id TEXT PRIMARY KEY,
+                project TEXT NOT NULL,
+                status TEXT NOT NULL,
+                result_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+    path.chmod(0o600)
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _stored_project(
+    report: Mapping[str, Any], metadata: Mapping[str, Any]
+) -> str:
+    for value in (report.get("project"), metadata.get("project"), metadata.get("repo")):
+        project = str(value).strip() if value is not None else ""
+        if project:
+            return project
+    return "Session report"
+
+
+def _result_json(result: CaptainReportResult) -> str:
+    return json.dumps(result.model_dump(mode="json"), sort_keys=True)
+
+
+def _claim_report(
+    path: Path,
+    report_id: str,
+    report: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+) -> tuple[bool, CaptainReportResult | None]:
+    # Keep the process lock outside SQLite so every caller uses one lock order.
+    with _ACTIVE_REPORTS_LOCK:
+        with sqlite3.connect(path, isolation_level=None) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT status, result_json
+                FROM session_reports
+                WHERE report_id = ?
+                """,
+                (report_id,),
+            ).fetchone()
+
+            if row is None:
+                now = _now()
+                connection.execute(
+                    """
+                    INSERT INTO session_reports(
+                        report_id, project, status, result_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        report_id,
+                        _stored_project(report, metadata),
+                        "processing",
+                        None,
+                        now,
+                        now,
+                    ),
+                )
+                _ACTIVE_REPORT_IDS.add(report_id)
+                try:
+                    connection.commit()
+                except Exception:
+                    _ACTIVE_REPORT_IDS.discard(report_id)
+                    raise
+                return True, None
+
+            _, stored_result = row
+            if stored_result is not None:
+                result = CaptainReportResult.model_validate_json(stored_result)
+                connection.commit()
+                return False, result
+
+            if report_id in _ACTIVE_REPORT_IDS:
+                connection.commit()
+                return False, canonical_result(
+                    report_id,
+                    "queued",
+                    captain_feedback="This report is already processing.",
+                )
+
+            result = canonical_result(
+                report_id,
+                "unknown_outcome",
+                captain_feedback=(
+                    "A previous attempt may have completed; this report was not re-dispatched."
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE session_reports
+                SET status = ?, result_json = ?, updated_at = ?
+                WHERE report_id = ?
+                """,
+                (result.status, _result_json(result), _now(), report_id),
+            )
+            connection.commit()
+            return False, result
+
+
+def _finish_report(path: Path, result: CaptainReportResult) -> None:
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            UPDATE session_reports
+            SET status = ?, result_json = ?, updated_at = ?
+            WHERE report_id = ?
+            """,
+            (result.status, _result_json(result), _now(), result.report_id),
+        )
+
+
+def handle_session_report(
+    report_id: Any,
+    report: Any,
+    metadata: Any,
+    *,
+    env: Mapping[str, str] | None = None,
+    runner: Runner = run_openclaw_agent,
+) -> CaptainReportResult:
+    active_env = os.environ if env is None else env
+    validation = validate_report_input(report_id, report, metadata)
+    if validation is not None:
+        return validation
+
+    path = state_path(active_env)
+    _initialize_store(path)
+    claimed, existing = _claim_report(path, report_id, report, metadata)
+    if not claimed:
+        assert existing is not None
+        return existing
+
+    try:
+        result = invoke_openclaw(
+            report_id, report, metadata, env=active_env, runner=runner
+        )
+        _finish_report(path, result)
+        return result
+    finally:
+        with _ACTIVE_REPORTS_LOCK:
+            _ACTIVE_REPORT_IDS.discard(report_id)

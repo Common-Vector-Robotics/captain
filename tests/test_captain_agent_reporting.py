@@ -1,4 +1,6 @@
 import json
+import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -260,3 +262,96 @@ def test_unproven_completion_is_unknown_and_bounded(completed):
     )
     assert result.status == "unknown_outcome"
     assert len(result.warnings[0]) <= 1_020
+
+
+def _completed_response(command, response):
+    return subprocess.CompletedProcess(
+        command,
+        0,
+        stdout=json.dumps({"payloads": [{"text": json.dumps(response)}]}),
+        stderr="",
+    )
+
+
+def test_state_path_uses_xdg_then_home(monkeypatch, tmp_path):
+    assert reporting.state_path({"XDG_STATE_HOME": str(tmp_path)}) == (
+        tmp_path / "captain-agent" / "reports.sqlite3"
+    )
+    monkeypatch.setattr(reporting.Path, "home", lambda: tmp_path)
+    assert reporting.state_path({}) == (
+        tmp_path / ".local" / "state" / "captain-agent" / "reports.sqlite3"
+    )
+
+
+def test_same_report_id_replays_without_second_openclaw_turn(tmp_path):
+    calls = []
+
+    def runner(command, prompt, timeout):
+        calls.append(command)
+        return _completed_response(command, {
+            "status": "updated",
+            "clickup_updates": [{"action": "updated", "task_id": "task-1"}],
+            "captain_feedback": "Updated the task.",
+        })
+
+    env = {"CAPTAIN_AGENT_STATE_PATH": str(tmp_path / "reports.sqlite3")}
+    first = reporting.handle_session_report(
+        "report-1", VALID_REPORT, {}, env=env, runner=runner
+    )
+    second = reporting.handle_session_report(
+        "report-1", VALID_REPORT, {}, env=env, runner=runner
+    )
+    assert first == second
+    assert len(calls) == 1
+
+
+def _seed_processing(path, report_id):
+    reporting._initialize_store(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            INSERT INTO session_reports(
+                report_id, project, status, result_json, created_at, updated_at
+            ) VALUES (?, ?, 'processing', NULL, ?, ?)
+            """,
+            (report_id, "Captain", "2026-08-17T00:00:00Z", "2026-08-17T00:00:00Z"),
+        )
+
+
+def test_processing_report_in_this_process_returns_queued(tmp_path):
+    path = tmp_path / "reports.sqlite3"
+    _seed_processing(path, "report-1")
+    with reporting._ACTIVE_REPORTS_LOCK:
+        reporting._ACTIVE_REPORT_IDS.add("report-1")
+    try:
+        result = reporting.handle_session_report(
+            "report-1",
+            VALID_REPORT,
+            {},
+            env={"CAPTAIN_AGENT_STATE_PATH": str(path)},
+            runner=lambda *_: pytest.fail("must not invoke OpenClaw"),
+        )
+    finally:
+        with reporting._ACTIVE_REPORTS_LOCK:
+            reporting._ACTIVE_REPORT_IDS.discard("report-1")
+    assert result.status == "queued"
+
+
+def test_orphaned_processing_report_becomes_unknown(tmp_path):
+    path = tmp_path / "reports.sqlite3"
+    _seed_processing(path, "report-1")
+    result = reporting.handle_session_report(
+        "report-1",
+        VALID_REPORT,
+        {},
+        env={"CAPTAIN_AGENT_STATE_PATH": str(path)},
+        runner=lambda *_: pytest.fail("must not invoke OpenClaw"),
+    )
+    assert result.status == "unknown_outcome"
+
+
+def test_store_permissions_are_user_only(tmp_path):
+    path = tmp_path / "state" / "reports.sqlite3"
+    reporting._initialize_store(path)
+    assert path.parent.stat().st_mode & 0o077 == 0
+    assert path.stat().st_mode & 0o077 == 0
