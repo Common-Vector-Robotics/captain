@@ -1,8 +1,9 @@
 # Captain coding-agent plugin
 
-Use `/captain` to give your Captain agent concise evidence about completed
-coding work. The data path is **coding agent → local MCP process → local
-OpenClaw CLI → configured Gateway → Captain → ClickUp**.
+Use `/captain` in Codex, OpenCode, or OpenClaw—or `/captain:captain` in Claude
+Code—to give your Captain agent concise evidence about completed coding work.
+The data path is **coding agent → local MCP process → local OpenClaw CLI →
+configured Gateway → Captain → ClickUp**.
 
 The MCP process and OpenClaw CLI run on the coding-agent machine. The Gateway
 and Captain agent can run on that machine or on a remote host.
@@ -27,7 +28,36 @@ codex plugin marketplace add Common-Vector-Robotics/captain --ref main
 codex plugin add captain@captain
 ```
 
-### Cloned repository or OpenClaw
+### Claude Code marketplace
+
+```bash
+claude plugin marketplace add Common-Vector-Robotics/captain
+claude plugin install captain@captain
+```
+
+Invoke the installed skill as `/captain:captain`.
+
+### OpenCode
+
+Clone the repository into a location you intend to keep, then run the
+user-scoped installer from the repository root:
+
+```bash
+git clone https://github.com/Common-Vector-Robotics/captain.git
+cd captain
+./agent-plugin/bin/install-opencode
+```
+
+The installer uses OpenCode's own CLI to add the MCP server and copies the
+shared skill into OpenCode's global skill directory. It stops instead of
+replacing a different `captain` skill or MCP definition. Preview its work with
+`./agent-plugin/bin/install-opencode --dry-run`.
+
+OpenCode stores the launcher's absolute path. If you move the checkout, run the
+installer again from its new location after removing the old `captain` MCP
+entry. Invoke the installed skill as `/captain`.
+
+### OpenClaw
 
 From the repository root, install the compatible bundle into OpenClaw:
 
@@ -42,6 +72,10 @@ and MCP tool, then inspect the runtime registration:
 openclaw gateway restart
 openclaw plugins inspect captain --runtime --json
 ```
+
+Invoke the installed skill as `/captain`.
+
+### Other MCP hosts
 
 For another MCP host, configure its stdio command from the repository root as:
 
@@ -75,11 +109,19 @@ not require a separate Gateway URL setting.
 
 ## Operation
 
-Invoke `/captain` after completed coding work. The included skill gathers a
-short, redacted Git and verification report, creates one stable report ID, and
-calls the one name exposed by the current host: `Captain:captain_session_report`
-in Codex or `captain__captain_session_report` in OpenClaw. It never guesses or
-calls both. OpenClaw's name follows its documented
+Invoke the host-native command after completed coding work. The included skill
+gathers a short, redacted Git and verification report, creates one stable
+report ID, and calls exactly one tool name from the current host:
+
+| Host | Command | Tool name |
+| --- | --- | --- |
+| Codex | `/captain` | `Captain:captain_session_report` |
+| Claude Code | `/captain:captain` | `mcp__captain__captain_session_report` |
+| OpenCode | `/captain` | `captain_captain_session_report` |
+| OpenClaw | `/captain` | `captain__captain_session_report` |
+
+The skill never guesses an alias or calls more than one match. OpenClaw's name
+follows its documented
 [`serverName__toolName` bundle convention](https://docs.openclaw.ai/plugins/bundles).
 The skill also never sends credentials, customer PII, unrelated personal data,
 credentialed URLs, raw transcripts, or identity and authorization claims.

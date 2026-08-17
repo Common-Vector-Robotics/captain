@@ -1,0 +1,24 @@
+{
+  "name": "captain",
+  "description": "Captain coding-agent integrations",
+  "owner": {
+    "name": "Common Vector Robotics",
+    "url": "https://github.com/Common-Vector-Robotics"
+  },
+  "plugins": [
+    {
+      "name": "captain",
+      "source": "./agent-plugin",
+      "description": "Report completed coding work to your Captain agent",
+      "license": "MIT",
+      "strict": false,
+      "skills": "./skills/",
+      "mcpServers": {
+        "captain": {
+          "command": "${CLAUDE_PLUGIN_ROOT}/bin/captain-agent-mcp",
+          "args": []
+        }
+      }
+    }
+  ]
+}

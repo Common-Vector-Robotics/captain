@@ -72,6 +72,28 @@ def test_marketplace_points_to_local_captain_plugin():
     assert entry["source"] == {"source": "local", "path": "./agent-plugin"}
 
 
+def test_claude_marketplace_defines_the_local_captain_plugin():
+    """Keep Claude's host-specific paths out of the shared MCP manifest."""
+
+    marketplace = json.loads(
+        (ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")
+    )
+    plugin = marketplace["plugins"][0]
+
+    assert marketplace["name"] == "captain"
+    assert marketplace["owner"]["name"] == "Common Vector Robotics"
+    assert plugin["name"] == "captain"
+    assert plugin["source"] == "./agent-plugin"
+    assert plugin["strict"] is False
+    assert plugin["skills"] == "./skills/"
+    assert plugin["mcpServers"] == {
+        "captain": {
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/captain-agent-mcp",
+            "args": [],
+        }
+    }
+
+
 def test_plugin_manifest_declares_skill_and_mcp_server():
     manifest = json.loads(
         (PLUGIN / ".codex-plugin/plugin.json").read_text(encoding="utf-8")
@@ -95,10 +117,38 @@ def test_mcp_manifest_uses_only_the_relative_local_launcher():
     }
 
 
+def test_shared_skill_names_each_supported_host_tool_once():
+    """Require explicit host names so the skill never guesses an alias."""
+
+    skill = (PLUGIN / "skills/captain/SKILL.md").read_text(encoding="utf-8")
+    names = (
+        "Captain:captain_session_report",
+        "captain__captain_session_report",
+        "mcp__captain__captain_session_report",
+        "captain_captain_session_report",
+    )
+
+    for name in names:
+        assert skill.count(f"`{name}`") >= 1
+
+    assert "If neither name is available, or if both" not in skill
+    assert "If zero or more than one exact name is available" in skill
+
+
 def test_launcher_is_executable_and_valid_shell():
     launcher = PLUGIN / "bin/captain-agent-mcp"
     assert launcher.stat().st_mode & stat.S_IXUSR
     subprocess.run(["sh", "-n", str(launcher)], check=True)
+
+
+def test_opencode_installer_is_executable_and_valid_python():
+    installer = PLUGIN / "bin/install-opencode"
+
+    assert installer.stat().st_mode & stat.S_IXUSR
+    subprocess.run(
+        [sys.executable, "-m", "py_compile", str(installer)],
+        check=True,
+    )
 
 
 def test_launcher_rejects_importable_mcp_v1_and_falls_back_to_uv(tmp_path):
@@ -173,6 +223,27 @@ def test_root_package_includes_marketplace_and_plugin():
     assert "agent-plugin" in package["files"]
 
 
+def test_plugin_readme_documents_native_claude_and_opencode_installation():
+    readme = (PLUGIN / "README.md").read_text(encoding="utf-8")
+
+    assert "claude plugin marketplace add Common-Vector-Robotics/captain" in readme
+    assert "claude plugin install captain@captain" in readme
+    assert "./agent-plugin/bin/install-opencode" in readme
+    assert "`/captain:captain`" in readme
+    assert "`/captain`" in readme
+    assert "mcp__captain__captain_session_report" in readme
+    assert "captain_captain_session_report" in readme
+
+
+def test_root_readme_names_each_supported_coding_agent():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "Codex" in readme
+    assert "Claude Code" in readme
+    assert "OpenCode" in readme
+    assert "OpenClaw" in readme
+
+
 def test_npm_pack_excludes_plugin_runtime_artifacts(
     temporary_plugin_runtime_artifacts,
 ):
@@ -186,9 +257,12 @@ def test_npm_pack_excludes_plugin_runtime_artifacts(
     assert packaged.isdisjoint(runtime_paths)
     assert {
         ".agents/plugins/marketplace.json",
+        ".claude-plugin/marketplace.json",
         "agent-plugin/.codex-plugin/plugin.json",
         "agent-plugin/.mcp.json",
         "agent-plugin/bin/captain-agent-mcp",
+        "agent-plugin/bin/install-opencode",
+        "agent-plugin/captain_agent/opencode_install.py",
         "agent-plugin/captain_agent/server.py",
         "agent-plugin/requirements.txt",
     }.issubset(packaged)

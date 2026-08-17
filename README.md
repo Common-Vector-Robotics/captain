@@ -4,11 +4,12 @@
 
 Captain is an openclaw-based project manager for technical teams. Captain automatically manages Clickup tasks, checks in with team members over Slack to receive status updates, infers critical paths, and coordinates team members to remove blockers and prioritize important tasks. Captain also reads and infers tasks based on meeting transcripts sent to his configured email address.
 
-## Report coding-agent work with `/captain`
+## Report coding-agent work to Captain
 
-The optional coding-agent plugin sends a concise, redacted session report over
-MCP stdio through your configured OpenClaw Gateway, which can run locally or on
-a remote host. See the [plugin installation and operation guide](agent-plugin/README.md).
+The optional coding-agent plugin supports Codex, Claude Code, OpenCode, and
+OpenClaw. It sends a concise, redacted session report over MCP stdio through
+your configured OpenClaw Gateway, which can run locally or on a remote host.
+See the [plugin installation and operation guide](agent-plugin/README.md).
 
 ## What Captain does
 

@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-17
 
-**Status:** Ready for user review
+**Status:** Approved
 
 ## Objective
 
@@ -21,8 +21,9 @@ reporting implementation.
 
 ## Design Choice
 
-Claude Code receives a native plugin manifest because Claude Code can discover
-skills and start bundled MCP servers directly from a plugin.
+Claude Code receives a native marketplace definition because Claude Code can
+discover skills and start bundled MCP servers directly from a marketplace
+plugin.
 
 OpenCode receives a small installer that uses OpenCode's native global skill
 and MCP configuration. The installer is preferable to OpenCode's in-process V2
@@ -51,12 +52,12 @@ handling, and rendered result remain unchanged.
 
 ## Claude Code Package
 
-Add `agent-plugin/.claude-plugin/plugin.json` with the plugin name `captain`.
-Claude Code automatically discovers the existing
-`agent-plugin/skills/captain/SKILL.md`, which exposes the namespaced command
+Add `.claude-plugin/marketplace.json` with a `captain` plugin entry whose source
+is `./agent-plugin`. The entry uses `strict: false` and explicitly declares the
+existing `./skills/` directory, which exposes the namespaced command
 `/captain:captain`.
 
-The Claude manifest declares the existing MCP server inline and starts:
+The marketplace entry declares the existing MCP server inline and starts:
 
 ```text
 ${CLAUDE_PLUGIN_ROOT}/bin/captain-agent-mcp
@@ -64,8 +65,9 @@ ${CLAUDE_PLUGIN_ROOT}/bin/captain-agent-mcp
 
 Using `CLAUDE_PLUGIN_ROOT` is required because Claude Code starts plugin MCP
 servers from the user's active project rather than from the plugin directory.
-The existing Codex `.mcp.json` remains unchanged so Codex can continue using
-its relative launcher path.
+With `strict: false`, this marketplace definition is authoritative for Claude
+Code, so its explicit server does not compete with the bundle's Codex/OpenClaw
+`.mcp.json`. That existing file remains unchanged.
 
 Installation uses Claude Code's native marketplace flow against this GitHub
 repository. The repository gains a Claude marketplace catalog alongside the
@@ -77,10 +79,10 @@ Add `agent-plugin/bin/install-opencode`, a readable Python entrypoint that
 performs a user-scoped installation:
 
 1. Resolve the absolute path of the bundled `captain-agent-mcp` launcher.
-2. Validate the OpenCode CLI and its supported configuration shape before any
-   write.
-3. Add the `captain` MCP server through OpenCode's own global configuration
-   command.
+2. Read OpenCode's effective configuration through
+   `opencode debug config --pure` before any write.
+3. Add the `captain` MCP server through OpenCode's own
+   `opencode mcp add captain -- <launcher>` command.
 4. Atomically install the canonical skill at
    `~/.config/opencode/skills/captain/SKILL.md`, or the equivalent directory
    under `XDG_CONFIG_HOME`.
@@ -90,7 +92,7 @@ The installer supports `--dry-run` and accepts an OpenCode executable override
 for nonstandard installations. It treats an identical existing Captain skill
 or MCP entry as already installed. If either destination exists with different
 content or a different command, it stops with an actionable message rather
-than overwriting user configuration.
+than overwriting user configuration. It never edits `opencode.json` itself.
 
 The installed skill is copied rather than symlinked so moving or deleting the
 checkout does not silently remove `/captain`. The MCP entry intentionally keeps
@@ -105,8 +107,6 @@ Its MCP naming convention exposes the tool as
 
 ```text
 agent-plugin/
-  .claude-plugin/
-    plugin.json
   .mcp.json
   bin/
     captain-agent-mcp
@@ -121,8 +121,7 @@ tests/
   test_captain_agent_opencode_install.py
 ```
 
-The exact Claude marketplace filename will follow Claude Code's validated
-marketplace schema. No host-specific copy of the reporting module is added.
+No host-specific copy of the reporting module is added.
 
 ## Installation Documentation
 
@@ -142,8 +141,8 @@ every host ultimately invokes the same local OpenClaw CLI.
 
 Automated package tests will verify:
 
-- the Claude manifest and marketplace catalog parse and point at the existing
-  skill and launcher;
+- the Claude marketplace catalog parses and points at the existing skill and
+  launcher with `strict: false`;
 - Claude's MCP command uses `${CLAUDE_PLUGIN_ROOT}`;
 - the shared skill names all four exact tools and retains the zero-or-many
   fail-closed rule;

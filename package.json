@@ -13,6 +13,7 @@
     "AGENTS.md",
     "HEARTBEAT.md",
     "TOOLS.md",
+    ".claude-plugin/marketplace.json",
     ".agents/plugins/marketplace.json",
     "agent-plugin",
     "requirements.txt",

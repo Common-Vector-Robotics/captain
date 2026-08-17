@@ -30,10 +30,12 @@ Use this workflow once the user asks to report completed coding-agent work.
 
    - In Codex, use `Captain:captain_session_report`.
    - In OpenClaw, use `captain__captain_session_report`.
+   - In Claude Code, use `mcp__captain__captain_session_report`.
+   - In OpenCode, use `captain_captain_session_report`.
 
-   Call only the one exact name present in the catalog. Never try both names or
-   guess an alias. If neither name is available, or if both make the catalog
-   ambiguous, make no tool call and render `CAPTAIN REPORT NOT SENT` with
+   Call only the one exact name present in the catalog. Never try aliases or
+   call more than one. If zero or more than one exact name is available, make
+   no tool call and render `CAPTAIN REPORT NOT SENT` with
    `Status: needs_configuration` and a concise catalog-configuration message.
 
    Call the selected tool with objects in this shape:
