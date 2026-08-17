@@ -1,10 +1,8 @@
 # Captain coding-agent plugin
 
 Use `/captain` to give your locally installed Captain agent concise evidence
-about completed coding work. The data path is **coding agent → local MCP process → local Captain → ClickUp**. No Intermode or CVR server handles the report.
-
-This bundle runs only on your machine. It opens no HTTP listener and requires
-no hosted account, Intermode/CVR server, or remote telemetry.
+about completed coding work. The data path is **coding agent → local MCP
+process → local Captain → ClickUp**.
 
 ## Prerequisites
 

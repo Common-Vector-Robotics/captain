@@ -8,8 +8,7 @@
 
 Add an open-source, user-operated agent plugin to Captain. The plugin lets an
 MCP-capable coding agent report completed work to the user's own Captain agent
-through a `/captain` skill. No Intermode or CVR service participates in the
-request.
+through a `/captain` skill.
 
 The plugin is a complete product by itself. There is no planned hosted or
 remote-HTTP version.
@@ -43,8 +42,7 @@ flowchart LR
 
 The coding agent and MCP server run on the same machine. The MCP server opens no
 network listener. ClickUp and the user's selected model provider remain direct
-user-configured dependencies; no report, credential, audit record, or telemetry
-passes through Intermode or CVR infrastructure.
+user-configured dependencies.
 
 ## User Experience
 
@@ -259,8 +257,8 @@ reported separately and is never implied by mocked tests.
 
 ## Non-Goals
 
-- Intermode or CVR hosting, authentication, telemetry, or gateway integration.
-- Remote access, HTTP transport, OAuth, or multi-user identity.
+- Hosting, remote access, HTTP transport, OAuth, telemetry, or multi-user
+  identity.
 - A2A support, background workers, or a general agent-to-agent framework.
 - Reimplementing Captain's ClickUp matching or PM judgment in the plugin.
 - Automatic installation of OpenClaw, Captain, ClickUp credentials, or a model
@@ -273,6 +271,6 @@ The feature is complete when a clean local installation can invoke `/captain`,
 call the one bundled MCP tool over `stdio`, receive Captain's canonical result,
 and safely replay the same report identifier without a second OpenClaw turn.
 All new focused tests and the existing Captain suite must pass. Documentation
-must make the local-only data path and the absence of Intermode/CVR services
-explicit. The final reviewed changes must be pushed and opened as a pull request
-against `Common-Vector-Robotics/captain:main`.
+must make the local-only data path explicit. The final reviewed changes must be
+pushed and opened as a pull request against
+`Common-Vector-Robotics/captain:main`.

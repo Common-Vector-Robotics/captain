@@ -220,7 +220,6 @@ def test_prompt_delimits_local_report_without_identity_claims():
     assert "report-1" in prompt
     assert "Audit every ClickUp write." in prompt
     assert "authenticated_email" not in prompt
-    assert "Intermode" not in prompt
     assert json.dumps(VALID_REPORT, indent=2, sort_keys=True) in prompt
 
 

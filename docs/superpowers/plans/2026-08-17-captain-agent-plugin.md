@@ -14,7 +14,7 @@
 
 - Repository and PR target: `git@github.com:Common-Vector-Robotics/captain.git`, base branch `main`.
 - Start from a freshly fetched `origin/main`; fetch and incorporate upstream again immediately before PR creation.
-- Use MCP `stdio` only. Do not add HTTP, OAuth, bearer tokens, A2A, a hosted gateway, or Intermode/CVR runtime dependencies.
+- Use MCP `stdio` only. Do not add HTTP, OAuth, bearer tokens, A2A, or a hosted gateway.
 - Expose exactly one MCP tool: `captain_session_report(report_id, report, metadata)`.
 - Accept `report_id` only when it is 1-128 characters from `[A-Za-z0-9._-]`.
 - Reject serialized `report` plus `metadata` content larger than 1,000,000 bytes.
@@ -173,7 +173,6 @@ def test_prompt_delimits_local_report_without_identity_claims():
     assert "report-1" in prompt
     assert "Audit every ClickUp write." in prompt
     assert "authenticated_email" not in prompt
-    assert "Intermode" not in prompt
     assert json.dumps(VALID_REPORT, indent=2, sort_keys=True) in prompt
 ```
 
@@ -916,7 +915,7 @@ Create `agent-plugin/.mcp.json` with the exact object asserted by the test. Crea
   "interface": {
     "displayName": "Captain",
     "shortDescription": "Report completed work to your local Captain agent",
-    "longDescription": "Use a local MCP server and the /captain skill to report completed coding-agent work to your own OpenClaw Captain agent. No CVR or Intermode service handles the report.",
+    "longDescription": "Use a local MCP server and the /captain skill to report completed coding-agent work to your own OpenClaw Captain agent.",
     "developerName": "Common Vector Robotics",
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],
@@ -1099,7 +1098,6 @@ def test_captain_skill_uses_only_the_local_tool():
     assert "captain_session_report" in skill
     assert "report_id" in skill
     assert "unknown_outcome" in skill
-    assert "intermode-gateway" not in skill.lower()
     assert "authenticated_email" not in skill
     assert "Google OAuth" not in skill
 
@@ -1107,7 +1105,6 @@ def test_captain_skill_uses_only_the_local_tool():
 def test_plugin_docs_make_the_local_data_path_explicit():
     docs = (PLUGIN / "README.md").read_text(encoding="utf-8")
     assert "coding agent → local MCP process → local Captain → ClickUp" in docs
-    assert "No Intermode or CVR server" in docs
     assert "codex plugin marketplace add Common-Vector-Robotics/captain --ref main" in docs
     assert "codex plugin add captain@captain" in docs
     assert "openclaw plugins install ./agent-plugin" in docs
@@ -1159,8 +1156,7 @@ agent-plugin/.venv/bin/python -m pip install -r agent-plugin/requirements.txt
 
 - configuration overrides and exact defaults;
 - local state paths and `CAPTAIN_AGENT_STATE_PATH`;
-- troubleshooting for missing `openclaw`, missing MCP SDK/`uv`, `needs_configuration`, and `unknown_outcome`;
-- an explicit statement that there is no HTTP listener, hosted account, Intermode/CVR server, or remote telemetry requirement.
+- troubleshooting for missing `openclaw`, missing MCP SDK/`uv`, `needs_configuration`, and `unknown_outcome`.
 
 Add a short “Report coding-agent work with `/captain`” section to root `README.md` linking to `agent-plugin/README.md`. Keep the full setup details in the nested README.
 
