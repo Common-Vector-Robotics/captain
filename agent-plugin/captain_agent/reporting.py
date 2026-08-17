@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+import subprocess
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -20,6 +21,11 @@ ReportStatus = Literal[
 ALLOWED_STATUSES = set(ReportStatus.__args__)
 REPORT_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 MAX_REPORT_BYTES = 1_000_000
+DEFAULT_OPENCLAW_COMMAND = "openclaw"
+DEFAULT_AGENT_ID = "captain"
+DEFAULT_THINKING = "high"
+DEFAULT_TIMEOUT_SECONDS = 300
+Runner = Callable[[Sequence[str], str, int], subprocess.CompletedProcess[str]]
 RESERVED_METADATA_KEYS = {
     "access_token",
     "authenticated_email",
@@ -205,3 +211,229 @@ Report:
 Metadata:
 {metadata_json}
 """
+
+
+def _timeout_seconds(env: Mapping[str, str]) -> int:
+    try:
+        value = int(str(env.get("CAPTAIN_AGENT_TIMEOUT_SECONDS", "300")))
+    except ValueError:
+        return DEFAULT_TIMEOUT_SECONDS
+    return min(max(value, 30), 3_600)
+
+
+def build_openclaw_command(
+    report_id: str,
+    env: Mapping[str, str],
+) -> tuple[list[str], int]:
+    timeout = _timeout_seconds(env)
+    command = str(env.get("CAPTAIN_AGENT_OPENCLAW_COMMAND", "")).strip()
+    agent_id = str(env.get("CAPTAIN_AGENT_ID", "")).strip()
+    thinking = str(env.get("CAPTAIN_AGENT_THINKING", "")).strip()
+    return (
+        [
+            command or DEFAULT_OPENCLAW_COMMAND,
+            "agent",
+            "--agent",
+            agent_id or DEFAULT_AGENT_ID,
+            "--session-id",
+            f"captain-report-{report_id}",
+            "--thinking",
+            thinking or DEFAULT_THINKING,
+            "--timeout",
+            str(timeout),
+            "--json",
+            "--message-file",
+            "-",
+        ],
+        timeout,
+    )
+
+
+def run_openclaw_agent(
+    command: Sequence[str],
+    prompt: str,
+    timeout_seconds: int,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        list(command),
+        input=prompt,
+        capture_output=True,
+        text=True,
+        timeout=timeout_seconds + 30,
+        check=False,
+        shell=False,
+    )
+
+
+def _json_object_from_text(value: str) -> Mapping[str, Any] | None:
+    """Extract a JSON object from direct, fenced, or surrounding CLI text."""
+    decoder = json.JSONDecoder()
+    candidates = [value.strip()]
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", value, re.IGNORECASE)
+    if fence_match:
+        candidates.append(fence_match.group(1).strip())
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            first_object = candidate.find("{")
+            if first_object == -1:
+                continue
+            try:
+                parsed, _ = decoder.raw_decode(candidate[first_object:])
+            except json.JSONDecodeError:
+                continue
+        if isinstance(parsed, Mapping):
+            return parsed
+    return None
+
+
+def _response_text(response: Mapping[str, Any]) -> str | None:
+    """Find the documented visible result text after unwrapping result envelopes."""
+    current = response
+    while isinstance(current.get("result"), Mapping):
+        current = current["result"]
+
+    payloads = current.get("payloads")
+    if isinstance(payloads, list):
+        for payload in payloads:
+            if isinstance(payload, Mapping) and isinstance(payload.get("text"), str):
+                return payload["text"]
+
+    meta = current.get("meta")
+    if isinstance(meta, Mapping):
+        for key in ("finalAssistantVisibleText", "finalAssistantRawText"):
+            if isinstance(meta.get(key), str):
+                return meta[key]
+
+    for key in ("text", "reply", "output"):
+        if isinstance(current.get(key), str):
+            return current[key]
+    return None
+
+
+def _captain_response_object(response: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    if isinstance(response.get("status"), str) and "captain_feedback" in response:
+        return response
+    response_text = _response_text(response)
+    if response_text is None:
+        return None
+    return _json_object_from_text(response_text)
+
+
+def _string_list(value: Any) -> list[str] | None:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return None
+    return value
+
+
+def _clickup_updates(value: Any) -> list[dict[str, Any]] | None:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(item, Mapping) for item in value):
+        return None
+    return [dict(item) for item in value]
+
+
+def normalize_captain_agent_response(
+    report_id: str,
+    response: Mapping[str, Any],
+) -> CaptainReportResult:
+    captain_response = _captain_response_object(response)
+    if captain_response is None:
+        return canonical_result(
+            report_id,
+            "unknown_outcome",
+            captain_feedback="OpenClaw did not return a complete Captain JSON response.",
+        )
+
+    status = captain_response.get("status")
+    feedback = captain_response.get("captain_feedback")
+    updates = _clickup_updates(captain_response.get("clickup_updates"))
+    questions = _string_list(captain_response.get("questions"))
+    warnings = _string_list(captain_response.get("warnings"))
+    if (
+        not isinstance(status, str)
+        or not isinstance(feedback, str)
+        or updates is None
+        or questions is None
+        or warnings is None
+    ):
+        return canonical_result(
+            report_id,
+            "unknown_outcome",
+            captain_feedback="OpenClaw returned malformed Captain completion evidence.",
+        )
+    return canonical_result(
+        report_id,
+        status,
+        captain_feedback=feedback,
+        clickup_updates=updates,
+        questions=questions,
+        warnings=warnings,
+    )
+
+
+def _bounded_external_text(value: Any, *, limit: int = 1_000) -> str:
+    text = str(value)
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}... [truncated]"
+
+
+def _unknown_outcome(report_id: str, reason: str, detail: Any = "") -> CaptainReportResult:
+    message = reason
+    if str(detail):
+        # Keep the entire warning compact while safely preserving CLI evidence.
+        message = f"{reason}: {_bounded_external_text(detail, limit=1_000 - len(reason) - 2)}"
+    return canonical_result(
+        report_id,
+        "unknown_outcome",
+        captain_feedback="OpenClaw completion could not be proven.",
+        warnings=[message],
+    )
+
+
+def invoke_openclaw(
+    report_id: str,
+    report: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+    *,
+    env: Mapping[str, str],
+    runner: Runner = run_openclaw_agent,
+) -> CaptainReportResult:
+    validation_result = validate_report_input(report_id, report, metadata)
+    if validation_result is not None:
+        return validation_result
+
+    prompt = build_status_update_prompt(report_id, report, metadata)
+    command, timeout = build_openclaw_command(report_id, env)
+    try:
+        completed = runner(command, prompt, timeout)
+    except FileNotFoundError as error:
+        return canonical_result(
+            report_id,
+            "needs_configuration",
+            captain_feedback="OpenClaw executable is not available.",
+            warnings=[_bounded_external_text(error)],
+        )
+    except subprocess.TimeoutExpired as error:
+        return _unknown_outcome(report_id, "OpenClaw timed out", error)
+    except Exception as error:
+        return _unknown_outcome(report_id, "OpenClaw runner failed", error)
+
+    if completed.returncode != 0:
+        detail = completed.stderr or completed.stdout or f"exit code {completed.returncode}"
+        return _unknown_outcome(report_id, "OpenClaw exited unsuccessfully", detail)
+
+    response = _json_object_from_text(completed.stdout or "")
+    if response is None:
+        return _unknown_outcome(
+            report_id,
+            "OpenClaw stdout was not a JSON object",
+            completed.stdout or completed.stderr,
+        )
+    return normalize_captain_agent_response(report_id, response)
