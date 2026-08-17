@@ -10,6 +10,8 @@ Use this workflow once the user asks to report completed coding-agent work.
 1. Gather the Git root, branch and upstream, short status, recent commits, diff
    stats, completed work, changed files, verification actually run, decisions,
    blockers, risks, and next steps. Do this once; keep the result concise.
+   Use only values observed in the session or local inspection. Omit optional
+   values that cannot be established; never invent timestamps or diff data.
 2. Make one stable `report_id`: use the host session identifier when available;
    otherwise generate a local UUID. Reuse that exact ID for every replay.
 3. Remove tokens, passwords, private keys, OAuth material, credentialed URLs,
@@ -32,12 +34,14 @@ Use this workflow once the user asks to report completed coding-agent work.
        "risks": ["risk"],
        "next_steps": ["next step"]
      },
-     "metadata": {"client": "coding-agent", "repository": "safe repository name", "branch": "branch", "timestamp": "ISO-8601 timestamp", "host_session_id": "when available"}
+     "metadata": {"client": "coding-agent", "repository": "safe repository name", "branch": "branch", "host_session_id": "when available"}
    }
    ```
 
    The tool is the only route: do not call Captain, ClickUp, or an endpoint
    directly. `report` and `metadata` must be structured objects, not prose.
+   Include `timestamp` only when it is observed from the session or local
+   inspection.
 5. Wait for a terminal result. `queued` is not terminal: wait or replay the
    same `report_id` until a terminal result is available. Never make a new ID
    for a replay. Treat `unknown_outcome` as uncertain: check ClickUp before any
