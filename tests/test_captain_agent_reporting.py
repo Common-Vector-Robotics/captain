@@ -334,11 +334,50 @@ def test_timeout_after_dispatch_is_unknown():
     assert result.status == "unknown_outcome"
 
 
+def test_real_adapter_timeout_kills_and_reaps_before_returning_unknown(monkeypatch):
+    process = None
+
+    class TimeoutProcess:
+        def __init__(self, args):
+            self.args = args
+            self.killed = False
+            self.reaped = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.wait()
+
+        def communicate(self, input=None, timeout=None):
+            raise subprocess.TimeoutExpired(self.args, timeout)
+
+        def kill(self):
+            self.killed = True
+
+        def wait(self):
+            self.reaped = True
+
+    def start_process(args, **kwargs):
+        nonlocal process
+        process = TimeoutProcess(args)
+        return process
+
+    monkeypatch.setattr(reporting.subprocess, "Popen", start_process)
+
+    result = reporting.invoke_openclaw("report-1", VALID_REPORT, {}, env={})
+
+    assert result.status == "unknown_outcome"
+    assert process is not None
+    assert process.killed is True
+    assert process.reaped is True
+
+
 def test_missing_openclaw_in_real_adapter_is_configuration_error(monkeypatch):
-    def missing_subprocess(*args, **kwargs):
+    def missing_process(*args, **kwargs):
         raise FileNotFoundError("openclaw")
 
-    monkeypatch.setattr(reporting.subprocess, "run", missing_subprocess)
+    monkeypatch.setattr(reporting.subprocess, "Popen", missing_process)
 
     result = reporting.invoke_openclaw(
         "report-1", VALID_REPORT, {}, env={}
@@ -356,14 +395,102 @@ def test_missing_openclaw_in_real_adapter_is_configuration_error(monkeypatch):
 def test_real_adapter_start_os_errors_are_configuration_errors(
     monkeypatch, launch_error
 ):
-    def failing_subprocess(*args, **kwargs):
+    def failing_process(*args, **kwargs):
         raise launch_error
 
-    monkeypatch.setattr(reporting.subprocess, "run", failing_subprocess)
+    monkeypatch.setattr(reporting.subprocess, "Popen", failing_process)
     result = reporting.invoke_openclaw("report-1", VALID_REPORT, {}, env={})
 
     assert result.status == "needs_configuration"
     assert "external-secret" not in " ".join(result.warnings)
+
+
+def test_real_adapter_returns_captured_output_and_return_code_without_shell(
+    monkeypatch,
+):
+    observed = {}
+
+    class CompletedProcess:
+        def __init__(self, args):
+            self.args = args
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def communicate(self, input=None, timeout=None):
+            observed["communicate"] = (input, timeout)
+            return "captured stdout", "captured stderr"
+
+        def poll(self):
+            return 7
+
+    def start_process(args, **kwargs):
+        observed["args"] = args
+        observed["kwargs"] = kwargs
+        return CompletedProcess(args)
+
+    monkeypatch.setattr(reporting.subprocess, "Popen", start_process)
+
+    completed = reporting.run_openclaw_agent(["openclaw", "agent"], "prompt", 45)
+
+    assert completed.args == ["openclaw", "agent"]
+    assert completed.returncode == 7
+    assert completed.stdout == "captured stdout"
+    assert completed.stderr == "captured stderr"
+    assert observed == {
+        "args": ["openclaw", "agent"],
+        "kwargs": {
+            "stdin": subprocess.PIPE,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "shell": False,
+        },
+        "communicate": ("prompt", 75),
+    }
+
+
+def test_real_adapter_communication_oserror_is_unknown(monkeypatch):
+    process = None
+
+    class CommunicationFailureProcess:
+        def __init__(self, args):
+            self.args = args
+            self.killed = False
+            self.reaped = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.wait()
+
+        def communicate(self, input=None, timeout=None):
+            raise OSError(errno.EIO, "write failed for token=external-secret")
+
+        def kill(self):
+            self.killed = True
+
+        def wait(self):
+            self.reaped = True
+
+    def start_process(args, **kwargs):
+        nonlocal process
+        process = CommunicationFailureProcess(args)
+        return process
+
+    monkeypatch.setattr(reporting.subprocess, "Popen", start_process)
+
+    result = reporting.invoke_openclaw("report-1", VALID_REPORT, {}, env={})
+
+    assert result.status == "unknown_outcome"
+    assert "external-secret" not in " ".join(result.warnings)
+    assert process is not None
+    assert process.killed is True
+    assert process.reaped is True
 
 
 def test_arbitrary_runner_oserror_after_dispatch_is_unknown():
@@ -436,6 +563,50 @@ def test_same_report_id_replays_without_second_openclaw_turn(tmp_path):
     )
     assert first == second
     assert len(calls) == 1
+
+
+def test_real_adapter_communication_uncertainty_is_not_dispatched_twice(
+    monkeypatch, tmp_path
+):
+    starts = 0
+
+    class CommunicationFailureProcess:
+        def __init__(self, args):
+            self.args = args
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.wait()
+
+        def communicate(self, input=None, timeout=None):
+            raise OSError(errno.EIO, "post-dispatch pipe failure")
+
+        def kill(self):
+            pass
+
+        def wait(self):
+            pass
+
+    def start_process(args, **kwargs):
+        nonlocal starts
+        starts += 1
+        return CommunicationFailureProcess(args)
+
+    monkeypatch.setattr(reporting.subprocess, "Popen", start_process)
+    env = {"CAPTAIN_AGENT_STATE_PATH": str(tmp_path / "reports.sqlite3")}
+
+    first = reporting.handle_session_report(
+        "report-1", VALID_REPORT, {}, env=env
+    )
+    replay = reporting.handle_session_report(
+        "report-1", VALID_REPORT, {}, env=env
+    )
+
+    assert first.status == "unknown_outcome"
+    assert replay == first
+    assert starts == 1
 
 
 def _seed_processing(path, report_id):

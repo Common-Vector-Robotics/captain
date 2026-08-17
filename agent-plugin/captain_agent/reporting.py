@@ -320,17 +320,40 @@ def run_openclaw_agent(
     timeout_seconds: int,
 ) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(
+        process = subprocess.Popen(
             list(command),
-            input=prompt,
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout_seconds + 30,
-            check=False,
             shell=False,
         )
     except OSError as error:
         raise _ProcessStartError(error) from error
+
+    with process:
+        try:
+            stdout, stderr = process.communicate(
+                prompt,
+                timeout=timeout_seconds + 30,
+            )
+        except subprocess.TimeoutExpired as error:
+            process.kill()
+            if os.name == "nt":
+                error.stdout, error.stderr = process.communicate()
+            else:
+                process.wait()
+            raise
+        except BaseException:
+            process.kill()
+            raise
+
+        return subprocess.CompletedProcess(
+            process.args,
+            process.poll(),
+            stdout,
+            stderr,
+        )
 
 
 def _json_object_from_text(value: str) -> Mapping[str, Any] | None:
