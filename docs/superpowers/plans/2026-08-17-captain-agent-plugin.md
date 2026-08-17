@@ -157,7 +157,7 @@ def test_prompt_delimits_local_report_without_identity_claims():
 Run:
 
 ```bash
-/Users/gavinbender/.codex-work/venvs/captain-agent-plugin/bin/python \
+$CAPTAIN_AGENT_PYTHON \
   -m pytest tests/test_captain_agent_reporting.py -q
 ```
 
@@ -432,7 +432,7 @@ def test_unproven_completion_is_unknown_and_bounded(completed):
 Run:
 
 ```bash
-/Users/gavinbender/.codex-work/venvs/captain-agent-plugin/bin/python \
+$CAPTAIN_AGENT_PYTHON \
   -m pytest tests/test_captain_agent_reporting.py -q
 ```
 
@@ -725,7 +725,7 @@ def handle_session_report(
 Run:
 
 ```bash
-/Users/gavinbender/.codex-work/venvs/captain-agent-plugin/bin/python \
+$CAPTAIN_AGENT_PYTHON \
   -m pytest tests/test_captain_agent_reporting.py -q
 ```
 
@@ -844,7 +844,7 @@ def test_root_package_includes_marketplace_and_plugin():
 Run:
 
 ```bash
-/Users/gavinbender/.codex-work/venvs/captain-agent-plugin/bin/python \
+$CAPTAIN_AGENT_PYTHON \
   -m pytest tests/test_captain_agent_package.py -q
 ```
 
@@ -1027,7 +1027,7 @@ Add these two cases to the runtime-private parameter list in
 Run:
 
 ```bash
-/Users/gavinbender/.codex-work/venvs/captain-agent-plugin/bin/python -m pytest \
+$CAPTAIN_AGENT_PYTHON -m pytest \
   tests/test_captain_agent_package.py \
   tests/test_public_package_contract.py \
   tests/test_gitignore_privacy_contract.py -q
@@ -1138,7 +1138,7 @@ Add a short “Report coding-agent work with `/captain`” section to root `READ
 Run:
 
 ```bash
-/Users/gavinbender/.codex-work/venvs/captain-agent-plugin/bin/python -m pytest \
+$CAPTAIN_AGENT_PYTHON -m pytest \
   tests/test_captain_agent_package.py tests/test_public_package_contract.py -q
 ```
 
@@ -1170,7 +1170,7 @@ python3 -m json.tool .agents/plugins/marketplace.json >/dev/null
 python3 -m json.tool agent-plugin/.codex-plugin/plugin.json >/dev/null
 python3 -m json.tool agent-plugin/.mcp.json >/dev/null
 sh -n agent-plugin/bin/captain-agent-mcp
-/Users/gavinbender/.codex-work/venvs/captain-agent-plugin/bin/python \
+$CAPTAIN_AGENT_PYTHON \
   -m compileall -q agent-plugin/captain_agent
 ```
 
@@ -1179,7 +1179,7 @@ Expected: every command exits zero with no output other than normal command summ
 - [ ] **Step 2: Run focused tests**
 
 ```bash
-/Users/gavinbender/.codex-work/venvs/captain-agent-plugin/bin/python -m pytest \
+$CAPTAIN_AGENT_PYTHON -m pytest \
   tests/test_captain_agent_reporting.py tests/test_captain_agent_package.py -q
 ```
 
@@ -1188,7 +1188,7 @@ Expected: all focused tests pass.
 - [ ] **Step 3: Run the complete Captain suite**
 
 ```bash
-/Users/gavinbender/.codex-work/venvs/captain-agent-plugin/bin/python -m pytest -q
+$CAPTAIN_AGENT_PYTHON -m pytest -q
 ```
 
 Expected: the baseline 123 tests plus 2 subtests and all new tests pass.

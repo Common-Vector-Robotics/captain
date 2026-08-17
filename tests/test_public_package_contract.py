@@ -128,3 +128,14 @@ def test_readme_google_auth_is_least_privilege_and_fails_closed():
         assert f"`{scope}`" in normalized
     assert "GOG_KEYRING_BACKEND=file" in normalized
     assert "GOG_KEYRING_PASSWORD" in normalized
+
+
+def test_release_plan_contains_no_private_host_paths():
+    plan_root = ROOT / "docs/superpowers"
+    private_path_pattern = r"/" + r"Users/(?!example(?:/|\b))[^/\s]+/"
+    failures = [
+        str(path.relative_to(ROOT))
+        for path in plan_root.rglob("*.md")
+        if re.search(private_path_pattern, path.read_text(encoding="utf-8"))
+    ]
+    assert failures == []
