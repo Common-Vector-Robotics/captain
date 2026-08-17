@@ -266,26 +266,33 @@ def run_openclaw_agent(
 
 
 def _json_object_from_text(value: str) -> Mapping[str, Any] | None:
-    """Extract a JSON object from direct, fenced, or surrounding CLI text."""
+    """Extract a direct, fenced, or fallback JSON object in that order."""
     decoder = json.JSONDecoder()
-    candidates = [value.strip()]
+    try:
+        parsed = json.loads(value.strip())
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, Mapping):
+        return parsed
+
     fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", value, re.IGNORECASE)
     if fence_match:
-        candidates.append(fence_match.group(1).strip())
-
-    for candidate in candidates:
         try:
-            parsed = json.loads(candidate)
+            parsed = json.loads(fence_match.group(1).strip())
         except json.JSONDecodeError:
-            first_object = candidate.find("{")
-            if first_object == -1:
-                continue
-            try:
-                parsed, _ = decoder.raw_decode(candidate[first_object:])
-            except json.JSONDecodeError:
-                continue
+            parsed = None
         if isinstance(parsed, Mapping):
             return parsed
+
+    first_object = value.find("{")
+    if first_object == -1:
+        return None
+    try:
+        parsed, _ = decoder.raw_decode(value[first_object:])
+    except json.JSONDecodeError:
+        return None
+    if isinstance(parsed, Mapping):
+        return parsed
     return None
 
 

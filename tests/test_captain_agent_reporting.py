@@ -204,6 +204,25 @@ def test_nested_openclaw_envelope_is_normalized():
     assert result.status == "created"
 
 
+def test_fenced_captain_response_wins_over_leading_diagnostic_json():
+    response = {
+        "result": {
+            "payloads": [{"text": """{"level": "debug"}
+```json
+{
+  "status": "failed",
+  "captain_feedback": "ClickUp update failed."
+}
+```"""}]
+        }
+    }
+
+    result = reporting.normalize_captain_agent_response("report-1", response)
+
+    assert result.status == "failed"
+    assert result.captain_feedback == "ClickUp update failed."
+
+
 def test_timeout_after_dispatch_is_unknown():
     def timeout_runner(command, prompt, timeout):
         raise subprocess.TimeoutExpired(command, timeout)
