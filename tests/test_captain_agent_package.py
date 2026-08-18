@@ -218,28 +218,42 @@ def test_plugin_readme_documents_native_claude_and_opencode_installation():
 
     assert "claude plugin marketplace add Common-Vector-Robotics/captain" in readme
     assert "claude plugin install captain@captain" in readme
-    assert 'mkdir -p "$opencode_skills_dir/captain"' in readme
+    assert "mkdir -p ~/.config/opencode/skills/captain" in readme
     assert "cp agent-plugin/skills/captain/SKILL.md" in readme
     assert "opencode mcp add captain --" in readme
     assert "opencode mcp list" in readme
     assert "`/captain:captain`" in readme
     assert "`/captain`" in readme
-    assert "mcp__captain__captain_session_report" in readme
-    assert "captain_captain_session_report" in readme
+
+
+def test_plugin_readme_keeps_the_beginner_path_short_and_complete():
+    """Keep the common setup path ahead of optional operator details."""
+
+    readme = (PLUGIN / "README.md").read_text(encoding="utf-8")
+
+    introduction = readme.index("## What this plugin does")
+    prerequisites = readme.index("## Before you install")
+    installation = readme.index("## Install")
+    verification = readme.index("## Verify the setup")
+    remote_setup = readme.index("## Connect to a remote Captain")
+    advanced = readme.index("## Advanced setup")
+
+    assert introduction < prerequisites < installation < verification
+    assert verification < remote_setup < advanced
+    assert len(readme.splitlines()) < 275
 
 
 def test_plugin_readme_walks_a_team_through_remote_setup():
-    """Keep the operator and team-member setup paths complete and discoverable."""
+    """Keep the optional operator and team-member setup path complete."""
 
     readme = (PLUGIN / "README.md").read_text(encoding="utf-8")
 
     for heading in (
-        "## Set up a remote team",
-        "### 1. Prepare the Captain host",
-        "### 2. Give a team member access",
-        "### 3. Configure the team member's computer",
-        "### 4. Install the coding-agent plugin",
-        "### 5. Verify the complete connection",
+        "## Connect to a remote Captain",
+        "### 1. Prepare the Captain computer",
+        "### 2. Give the team member SSH access",
+        "### 3. Connect the team member's computer",
+        "### 4. Approve the device if OpenClaw asks",
         "### Remove a team member",
     ):
         assert heading in readme
@@ -259,8 +273,8 @@ def test_plugin_readme_walks_a_team_through_remote_setup():
     ):
         assert command in readme
 
-    assert "[Captain installation](../README.md#install-and-set-up)" in readme
-    assert "does not complete the verification" in readme
+    assert "[install Captain](../README.md#install-and-set-up)" in readme
+    assert "`CAPTAIN REPORT SENT`" in readme
 
 
 def test_plugin_readme_explains_the_remote_team_trust_boundary():
