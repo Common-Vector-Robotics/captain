@@ -189,8 +189,9 @@ Commands:
 
 Rules:
 
-- Every CLI entrypoint wraps `main()` in `captain_telemetry.guard("<name>")`
-  (enforced by `tests/test_telemetry_wrap_lint.py`). New scripts must do the
-  same.
+- Scheduled and operational CLI entrypoints wrap `main()` in
+  `captain_telemetry.guard("<name>")`. The telemetry self-test initializes
+  telemetry directly, while current setup utilities report failures directly to
+  their caller. New scheduled and operational scripts should use the guard.
 - Never print or send secret values; the scrubber redacts known secrets from
   events, and `include_local_variables` is off.

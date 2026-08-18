@@ -573,7 +573,7 @@ EOF
 chmod 600 .secrets/sentry.env
 ```
 
-Telemetry also needs the `sentry-sdk` package, which came from [step 2](#2-install-python-dependencies). If you skipped that step, run `python3 -m pip install --user -r requirements.txt` now, adding `--break-system-packages` if Python reports `error: externally-managed-environment`.
+Telemetry also needs the `sentry-sdk` package, which came from [step 4](#4-install-python-dependencies). If you skipped that step, run `python3 -m pip install --user -r requirements.txt` now, adding `--break-system-packages` if Python reports `error: externally-managed-environment`.
 
 ### 2. Confirm that events reach Sentry
 
