@@ -17,9 +17,21 @@ import type { StoredMemberAuth } from "../src/store.js";
 function request(
   remoteAddress: string | undefined,
   headers: Record<string, string | string[] | undefined> = {},
+  metadata: {
+    rawHeaders?: string[];
+    headersDistinct?: Record<string, string[]>;
+  } = {},
 ): IncomingMessage {
+  const rawHeaders = metadata.rawHeaders ?? (metadata.headersDistinct
+    ? undefined
+    : Object.entries(headers).flatMap(([name, value]) => {
+      if (value === undefined) return [];
+      return (Array.isArray(value) ? value : [value]).flatMap((item) => [name, item]);
+    }));
   return {
     headers,
+    ...metadata,
+    ...(rawHeaders ? { rawHeaders } : {}),
     socket: { remoteAddress },
   } as IncomingMessage;
 }
@@ -158,6 +170,31 @@ describe("resolveClientSource", () => {
       "x-captain-client-ip": "203.0.113.9",
     }))).toBe("203.0.113.9");
   });
+
+  it("canonicalizes equivalent IPv6 and mapped IPv4 spellings", () => {
+    expect(resolveClientSource(request("2001:0DB8:0:0:0:0:0:8")))
+      .toBe("2001:db8::8");
+    expect(resolveClientSource(request("2001:db8::8")))
+      .toBe("2001:db8::8");
+    expect(resolveClientSource(request("::ffff:c633:6403", {
+      "x-captain-client-ip": "203.0.113.8",
+    }))).toBe("198.51.100.3");
+    expect(resolveClientSource(request("::ffff:198.51.100.3", {
+      "x-captain-client-ip": "203.0.113.8",
+    }))).toBe("198.51.100.3");
+  });
+
+  it("trusts the client header only when canonical peer address is loopback", () => {
+    expect(resolveClientSource(request("0:0:0:0:0:0:0:1", {
+      "x-captain-client-ip": "2001:0DB8:0:0:0:0:0:8",
+    }))).toBe("2001:db8::8");
+    expect(resolveClientSource(request("::ffff:7f00:1", {
+      "x-captain-client-ip": "::ffff:c000:201",
+    }))).toBe("192.0.2.1");
+    expect(resolveClientSource(request("::ffff:c633:6403", {
+      "x-captain-client-ip": "203.0.113.8",
+    }))).toBe("198.51.100.3");
+  });
 });
 
 describe("CaptainAuthenticator", () => {
@@ -208,7 +245,7 @@ describe("CaptainAuthenticator", () => {
       { authenticator: new CaptainAuthenticator(active.store), headers: { authorization: active.issued.token } },
       { authenticator: new CaptainAuthenticator(active.store), headers: { authorization: `bearer ${active.issued.token}` } },
       { authenticator: new CaptainAuthenticator(active.store), headers: { authorization: `Bearer  ${active.issued.token}` } },
-      { authenticator: new CaptainAuthenticator(active.store), headers: { authorization: [`Bearer ${active.issued.token}`] } },
+      { authenticator: new CaptainAuthenticator(active.store), headers: { authorization: [`Bearer ${active.issued.token}`, `Bearer ${active.issued.token}`] } },
       { authenticator: new CaptainAuthenticator(active.store), headers: authorization("cap_v1_short.secret") },
       { authenticator: new CaptainAuthenticator(active.store), headers: authorization(`cap_v1_${differentBase64Url(active.issued.lookupId)}.${active.issued.secret}`) },
       { authenticator: new CaptainAuthenticator(active.store), headers: authorization(`cap_v1_${active.issued.lookupId}.${differentBase64Url(active.issued.secret)}`) },
@@ -286,6 +323,64 @@ describe("CaptainAuthenticator", () => {
       expectProblem(() => authenticator.authenticate(request("198.51.100.3")), 401);
     }
     expectProblem(() => authenticator.authenticate(request("198.51.100.3")), 429, 6);
+  });
+
+  it("shares one source bucket across equivalent IPv6 spellings", () => {
+    const { store } = fixture();
+    const authenticator = new CaptainAuthenticator(store, { now: () => 0 });
+    const sources = [
+      "2001:db8::8",
+      "2001:0db8:0:0:0:0:0:8",
+      "2001:DB8::8",
+      "2001:db8:0::8",
+      "2001:0DB8:0000:0000:0000:0000:0000:0008",
+    ];
+
+    for (const source of sources) {
+      expectProblem(() => authenticator.authenticate(request(source)), 401);
+    }
+    expectProblem(() => authenticator.authenticate(request("2001:db8::8")), 429, 6);
+  });
+
+  it("rejects duplicate raw Authorization fields with the uniform failure shape", () => {
+    const { issued, store } = fixture();
+    const authenticator = new CaptainAuthenticator(store);
+    const value = `Bearer ${issued.token}`;
+
+    const problem = captureProblem(() => authenticator.authenticate(request(
+      "198.51.100.3",
+      { authorization: value },
+      { rawHeaders: ["Authorization", value, "authorization", value] },
+    )));
+
+    expect(problem).toMatchObject({
+      status: 401,
+      code: "UNAUTHORIZED",
+      message: "Authentication required.",
+      retryAfterSeconds: undefined,
+    });
+  });
+
+  it("rejects duplicate distinct Authorization fields but accepts exactly one", () => {
+    const { issued, store } = fixture();
+    const value = `Bearer ${issued.token}`;
+
+    expectProblem(() => new CaptainAuthenticator(store).authenticate(request(
+      "198.51.100.3",
+      { authorization: value },
+      { headersDistinct: { authorization: [value, value] } },
+    )), 401);
+
+    expect(new CaptainAuthenticator(store).authenticate(request(
+      "198.51.100.3",
+      { authorization: value },
+      { rawHeaders: ["Host", "captain.example", "Authorization", value] },
+    )).memberId).toBe("member-1");
+    expect(new CaptainAuthenticator(store).authenticate(request(
+      "198.51.100.3",
+      { authorization: value },
+      { headersDistinct: { authorization: [value] } },
+    )).memberId).toBe("member-1");
   });
 
   it("limits failures for one known lookup ID across sources", () => {

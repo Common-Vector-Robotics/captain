@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
-import { isIP } from "node:net";
+import { isIP, SocketAddress } from "node:net";
 
 import { HttpProblem } from "./contracts.js";
 import type { StoredMember, StoredMemberAuth } from "./store.js";
@@ -116,27 +116,40 @@ export class TokenBucketLimiter {
   }
 }
 
-function isLoopback(address: string): boolean {
-  if (address === "::1" || address === "0:0:0:0:0:0:0:1") return true;
+function normalizeIp(address: string): string | null {
+  const value = address.trim();
+  const family = isIP(value);
+  if (family === 0) return null;
+
+  const parsed = SocketAddress.parse(family === 6 ? `[${value}]` : value);
+  if (!parsed) return null;
+  const normalized = parsed.address.toLowerCase();
   const mappedPrefix = "::ffff:";
-  if (address.toLowerCase().startsWith(mappedPrefix)) {
-    return isLoopback(address.slice(mappedPrefix.length));
+  if (parsed.family === "ipv6" && normalized.startsWith(mappedPrefix)) {
+    const mappedAddress = normalized.slice(mappedPrefix.length);
+    if (isIP(mappedAddress) === 4) return mappedAddress;
   }
+  return normalized;
+}
+
+function isLoopback(address: string): boolean {
+  if (address === "::1") return true;
   if (isIP(address) !== 4) return false;
   const firstOctet = Number(address.split(".", 1)[0]);
   return firstOctet === 127;
 }
 
 export function resolveClientSource(req: IncomingMessage): string {
-  const peer = req.socket.remoteAddress;
-  if (!peer || isIP(peer) === 0) return "unknown";
+  const peer = req.socket.remoteAddress
+    ? normalizeIp(req.socket.remoteAddress)
+    : null;
+  if (!peer) return "unknown";
   if (!isLoopback(peer)) return peer;
 
   const supplied = req.headers["x-captain-client-ip"];
   if (typeof supplied !== "string") return "unknown";
-  const normalized = supplied.trim();
-  if (!normalized || normalized.includes(",") || isIP(normalized) === 0) return "unknown";
-  return normalized;
+  if (supplied.includes(",")) return "unknown";
+  return normalizeIp(supplied) ?? "unknown";
 }
 
 const LIMIT_EVENT_KINDS = [
@@ -245,7 +258,7 @@ export class CaptainAuthenticator {
   }
 
   authenticate(req: IncomingMessage): StoredMember {
-    const parsed = parseBearerToken(req.headers.authorization);
+    const parsed = parseBearerToken(singleAuthorizationHeader(req));
     const member = parsed ? this.store.findMemberForAuth(parsed.lookupId) : null;
 
     if (parsed) {
@@ -276,6 +289,21 @@ export class CaptainAuthenticator {
 
     throw new SecurityProblem(401, "UNAUTHORIZED", "Authentication required.");
   }
+}
+
+function singleAuthorizationHeader(req: IncomingMessage): string | undefined {
+  if (Array.isArray(req.rawHeaders)) {
+    const values: string[] = [];
+    for (let index = 0; index + 1 < req.rawHeaders.length; index += 2) {
+      if (req.rawHeaders[index].toLowerCase() === "authorization") {
+        values.push(req.rawHeaders[index + 1]);
+      }
+    }
+    return values.length === 1 ? values[0] : undefined;
+  }
+
+  const values = req.headersDistinct?.authorization;
+  return values?.length === 1 ? values[0] : undefined;
 }
 
 function parseBearerToken(header: string | undefined): {
