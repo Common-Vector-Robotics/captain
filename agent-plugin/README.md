@@ -266,23 +266,29 @@ Invoke the installed skill as `/captain:captain`.
 
 ### OpenCode
 
-Clone the repository into a location you intend to keep, then run the
-user-scoped installer from the repository root:
+Clone the repository into a location you intend to keep, then copy the Captain
+skill into OpenCode and register the bundled MCP launcher:
 
 ```bash
 git clone https://github.com/Common-Vector-Robotics/captain.git
 cd captain
-./agent-plugin/bin/install-opencode
+
+captain_checkout="$(pwd)"
+opencode_skills_dir="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/skills"
+
+mkdir -p "$opencode_skills_dir/captain"
+cp agent-plugin/skills/captain/SKILL.md \
+  "$opencode_skills_dir/captain/SKILL.md"
+opencode mcp add captain -- \
+  "$captain_checkout/agent-plugin/bin/captain-agent-mcp"
+opencode mcp list
 ```
 
-The installer uses OpenCode's own CLI to add the MCP server and copies the
-shared skill into OpenCode's global skill directory. It stops instead of
-replacing a different `captain` skill or MCP definition. Preview its work with
-`./agent-plugin/bin/install-opencode --dry-run`.
-
 OpenCode stores the launcher's absolute path. If you move the checkout, run the
-installer again from its new location after removing the old `captain` MCP
-entry. Invoke the installed skill as `/captain`.
+`opencode mcp add` command again with the new path. After updating the checkout,
+copy `SKILL.md` again to install the latest Captain instructions. If a different
+`captain` skill or MCP server already exists, resolve that conflict before
+running these commands. Invoke the installed skill as `/captain`.
 
 ### OpenClaw
 

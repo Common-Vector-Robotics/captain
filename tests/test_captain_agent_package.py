@@ -141,16 +141,6 @@ def test_launcher_is_executable_and_valid_shell():
     subprocess.run(["sh", "-n", str(launcher)], check=True)
 
 
-def test_opencode_installer_is_executable_and_valid_python():
-    installer = PLUGIN / "bin/install-opencode"
-
-    assert installer.stat().st_mode & stat.S_IXUSR
-    subprocess.run(
-        [sys.executable, "-m", "py_compile", str(installer)],
-        check=True,
-    )
-
-
 def test_launcher_rejects_importable_mcp_v1_and_falls_back_to_uv(tmp_path):
     plugin = tmp_path / "agent-plugin"
     launcher = plugin / "bin" / "captain-agent-mcp"
@@ -228,7 +218,10 @@ def test_plugin_readme_documents_native_claude_and_opencode_installation():
 
     assert "claude plugin marketplace add Common-Vector-Robotics/captain" in readme
     assert "claude plugin install captain@captain" in readme
-    assert "./agent-plugin/bin/install-opencode" in readme
+    assert 'mkdir -p "$opencode_skills_dir/captain"' in readme
+    assert "cp agent-plugin/skills/captain/SKILL.md" in readme
+    assert "opencode mcp add captain --" in readme
+    assert "opencode mcp list" in readme
     assert "`/captain:captain`" in readme
     assert "`/captain`" in readme
     assert "mcp__captain__captain_session_report" in readme
@@ -343,9 +336,9 @@ def test_npm_pack_excludes_plugin_runtime_artifacts(
         "agent-plugin/.codex-plugin/plugin.json",
         "agent-plugin/.mcp.json",
         "agent-plugin/bin/captain-agent-mcp",
-        "agent-plugin/bin/install-opencode",
-        "agent-plugin/captain_agent/opencode_install.py",
         "agent-plugin/captain_agent/server.py",
         "agent-plugin/requirements.txt",
     }.issubset(packaged)
+    assert "agent-plugin/bin/install-opencode" not in packaged
+    assert "agent-plugin/captain_agent/opencode_install.py" not in packaged
     assert after == before
