@@ -98,10 +98,13 @@ function parseCaptainResult(reportId: string, text: string): CaptainResult | nul
   }
 }
 
-function hasRuntimeFailure(result: EmbeddedAgentRunResult): boolean {
+function hasUncertainRuntimeOutcome(result: EmbeddedAgentRunResult): boolean {
   return result.meta.aborted === true
     || result.meta.error !== undefined
     || result.meta.stopReason === "error"
+    || result.meta.replayInvalid === true
+    || result.meta.livenessState !== "working"
+    || result.meta.stopReason !== "stop"
     || result.payloads?.some((payload) => payload.isError === true) === true;
 }
 
@@ -111,7 +114,7 @@ function classifyResult(reportId: string, value: unknown): TurnCompletion {
   if (embedded.meta.stopReason === "timeout" || embedded.meta.timeoutPhase !== undefined) {
     return { state: "timed_out", error: TIMED_OUT_ERROR };
   }
-  if (hasRuntimeFailure(embedded)) {
+  if (hasUncertainRuntimeOutcome(embedded)) {
     return { state: "unknown_outcome", error: UNKNOWN_ERROR };
   }
 

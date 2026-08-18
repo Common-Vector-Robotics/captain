@@ -100,7 +100,11 @@ function captainResult(reportId: string, status: CaptainResult["status"] = "upda
 
 function embeddedResult(
   text?: string,
-  meta: EmbeddedAgentRunResult["meta"] = { durationMs: 1 },
+  meta: EmbeddedAgentRunResult["meta"] = {
+    durationMs: 1,
+    livenessState: "working",
+    stopReason: "stop",
+  },
 ): EmbeddedAgentRunResult {
   return {
     meta,
@@ -136,6 +140,17 @@ async function waitFor(check: () => boolean, message = "condition"): Promise<voi
     if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${message}.`);
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 1));
   }
+}
+
+async function waitForTerminal(
+  store: CaptainRemoteStore,
+  key: Parameters<CaptainRemoteStore["getTurn"]>[0],
+  message: string,
+): Promise<void> {
+  await waitFor(() => {
+    const state = store.getTurn(key)?.state;
+    return state !== undefined && state !== "queued" && state !== "started";
+  }, message);
 }
 
 describe("Captain embedded runtime boundary", () => {
@@ -361,6 +376,113 @@ describe("Captain embedded runtime boundary", () => {
       state: "timed_out",
       result: null,
       error: { code: "TIMED_OUT", message: "Captain turn timed out." },
+    });
+  });
+
+  it("accepts a canonical result from a normal working stop", async () => {
+    const store = openStore();
+    const member = createMember(store, "Terminal");
+    const input = reportTurn(40);
+    reserve(store, member, "terminal-report", input);
+    const run = vi.fn(async () => embeddedResult(
+      JSON.stringify(captainResult("terminal-report")),
+      { durationMs: 1, livenessState: "working", stopReason: "stop" },
+    ));
+
+    createWorker(store, createRuntime(run)).start();
+    const key = { memberId: member.memberId, reportId: "terminal-report", turnId: input.turn_id };
+    await waitFor(() => store.getTurn(key)?.state === "succeeded", "definitive terminal turn");
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(store.getTurn(key)).toMatchObject({ state: "succeeded", error: null });
+  });
+
+  it("rejects replay-invalid output even when it looks like a canonical failure", async () => {
+    const store = openStore();
+    const member = createMember(store, "Replay Invalid");
+    const input = reportTurn(41);
+    reserve(store, member, "replay-invalid-report", input);
+    const run = vi.fn(async () => embeddedResult(
+      JSON.stringify(captainResult("replay-invalid-report", "failed")),
+      {
+        durationMs: 1,
+        livenessState: "working",
+        stopReason: "stop",
+        replayInvalid: true,
+      },
+    ));
+
+    createWorker(store, createRuntime(run)).start();
+    const key = {
+      memberId: member.memberId,
+      reportId: "replay-invalid-report",
+      turnId: input.turn_id,
+    };
+    await waitForTerminal(store, key, "replay-invalid turn");
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(store.getTurn(key)).toMatchObject({
+      state: "unknown_outcome",
+      result: null,
+      error: { code: "UNKNOWN_OUTCOME", message: "Captain turn outcome is unknown." },
+    });
+  });
+
+  it.each([
+    ["paused", 42, { durationMs: 1, livenessState: "paused", stopReason: "end_turn", yielded: true }],
+    ["blocked", 43, { durationMs: 1, livenessState: "blocked", stopReason: "stop" }],
+    ["abandoned", 44, { durationMs: 1, livenessState: "abandoned", stopReason: "stop" }],
+    ["missing liveness", 45, { durationMs: 1, stopReason: "stop" }],
+    ["non-stop working", 46, { durationMs: 1, livenessState: "working", stopReason: "tool_calls" }],
+  ] satisfies Array<[string, number, EmbeddedAgentRunResult["meta"]]>) (
+    "persists canonical-looking %s output as an unknown outcome",
+    async (_label, index, meta) => {
+      const store = openStore();
+      const member = createMember(store, `Uncertain ${meta.livenessState ?? "Missing"}`);
+      const input = reportTurn(index);
+      const reportId = `uncertain-${index}`;
+      reserve(store, member, reportId, input);
+      const run = vi.fn(async () => embeddedResult(
+        JSON.stringify(captainResult(reportId)),
+        meta,
+      ));
+
+      createWorker(store, createRuntime(run)).start();
+      const key = { memberId: member.memberId, reportId, turnId: input.turn_id };
+      await waitForTerminal(store, key, `${_label} turn`);
+
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(store.getTurn(key)).toMatchObject({
+        state: "unknown_outcome",
+        result: null,
+        error: { code: "UNKNOWN_OUTCOME", message: "Captain turn outcome is unknown." },
+      });
+    },
+  );
+
+  it("persists an unknown liveness value as an unknown outcome", async () => {
+    const store = openStore();
+    const member = createMember(store, "Unknown Liveness");
+    const input = reportTurn(48);
+    reserve(store, member, "unknown-liveness-report", input);
+    const run = vi.fn(async () => ({
+      meta: { durationMs: 1, livenessState: "completed", stopReason: "stop" },
+      payloads: [{ text: JSON.stringify(captainResult("unknown-liveness-report")) }],
+    }));
+
+    createWorker(store, createRuntime(run)).start();
+    const key = {
+      memberId: member.memberId,
+      reportId: "unknown-liveness-report",
+      turnId: input.turn_id,
+    };
+    await waitForTerminal(store, key, "unknown liveness turn");
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(store.getTurn(key)).toMatchObject({
+      state: "unknown_outcome",
+      result: null,
+      error: { code: "UNKNOWN_OUTCOME", message: "Captain turn outcome is unknown." },
     });
   });
 
