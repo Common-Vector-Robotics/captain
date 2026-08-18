@@ -41,6 +41,16 @@ export interface StoredReport {
 
 export type TerminalTurnState = Exclude<TurnState, "queued" | "started">;
 
+const TERMINAL_TURN_STATES = new Set<TerminalTurnState>([
+  "succeeded",
+  "failed",
+  "timed_out",
+  "unknown_outcome",
+]);
+const SQLITE_BUSY_TIMEOUT_MS = 5_000;
+const SQLITE_BUSY_RETRY_MS = 10;
+const SQLITE_BUSY_WAIT = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+
 export interface StoredTurnError {
   code: string;
   message: string;
@@ -143,7 +153,7 @@ function storedTurn(row: TurnRow): StoredTurn {
     state: row.state,
     runId: row.run_id,
     result: row.result_json ? JSON.parse(row.result_json) as CaptainResult : null,
-    error: row.error_code && row.error_message
+    error: row.error_code !== null && row.error_message !== null
       ? { code: row.error_code, message: row.error_message }
       : null,
     createdAt: row.created_at,
@@ -158,6 +168,33 @@ function required(value: string, field: string): string {
   return normalized;
 }
 
+function isLockedDatabase(error: unknown): boolean {
+  return error instanceof Error
+    && error.message === "database is locked"
+    && "code" in error
+    && error.code === "ERR_SQLITE_ERROR";
+}
+
+function enableWal(database: DatabaseSync): void {
+  const deadline = Date.now() + SQLITE_BUSY_TIMEOUT_MS;
+  while (true) {
+    try {
+      const journal = database.prepare("PRAGMA journal_mode = WAL").get() as {
+        journal_mode?: unknown;
+      };
+      if (journal.journal_mode !== "wal") {
+        throw new Error("Captain remote database requires WAL mode.");
+      }
+      return;
+    } catch (error) {
+      if (!isLockedDatabase(error) || Date.now() >= deadline) {
+        throw new Error("Captain remote database requires WAL mode.");
+      }
+      Atomics.wait(SQLITE_BUSY_WAIT, 0, 0, SQLITE_BUSY_RETRY_MS);
+    }
+  }
+}
+
 export class CaptainRemoteStore {
   private database: DatabaseSync | null = null;
 
@@ -170,14 +207,17 @@ export class CaptainRemoteStore {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     chmodSync(directory, 0o700);
 
-    const database = new DatabaseSync(this.databasePath);
+    const database = new DatabaseSync(this.databasePath, { timeout: SQLITE_BUSY_TIMEOUT_MS });
     try {
       chmodSync(this.databasePath, 0o600);
       database.exec(`
         PRAGMA foreign_keys = ON;
-        PRAGMA journal_mode = WAL;
         PRAGMA busy_timeout = 5000;
+      `);
 
+      enableWal(database);
+
+      database.exec(`
         CREATE TABLE IF NOT EXISTS members (
           member_id TEXT PRIMARY KEY,
           name TEXT NOT NULL,
@@ -206,7 +246,9 @@ export class CaptainRemoteStore {
           kind TEXT NOT NULL,
           request_digest TEXT NOT NULL,
           payload_json TEXT NOT NULL,
-          state TEXT NOT NULL,
+          state TEXT NOT NULL CHECK (
+            state IN ('queued', 'started', 'succeeded', 'failed', 'timed_out', 'unknown_outcome')
+          ),
           run_id TEXT,
           result_json TEXT,
           error_code TEXT,
@@ -346,11 +388,15 @@ export class CaptainRemoteStore {
   }
 
   claimNextTurn(maxRunning: number): ClaimedTurn | null {
+    if (!Number.isSafeInteger(maxRunning) || maxRunning <= 0) {
+      throw new TypeError("maxRunning must be a positive safe integer.");
+    }
+
     return this.inImmediateTransaction(() => {
       const running = this.getDatabase().prepare(`
         SELECT COUNT(*) AS count FROM turns WHERE state = 'started'
       `).get() as { count: number };
-      if (maxRunning <= 0 || running.count >= maxRunning) return null;
+      if (running.count >= maxRunning) return null;
 
       const row = this.getDatabase().prepare(`
         SELECT * FROM turns
@@ -390,6 +436,10 @@ export class CaptainRemoteStore {
     result?: CaptainResult,
     error?: StoredTurnError,
   ): void {
+    if (!TERMINAL_TURN_STATES.has(state)) {
+      throw new HttpProblem(400, "INVALID_TURN_STATE", "Turn state must be terminal.");
+    }
+
     this.inImmediateTransaction(() => {
       const finishedAt = new Date().toISOString();
       const updated = this.getDatabase().prepare(`
