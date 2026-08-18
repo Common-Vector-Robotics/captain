@@ -1,15 +1,15 @@
 # Set up Captain
 
 Captain installs with `DailyLoop` off and its heartbeat disabled at `0m`.
-Follow the complete [README installation guide](README.md#install-and-set-up).
+Follow the complete [Captain installation guide](README.md#install-captain).
 Do not switch to `shadow` or `live` until the installation checker passes.
 The packaged schedule defaults to `America/Detroit`; choose and validate your
-team's timezone in the source package before installing the Claw.
+team's time zone in the source package before installing the Claw.
 
-## Installed-workspace checklist
+## Set up the installed workspace
 
-Run these steps from Captain's installed workspace, normally
-`~/.openclaw/workspace-captain`.
+From Captain's installed workspace, normally
+`~/.openclaw/workspace-captain`, complete these steps:
 
 1. Preserve existing local memory files. Create them only when missing:
 
@@ -26,7 +26,8 @@ Run these steps from Captain's installed workspace, normally
 
 3. Copy `data/meeting-ingestion.example.json` to
    `data/meeting-ingestion.json`. Configure and verify the intended Google
-   account with the exact read-only scopes listed in the README.
+   account with the exact read-only scopes listed in
+   [Configure meeting ingestion](README.md#configure-meeting-ingestion).
 
 4. Configure the dedicated OpenClaw Slack account named `captain`. Copy
    `data/captain-channels.example.json` to `data/captain-channels.json` and
@@ -46,7 +47,7 @@ Run these steps from Captain's installed workspace, normally
    python3 scripts/install_heartbeat_policy.py
    ```
 
-7. Run the complete read-only installation checker:
+7. Verify the installation with the read-only checker:
 
    ```bash
    python3 scripts/check_install.py \
@@ -57,7 +58,8 @@ Run these steps from Captain's installed workspace, normally
    Continue only after it prints
    `[PASS] Captain is ready for shadow mode.`
 
-8. Set `DailyLoop` to `shadow`, enable the verified heartbeat, and restart the
+8. Replace `YOUR_SLACK_USER_ID` with an authorized Slack user ID. Then set
+   `DailyLoop` to `shadow`, enable the verified heartbeat, and restart the
    Gateway:
 
    ```bash
@@ -77,11 +79,8 @@ Run these steps from Captain's installed workspace, normally
    Slack account, recipients, Google account, and ClickUp board. Confirm that
    no ClickUp task changes occur.
 
-10. Use the README's separate **Going live** checklist only after every shadow
-    test passes.
+10. Follow the [Switch to live mode](README.md#switch-to-live-mode) checklist
+    only after every shadow test passes.
 
 Captain's core installation uses the Python standard library. Install
 `requirements.txt` only if you choose the optional Sentry integration.
-
-Configured routing, credentials, runtime state, ClickUp exports, audit logs,
-and meeting content remain local to the installed Captain workspace.

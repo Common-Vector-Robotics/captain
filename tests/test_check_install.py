@@ -213,6 +213,21 @@ def test_checker_rejects_example_values_before_external_checks(tmp_path):
     assert calls == []
 
 
+def test_checker_rejects_descriptive_documentation_placeholders(tmp_path):
+    checker = load_checker()
+    root = make_workspace(tmp_path)
+    channels = root / "data" / "captain-channels.json"
+    value = json.loads(channels.read_text(encoding="utf-8"))
+    value["shadow_recipient"] = "channel:YOUR_SHADOW_CHANNEL_ID"
+    write_json(channels, value)
+    run, calls = fake_runner(root)
+
+    with pytest.raises(checker.InstallationCheckError, match="example value"):
+        checker.run_checks(root=root, expected_mode="off", expected_heartbeat="0m", run=run)
+
+    assert calls == []
+
+
 def test_checker_requires_the_captain_slack_binding(tmp_path):
     checker = load_checker()
     root = make_workspace(tmp_path)

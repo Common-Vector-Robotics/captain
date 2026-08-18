@@ -79,10 +79,8 @@ def test_setup_docs_state_the_explicit_default_schedule_timezone():
         assert "host computer's timezone" not in document
 
     assert "use another timezone or cadence" not in readme.lower()
-    assert (
-        "python3 scripts/configure_timezone.py --timezone <IANA_TIMEZONE>"
-        in readme
-    )
+    assert "CAPTAIN_TIME_ZONE=America/Detroit" in readme
+    assert readme.count('--timezone "$CAPTAIN_TIME_ZONE"') == 2
 
 
 def test_timezone_configurator_is_packaged_before_claw_inspection():
@@ -90,10 +88,11 @@ def test_timezone_configurator_is_packaged_before_claw_inspection():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     command = (
         "python3 scripts/configure_timezone.py "
-        "--timezone America/Detroit"
+        '--timezone "$CAPTAIN_TIME_ZONE"'
     )
 
     assert "scripts/configure_timezone.py" in package["files"]
+    assert "CAPTAIN_TIME_ZONE=America/Detroit" in readme
     assert command in readme
     assert readme.index(command) < readme.index("openclaw claws inspect .")
     assert "--check" in readme

@@ -100,12 +100,14 @@ def test_readme_has_one_safe_copy_paste_install_path():
         "mkdir -p .secrets"
     )
     assert "Keep the Gateway and Captain's scheduler stopped" not in readme
-    assert readme.index("Test every Captain workflow") < readme.index("## Going live")
+    assert readme.index("Test every Captain workflow") < readme.index(
+        "## Switch to live mode"
+    )
 
 
 def test_core_install_does_not_require_optional_sentry_dependency():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    install_section = readme.split("# Optional Extras", maxsplit=1)[0]
+    install_section = readme.split("## Optional integrations", maxsplit=1)[0]
     assert "pip install" not in install_section
 
 
@@ -113,16 +115,16 @@ def test_readme_google_auth_is_least_privilege_and_fails_closed():
     """Catch setup guidance that authorizes broad or unverified Google access."""
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     section = re.split(
-        r"(?m)^### \d+\. Configure meeting ingestion$",
+        r"(?m)^### Configure meeting ingestion$",
         readme,
         maxsplit=1,
     )[1]
     section = re.split(
-        r"(?m)^### \d+\. Connect Captain to Slack$",
+        r"(?m)^### Connect Captain to Slack$",
         section,
         maxsplit=1,
     )[0]
-    normalized = " ".join(section.split())
+    normalized = " ".join(section.replace("\\\n", "").split())
 
     assert (
         "gog auth add captain@example.com --services gmail,drive,docs "

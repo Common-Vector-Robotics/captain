@@ -41,6 +41,7 @@ EXAMPLE_VALUES = {
     "U0123456789",
     "Firstname Lastname",
     "captain@example.com",
+    "YOUR_",
 }
 
 
