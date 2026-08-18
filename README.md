@@ -93,36 +93,68 @@ flowchart TB
 
 ## Install and set up
 
-Captain is packaged as an OpenClaw Claw (note: `.claw` packages are still experimental). It installs Captain as a new agent with six scheduled jobs plus one Claw-managed hourly heartbeat in every `DailyLoop` mode, including `off`. The five weekday operational jobs remain off until you configure them locally.
+Captain is packaged as an OpenClaw Claw. Claws are still experimental, so this
+guide uses the exact OpenClaw version tested with Captain. The installation adds
+one Captain agent and six scheduled jobs. Captain starts with `DailyLoop` off,
+and its heartbeat starts disabled at `0m`. Nothing becomes operational until you
+finish the checks and explicitly start shadow mode.
 
 ### Prerequisites
 
-- A working [OpenClaw installation](https://docs.openclaw.ai/) with its Gateway and Slack channel configured
-- OpenClaw `v2026.7.2-beta.5` requires every Claw cron declaration to name an
-  explicit IANA timezone. Captain defaults to `America/Detroit`; the setup step
-  below configures and validates all six declarations for your team.
 - Python 3
 - A ClickUp API key and ClickUp team ID
 - A Slack account dedicated to Captain, plus the user and channel IDs used in `data/captain-channels.json`
-- The `gog` Google CLI, authenticated to a Gmail account with Gmail, Drive, and Docs access
+- The `gog` Google CLI
 
-### 1. Clone Captain
+The shortest `gog` installation on macOS or Linux with Homebrew is:
 
-Clone this repository outside of your openclaw folder:
-
-```Shell
-# Make a directory (or choose your own)
-mkdir -p ~/src
-
-# Clone captain repository
-cd ~/src
-git clone <repository-url> captain
-
-# Change wd to captain's folder
-cd captain
+```bash
+brew install openclaw/tap/gogcli
+gog --version
 ```
 
-### 2. Configure the scheduled-job timezone
+Use the official [`gog` installation guide](https://gogcli.sh/install.html) for
+Windows, Docker, or a source build. You will connect `gog` to Captain's Google
+account in step 6.
+
+### 1. Install and verify OpenClaw
+
+Captain currently supports OpenClaw `2026.7.2-beta.5`. Install that exact
+version on macOS, Linux, or WSL:
+
+```bash
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- \
+  --install-method npm \
+  --version 2026.7.2-beta.5 \
+  --no-onboard \
+  --verify
+
+openclaw onboard --install-daemon
+```
+
+If OpenClaw is already installed, do not reinstall it. Verify the version and
+Gateway instead:
+
+```bash
+openclaw --version
+openclaw gateway status
+```
+
+Continue only when the version contains `2026.7.2-beta.5` and the Gateway is
+running. The Gateway must stay running while the Claw is installed because it
+owns OpenClaw's scheduler.
+
+### 2. Clone Captain
+
+Clone this repository outside your OpenClaw state folder:
+
+```bash
+mkdir -p ~/src
+git clone https://github.com/Common-Vector-Robotics/captain.git ~/src/captain
+cd ~/src/captain
+```
+
+### 3. Configure the scheduled-job timezone
 
 Choose the IANA timezone your team uses for Captain's schedule. This command
 validates the timezone and atomically updates all six cron declarations:
@@ -143,11 +175,10 @@ contain exactly the six expected Captain jobs. The configuration command
 intentionally changes your local `CLAW.md`; inspect and install that exact local
 manifest in the next step.
 
-### 3. Inspect and install the Claw
+### 4. Inspect and install the Claw
 
-Run these commands from this package directory (the directory containing `CLAW.md`). Before enabling DailyLoop, copy `data/captain-channels.example.json` to the private `data/captain-channels.json` and configure its `mode_toggle_users` name-to-Slack-ID mapping. Only those Slack users can switch Captain between `off`, `shadow`, and `live`.
-
-Then inspect and preview the package:
+Run these commands from the cloned package directory. Keep the Gateway running.
+First inspect and preview the package:
 
 ```bash
 # Enable OpenClaw's experimental Claw commands in this terminal.
@@ -162,10 +193,6 @@ openclaw claws add . --dry-run --json
 
 Review every action in the dry-run output and copy its `planIntegrity` value.
 Replace `SHA256_FROM_DRY_RUN` below with that value, then apply the exact plan:
-
-Do not enable or run Captain's heartbeat or scheduled jobs until this verification succeeds.
-Keep the Gateway and Captain's scheduler stopped while applying the install plan and the
-operator-owned heartbeat policy below.
 
 ```bash
 # Install the exact package plan you just reviewed.
@@ -183,57 +210,20 @@ openclaw claws status captain --json
 
 The default workspace is `~/.openclaw/workspace-captain`. If the install plan reported a different path, use that path in the remaining commands.
 
-#### Install Captain's heartbeat safety rules
-
-Move into Captain's installed workspace, then run the included setup command:
-
-```bash
-cd ~/.openclaw/workspace-captain
-python3 scripts/install_heartbeat_policy.py
-```
-
-It safely previews the OpenClaw configuration change, installs the exact rules
-from `HEARTBEAT.md`, and reads them back to make sure nothing changed. Success
-looks like this:
-
-```text
-Captain heartbeat policy installed and verified.
-SHA-256: <a long verification code>
-```
-
-If the command reports an error, stop and keep Captain's heartbeat and scheduled
-jobs disabled. Do not continue until it succeeds.
-
-Run this command again after every Claw update, before restarting Captain.
-OpenClaw may then describe Captain as locally modified; that is expected because
-this safety setting is stored on your machine. Do not delete it to clear that
-status.
-
-```bash
-# Check the rest of your OpenClaw setup for problems after prompt verification.
-openclaw doctor
-```
-
-### 4. Install Python dependencies
-
-```bash
-# Move into Captain's installed workspace.
-cd ~/.openclaw/workspace-captain
-
-# Install the Python packages Captain needs.
-python3 -m pip install --user -r requirements.txt
-```
-
-Homebrew-managed Python may reject that command with `error: externally-managed-environment`. In that case, install into its user site explicitly:
-
-```bash
-# Use this version only if Python reports an externally-managed-environment error.
-python3 -m pip install --user --break-system-packages -r requirements.txt
-```
+At this point the agent and its six scheduler entries exist, but Captain is not
+ready to operate. A missing mode file means `off`, and the heartbeat remains
+disabled at `0m`. Continue with the private setup below.
 
 ### 5. Configure ClickUp
 
-Create a local secrets file without committing it:
+Move into Captain's installed workspace. Use the different workspace path from
+step 4 if OpenClaw reported one:
+
+```bash
+cd ~/.openclaw/workspace-captain
+```
+
+Create a local secrets file there without committing it:
 
 ```bash
 # Create a private folder for local secrets.
@@ -428,32 +418,6 @@ nano data/captain-channels.json
 python3 -m json.tool data/captain-channels.json >/dev/null
 ```
 
-Before continuing, verify that daily reporting has an explicit Slack account
-and destination:
-
-```bash
-python3 - <<'PY'
-import json
-from pathlib import Path
-
-path = Path("data/captain-channels.json")
-try:
-    config = json.loads(path.read_text(encoding="utf-8"))
-except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-    raise SystemExit(f"Cannot read {path}: {error}") from error
-if not isinstance(config, dict):
-    raise SystemExit(f"Captain Slack routing configuration in {path} must be a JSON object")
-
-required = ("activity_digest_channel", "slack_account")
-missing = [key for key in required if not isinstance(config.get(key), str) or not config[key]]
-if missing:
-    raise SystemExit(f"Captain Slack routing configuration missing in {path}: {', '.join(missing)}")
-print("Captain Slack routing verified: " + ", ".join(required))
-PY
-```
-
-Do not continue until this prints `Captain Slack routing verified`.
-
 Replace every placeholder in `data/captain-channels.json`, including the
 `mode_toggle_users` name-to-Slack-ID mapping. That private mapping is the only
 authorization for DailyLoop mode changes; missing or invalid entries fail
@@ -465,7 +429,53 @@ exact live target. The live `data/captain-modes.json` file is runtime state: it
 is not installed from this package, remains off when absent, and is created by
 the first authorized mode change.
 
-### 9. Validate in shadow mode
+### 9. Bind the Slack account to Captain
+
+Creating a Slack account and routing it to an agent are separate OpenClaw
+operations. Bind the account named `captain` to the Captain agent:
+
+```bash
+openclaw agents bind \
+  --agent captain \
+  --bind slack:captain
+
+openclaw gateway restart
+
+openclaw agents bindings \
+  --agent captain \
+  --json
+```
+
+The output must contain one binding with `agentId` set to `captain`, `channel`
+set to `slack`, and `accountId` set to `captain`.
+
+### 10. Install the heartbeat policy and check the installation
+
+The heartbeat is still disabled. Install its safety policy without enabling it:
+
+```bash
+cd ~/.openclaw/workspace-captain
+python3 scripts/install_heartbeat_policy.py
+openclaw doctor
+python3 scripts/check_install.py \
+  --expect-mode off \
+  --expect-heartbeat 0m
+```
+
+The checker uses read-only OpenClaw, Slack, Google, ClickUp, and local-file
+checks. It stops at the first problem and explains what to fix. Do not continue
+until its last line is:
+
+```text
+[PASS] Captain is ready for shadow mode.
+```
+
+Run `python3 scripts/install_heartbeat_policy.py` again after every Claw update.
+OpenClaw may describe Captain as locally modified because the verified policy
+is stored on this machine. That is expected; do not remove it to clear the
+status.
+
+### 11. Start in shadow mode
 
 Confirm that Captain starts in `off`, then enable `shadow` using an authorized Slack user ID:
 
@@ -479,34 +489,74 @@ python3 scripts/captain_modes.py dailyloop \
   --user-id U0123456789 \
   --source initial-setup
 
+# Re-verify the policy, then enable the hourly heartbeat.
+python3 scripts/install_heartbeat_policy.py --enable
+openclaw gateway restart
+
+# Verify the final shadow configuration.
+python3 scripts/check_install.py \
+  --expect-mode shadow \
+  --expect-heartbeat 60m
+
 # List Captain's scheduled jobs and their IDs.
-openclaw cron list --agent captain
+openclaw cron list --agent captain --all
 ```
 
-To test ingestion immediately, copy the job ID shown for
-`Captain meeting transcript reconciliation` and run it:
+#### Test every Captain workflow
+
+`--all` includes the disabled heartbeat. The list contains six scheduled jobs
+plus the heartbeat. Copy each scheduled
+job ID and run the six jobs one at a time. Wait for one job to finish before
+starting the next:
 
 ```bash
-# Run the meeting reconciliation job now. Replace MEETING_CRON_JOB_ID.
-openclaw cron run MEETING_CRON_JOB_ID \
+openclaw cron run CRON_JOB_ID \
   --wait \
   --wait-timeout 10m
 ```
 
-Inspect the configured shadow destination. Confirm that the meeting job read both Transcript
-and Notes, sent output only to `shadow_recipient`, used the intended Google account and
-ClickUp board, and made no ClickUp changes. Then confirm the remaining Captain jobs use the
-right Slack account, recipients, and program channel before enabling live actions:
+Test these six names:
+
+- `Captain daily morning cycle`
+- `Captain meeting transcript reconciliation`
+- `Captain daily blocker chase`
+- `Captain daily bench truth and channel watch`
+- `Captain daily EOD wrap`
+- `Action summary reporting`
+
+For each result, confirm:
+
+- The job finishes successfully.
+- Any Slack output uses the `captain` account.
+- Operational previews go only to `shadow_recipient`.
+- The meeting job uses the intended Google account.
+- The job reads the intended ClickUp board.
+- No ClickUp task changes occur.
+
+Do not switch to live if any check fails.
+
+## Going live
+
+Going live is optional. Complete this checklist first:
+
+- [ ] The installation checker passes in shadow mode.
+- [ ] All six scheduled jobs passed one at a time.
+- [ ] The heartbeat produced no unexpected send or write.
+- [ ] Slack messages used the Captain account and correct destinations.
+- [ ] Google used the intended account.
+- [ ] ClickUp remained unchanged during shadow tests.
+
+An authorized operator can then enable live actions:
 
 ```bash
-# Enable Captain's real Slack and ClickUp actions after checking shadow mode.
 python3 scripts/captain_modes.py dailyloop \
   --audience live \
   --user-id U0123456789 \
-  --source initial-setup
+  --source shadow-approved
 ```
 
-To stop operational actions while keeping the daily read-only activity report:
+To stop operational actions later while keeping monitoring and the daily
+read-only activity report:
 
 ```bash
 # Stop Captain's operational actions while keeping its daily activity report.
@@ -573,7 +623,14 @@ EOF
 chmod 600 .secrets/sentry.env
 ```
 
-Telemetry also needs the `sentry-sdk` package, which came from [step 4](#4-install-python-dependencies). If you skipped that step, run `python3 -m pip install --user -r requirements.txt` now, adding `--break-system-packages` if Python reports `error: externally-managed-environment`.
+Telemetry needs the optional `sentry-sdk` package. Install it now:
+
+```bash
+python3 -m pip install --user -r requirements.txt
+```
+
+If Homebrew Python reports `error: externally-managed-environment`, rerun the
+command with `--break-system-packages` after `--user`.
 
 ### 2. Confirm that events reach Sentry
 

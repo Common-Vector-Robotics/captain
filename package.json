@@ -66,6 +66,7 @@
     "scripts/openclaw_cron_sentry_bridge.py",
     "scripts/configure_timezone.py",
     "scripts/install_heartbeat_policy.py",
+    "scripts/check_install.py",
     "scripts/render_sentry_service.py",
     "scripts/clickup_credentials.py",
     "scripts/clickup_write.py",

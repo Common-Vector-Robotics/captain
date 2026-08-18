@@ -51,12 +51,11 @@ def test_tools_references_only_shipped_scripts():
     assert missing == []
 
 
-def test_setup_fails_closed_when_daily_reporting_routing_is_missing():
+def test_setup_uses_the_complete_install_checker():
     for name in ("README.md", "BOOTSTRAP.md"):
         document = (ROOT / name).read_text(encoding="utf-8")
-        assert 'required = ("activity_digest_channel", "slack_account")' in document
-        assert "Captain Slack routing configuration missing" in document
-        assert "Captain Slack routing verified" in document
+        assert "python3 scripts/check_install.py" in document
+        assert "Captain is ready for shadow mode." in document
 
 
 def test_bootstrap_creates_local_memory_and_user_files_without_overwriting():
@@ -73,6 +72,41 @@ def test_claw_sources_are_in_the_package_file_list():
     sources = set(re.findall(r"^\s+- source: ([^\n]+)$", manifest, re.MULTILINE))
     sources.update(re.findall(r"^\s+source: ([^\n]+)$", manifest, re.MULTILINE))
     assert sorted(sources - packaged) == []
+
+
+def test_beginner_install_checker_is_shipped_with_the_claw():
+    package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    manifest = (ROOT / "CLAW.md").read_text(encoding="utf-8")
+    assert "scripts/check_install.py" in package["files"]
+    assert "source: scripts/check_install.py" in manifest
+
+
+def test_readme_has_one_safe_copy_paste_install_path():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    normalized = " ".join(readme.split())
+
+    assert "git clone https://github.com/Common-Vector-Robotics/captain.git" in readme
+    assert "brew install openclaw/tap/gogcli" in readme
+    assert "https://gogcli.sh/install.html" in readme
+    assert "--version 2026.7.2-beta.5" in normalized
+    assert "openclaw gateway status" in readme
+    assert "openclaw agents bind" in readme
+    assert "--agent captain" in normalized
+    assert "--bind slack:captain" in normalized
+    assert "python3 scripts/check_install.py" in readme
+    assert "python3 scripts/install_heartbeat_policy.py --enable" in readme
+    assert "openclaw cron list --agent captain --all" in readme
+    assert readme.index("cd ~/.openclaw/workspace-captain") < readme.index(
+        "mkdir -p .secrets"
+    )
+    assert "Keep the Gateway and Captain's scheduler stopped" not in readme
+    assert readme.index("Test every Captain workflow") < readme.index("## Going live")
+
+
+def test_core_install_does_not_require_optional_sentry_dependency():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    install_section = readme.split("# Optional Extras", maxsplit=1)[0]
+    assert "pip install" not in install_section
 
 
 def test_readme_google_auth_is_least_privilege_and_fails_closed():

@@ -56,6 +56,8 @@ workspace:
       path: scripts/openclaw_cron_sentry_bridge.py
     - source: scripts/install_heartbeat_policy.py
       path: scripts/install_heartbeat_policy.py
+    - source: scripts/check_install.py
+      path: scripts/check_install.py
     - source: scripts/render_sentry_service.py
       path: scripts/render_sentry_service.py
     - source: scripts/clickup_credentials.py
