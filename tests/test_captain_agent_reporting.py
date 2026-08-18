@@ -546,6 +546,20 @@ def test_report_store_path_uses_xdg_then_home(monkeypatch, tmp_path):
     )
 
 
+def test_first_report_reservation_makes_the_send_decision_explicit(tmp_path):
+    path = tmp_path / "reports.sqlite3"
+    reporting._initialize_store(path)
+
+    reservation = reporting._reserve_report_id(path, "report-1", VALID_REPORT, {})
+
+    try:
+        assert reservation.should_send is True
+        assert reservation.saved_result is None
+    finally:
+        with reporting._ACTIVE_REPORTS_LOCK:
+            reporting._ACTIVE_REPORT_IDS.discard("report-1")
+
+
 def test_same_report_id_replays_without_second_openclaw_turn(tmp_path):
     calls = []
 
@@ -714,7 +728,7 @@ def test_active_id_prevents_retryable_row_reclaim_until_marker_is_removed(
     with reporting._ACTIVE_REPORTS_LOCK:
         reporting._ACTIVE_REPORT_IDS.add("report-1")
     try:
-        claimed, result = reporting._claim_report(
+        active_reservation = reporting._reserve_report_id(
             path, "report-1", VALID_REPORT, {"client": "codex"}
         )
         active_row = _stored_row(path, "report-1")
@@ -722,13 +736,13 @@ def test_active_id_prevents_retryable_row_reclaim_until_marker_is_removed(
         with reporting._ACTIVE_REPORTS_LOCK:
             reporting._ACTIVE_REPORT_IDS.discard("report-1")
 
-    assert claimed is False
-    assert result is not None
-    assert result.status == "queued"
+    assert active_reservation.should_send is False
+    assert active_reservation.saved_result is not None
+    assert active_reservation.saved_result.status == "queued"
     assert active_row == original_row
 
     try:
-        reclaimed, existing = reporting._claim_report(
+        retry_reservation = reporting._reserve_report_id(
             path, "report-1", VALID_REPORT, {"client": "codex"}
         )
         reclaimed_row = _stored_row(path, "report-1")
@@ -736,8 +750,8 @@ def test_active_id_prevents_retryable_row_reclaim_until_marker_is_removed(
         with reporting._ACTIVE_REPORTS_LOCK:
             reporting._ACTIVE_REPORT_IDS.discard("report-1")
 
-    assert reclaimed is True
-    assert existing is None
+    assert retry_reservation.should_send is True
+    assert retry_reservation.saved_result is None
     assert reclaimed_row[0:3] == ("Captain", "processing", None)
     assert reclaimed_row[3] == original_row[3]
     assert reclaimed_row[4] != original_row[4]
@@ -879,10 +893,10 @@ def test_store_closes_every_connection(monkeypatch, tmp_path):
     monkeypatch.setattr(reporting.sqlite3, "connect", tracking_connect)
     path = tmp_path / "reports.sqlite3"
     reporting._initialize_store(path)
-    claimed, existing = reporting._claim_report(path, "report-1", VALID_REPORT, {})
-    assert claimed is True
-    assert existing is None
-    reporting._finish_report(
+    reservation = reporting._reserve_report_id(path, "report-1", VALID_REPORT, {})
+    assert reservation.should_send is True
+    assert reservation.saved_result is None
+    reporting._save_report_result(
         path,
         canonical_result(
             "report-1", "updated", captain_feedback="Stored and closed."
