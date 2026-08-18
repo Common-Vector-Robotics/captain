@@ -536,12 +536,12 @@ def _completed_response(command, response):
     )
 
 
-def test_state_path_uses_xdg_then_home(monkeypatch, tmp_path):
-    assert reporting.state_path({"XDG_STATE_HOME": str(tmp_path)}) == (
+def test_report_store_path_uses_xdg_then_home(monkeypatch, tmp_path):
+    assert reporting.report_store_path({"XDG_STATE_HOME": str(tmp_path)}) == (
         tmp_path / "captain-agent" / "reports.sqlite3"
     )
     monkeypatch.setattr(reporting.Path, "home", lambda: tmp_path)
-    assert reporting.state_path({}) == (
+    assert reporting.report_store_path({}) == (
         tmp_path / ".local" / "state" / "captain-agent" / "reports.sqlite3"
     )
 

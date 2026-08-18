@@ -732,9 +732,9 @@ def invoke_openclaw(
     return normalize_captain_agent_response(report_id, response)
 
 
-# Replay database
-def state_path(env: Mapping[str, str]) -> Path:
-    """Choose the SQLite replay-database path."""
+# Report store
+def report_store_path(env: Mapping[str, str]) -> Path:
+    """Choose the SQLite path used to prevent duplicate report processing."""
 
     # Prefer the explicit Captain path.
     override = str(env.get("CAPTAIN_AGENT_STATE_PATH", "")).strip()
@@ -748,7 +748,7 @@ def state_path(env: Mapping[str, str]) -> Path:
 
 
 def _initialize_store(path: Path) -> None:
-    """Create the replay database and its table when needed."""
+    """Create the report store and its table when needed."""
 
     # Create a user-only parent directory.
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -960,8 +960,8 @@ def handle_session_report(
     if validation is not None:
         return validation
 
-    # Open the replay store.
-    path = state_path(active_env)
+    # Open the report store.
+    path = report_store_path(active_env)
     _initialize_store(path)
 
     # Claim this ID for sending, or load its existing result.
