@@ -87,7 +87,10 @@ export class HttpProblem extends Error {
   }
 }
 
-const TURN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const TURN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MAX_VALIDATION_NODES = 1_024;
+const MAX_CAPTAIN_RESULT_STRING_LENGTH = 4_096;
+const MAX_CAPTAIN_RESULT_ITEMS = 32;
 const CAPTAIN_STATUSES = new Set<CaptainStatus>([
   "created",
   "updated",
@@ -201,22 +204,35 @@ function normalizeKey(key: string): string[] {
 }
 
 function findReservedKey(value: unknown): string | undefined {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const reserved = findReservedKey(item);
-      if (reserved) return reserved;
-    }
-    return undefined;
-  }
+  const values = [value];
+  let visited = 0;
 
-  if (!isRecord(value)) return undefined;
-
-  for (const [key, nested] of Object.entries(value)) {
-    if (normalizeKey(key).some((segment) => RESERVED_SEGMENTS.has(segment))) {
-      return key;
+  while (values.length > 0) {
+    const current = values.pop();
+    visited += 1;
+    if (visited > MAX_VALIDATION_NODES) {
+      invalidRequest("Request body is too complex.");
     }
-    const reserved = findReservedKey(nested);
-    if (reserved) return reserved;
+
+    if (Array.isArray(current)) {
+      if (visited + current.length > MAX_VALIDATION_NODES) {
+        invalidRequest("Request body is too complex.");
+      }
+      for (const nested of current) values.push(nested);
+      continue;
+    }
+    if (!isRecord(current)) continue;
+
+    const keys = Object.keys(current);
+    if (visited + keys.length > MAX_VALIDATION_NODES) {
+      invalidRequest("Request body is too complex.");
+    }
+    for (const key of keys) {
+      if (normalizeKey(key).some((segment) => RESERVED_SEGMENTS.has(segment))) {
+        return key;
+      }
+      values.push(current[key]);
+    }
   }
   return undefined;
 }
@@ -351,17 +367,28 @@ function isCaptainStatus(value: unknown): value is CaptainStatus {
 }
 
 function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
+  return (
+    Array.isArray(value)
+    && value.length <= MAX_CAPTAIN_RESULT_ITEMS
+    && value.every(
+      (item) => typeof item === "string" && item.length <= MAX_CAPTAIN_RESULT_STRING_LENGTH,
+    )
+  );
 }
 
 function parseClickUpUpdates(value: unknown): ClickUpUpdate[] | undefined {
-  if (!Array.isArray(value)) return undefined;
+  if (!Array.isArray(value) || value.length > MAX_CAPTAIN_RESULT_ITEMS) return undefined;
   const updates: ClickUpUpdate[] = [];
   for (const item of value) {
     if (!isRecord(item) || Object.keys(item).some((key) => !CLICKUP_UPDATE_KEYS.has(key))) {
       return undefined;
     }
-    if (typeof item.action !== "string" || typeof item.task_id !== "string") return undefined;
+    if (
+      typeof item.action !== "string"
+      || item.action.length > MAX_CAPTAIN_RESULT_STRING_LENGTH
+      || typeof item.task_id !== "string"
+      || item.task_id.length > MAX_CAPTAIN_RESULT_STRING_LENGTH
+    ) return undefined;
     updates.push({ action: item.action, task_id: item.task_id });
   }
   return updates;
@@ -386,6 +413,7 @@ export function normalizeCaptainResult(reportId: string, value: unknown): Captai
     value.report_id !== reportId
     || !isCaptainStatus(value.status)
     || typeof value.captain_feedback !== "string"
+    || value.captain_feedback.length > MAX_CAPTAIN_RESULT_STRING_LENGTH
     || !isStringArray(value.questions)
     || !isStringArray(value.warnings)
   ) {

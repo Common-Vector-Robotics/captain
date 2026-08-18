@@ -77,6 +77,30 @@ it("rejects malformed identifiers and report shapes", () => {
   })).toThrowError(HttpProblem);
 });
 
+it("accepts an RFC 9562 UUIDv7 turn identifier", () => {
+  expect(parseTurnInput({
+    turn_id: "018f6f72-7c8a-7d8d-91a5-0b8d9f2f3a4b",
+    kind: "reply",
+    reply: "Yes",
+  }).turn_id).toBe("018f6f72-7c8a-7d8d-91a5-0b8d9f2f3a4b");
+});
+
+it("rejects deeply nested input with a bounded HTTP problem", () => {
+  let nested: Record<string, unknown> = {};
+  for (let depth = 0; depth < 2_000; depth += 1) {
+    nested = { nested };
+  }
+
+  const parse = () => parseTurnInput({
+    turn_id: "b73db2fe-ec74-4f44-a74c-fbe44eb11e46",
+    kind: "report",
+    report,
+    metadata: nested,
+  });
+  expect(parse).toThrowError(HttpProblem);
+  expect(parse).toThrow(/too complex/i);
+});
+
 it("canonicalizes key order and hashes semantic duplicates identically", () => {
   const a = parseTurnInput({ turn_id: "204156a1-c515-41f6-8f2f-a1d24a312704", kind: "reply", reply: "Yes" });
   const b = parseTurnInput({ reply: "Yes", kind: "reply", turn_id: "204156a1-c515-41f6-8f2f-a1d24a312704" });
@@ -108,4 +132,25 @@ it("normalizes the public Captain result and bounds malformed output", () => {
   const malformed = normalizeCaptainResult("report-1", "x".repeat(5000));
   expect(malformed.status).toBe("unknown_outcome");
   expect(malformed.warnings[0].length).toBeLessThanOrEqual(260);
+});
+
+it("rejects oversized valid-shaped Captain result content", () => {
+  const result = {
+    report_id: "report-1",
+    status: "updated",
+    clickup_updates: [],
+    captain_feedback: "Updated the task.",
+    questions: [],
+    warnings: [],
+  };
+
+  for (const oversized of [
+    { ...result, captain_feedback: "x".repeat(4_097) },
+    { ...result, questions: Array.from({ length: 33 }, () => "question") },
+    { ...result, warnings: ["x".repeat(4_097)] },
+  ]) {
+    const normalized = normalizeCaptainResult("report-1", oversized);
+    expect(normalized.status).toBe("unknown_outcome");
+    expect(normalized.warnings).toEqual(["Captain result was malformed."]);
+  }
 });
