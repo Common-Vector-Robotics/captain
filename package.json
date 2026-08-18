@@ -2,8 +2,41 @@
   "name": "captain-workspace",
   "version": "0.1.0",
   "description": "An evidence-driven OpenClaw project-management agent for keeping ClickUp and team reality aligned.",
+  "private": true,
+  "author": {
+    "name": "Common Vector Robotics",
+    "url": "https://github.com/Common-Vector-Robotics"
+  },
+  "contributors": [
+    {
+      "name": "Gavin Bender"
+    }
+  ],
+  "homepage": "https://github.com/Common-Vector-Robotics/captain#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Common-Vector-Robotics/captain.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Common-Vector-Robotics/captain/issues"
+  },
+  "keywords": [
+    "openclaw",
+    "ai-agent",
+    "project-management",
+    "clickup",
+    "slack",
+    "team-coordination"
+  ],
   "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0"
+  },
+  "scripts": {
+    "test": "python3 -m pytest -q",
+    "pack:check": "npm pack --dry-run"
+  },
   "files": [
     "CLAW.md",
     "BOOTSTRAP.md",
