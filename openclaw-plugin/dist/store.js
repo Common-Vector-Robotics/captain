@@ -12,6 +12,8 @@ const TERMINAL_TURN_STATES = new Set([
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const SQLITE_BUSY_RETRY_MS = 10;
 const SQLITE_BUSY_WAIT = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+const DEFAULT_MAX_GLOBAL_ACTIVE_TURNS = 32;
+const MAX_GLOBAL_ACTIVE_TURNS = 32;
 function storedMember(row) {
     return {
         memberId: row.member_id,
@@ -83,8 +85,17 @@ function enableWal(database) {
 export class CaptainRemoteStore {
     databasePath;
     database = null;
-    constructor(databasePath) {
+    maxGlobalActiveTurns;
+    constructor(databasePath, options = {}) {
         this.databasePath = databasePath;
+        const maxGlobalActiveTurns = options.maxGlobalActiveTurns
+            ?? DEFAULT_MAX_GLOBAL_ACTIVE_TURNS;
+        if (!Number.isSafeInteger(maxGlobalActiveTurns)
+            || maxGlobalActiveTurns < 1
+            || maxGlobalActiveTurns > MAX_GLOBAL_ACTIVE_TURNS) {
+            throw new TypeError(`maxGlobalActiveTurns must be between 1 and ${MAX_GLOBAL_ACTIVE_TURNS}.`);
+        }
+        this.maxGlobalActiveTurns = maxGlobalActiveTurns;
     }
     initialize() {
         if (this.database)
@@ -158,8 +169,10 @@ export class CaptainRemoteStore {
         this.database = null;
     }
     createMember(name, email, issued) {
+        return this.createMemberWithId(randomUUID(), name, email, issued);
+    }
+    createMemberWithId(memberId, name, email, issued) {
         const database = this.getDatabase();
-        const memberId = randomUUID();
         const createdAt = new Date().toISOString();
         database.prepare(`
       INSERT INTO members (
@@ -222,7 +235,7 @@ export class CaptainRemoteStore {
             if (memberActive >= 1) {
                 throw new HttpProblem(429, "MEMBER_ACTIVE_LIMIT", "Member already has active work.");
             }
-            if (this.countGlobalActive() >= 32) {
+            if (this.countGlobalActive() >= this.maxGlobalActiveTurns) {
                 throw new HttpProblem(429, "GLOBAL_ACTIVE_LIMIT", "Global active-turn limit reached.");
             }
             const now = new Date().toISOString();

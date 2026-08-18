@@ -224,6 +224,25 @@ const result: CaptainResult = {
 };
 
 describe("CaptainRemoteStore members", () => {
+  it("inserts a caller-supplied server UUID without changing createMember", () => {
+    const store = openStore();
+    const issued = issueMemberToken();
+    const memberId = "00000000-0000-4000-8000-000000000123";
+
+    const supplied = store.createMemberWithId(
+      memberId,
+      "Alice",
+      "alice@example.com",
+      issued,
+    );
+    const generated = store.createMember("Bob", "bob@example.com", issueMemberToken());
+
+    expect(supplied.memberId).toBe(memberId);
+    expect(store.findMemberForAuth(issued.lookupId)?.memberId).toBe(memberId);
+    expect(generated.memberId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(generated.memberId).not.toBe(memberId);
+  });
+
   it("lists member identity without exposing token material", () => {
     const store = openStore();
     const alice = store.createMember("Alice", "alice@example.com", issueMemberToken());
@@ -400,6 +419,35 @@ describe("CaptainRemoteStore turns", () => {
       "00000000-0000-4000-8000-000000000099",
     ))).toThrowError(expect.objectContaining({ code: "GLOBAL_ACTIVE_LIMIT" }));
   });
+
+  it("honors a lower configured global active-turn limit", () => {
+    const path = createDatabasePath();
+    const store = new CaptainRemoteStore(path, { maxGlobalActiveTurns: 1 });
+    store.initialize();
+    stores.push(store);
+    const alice = createMember(store, "Alice");
+    const bob = createMember(store, "Bob");
+
+    store.reserveTurn(reservation(
+      alice.memberId,
+      "alice-report",
+      "00000000-0000-4000-8000-000000000124",
+    ));
+
+    expect(() => store.reserveTurn(reservation(
+      bob.memberId,
+      "bob-report",
+      "00000000-0000-4000-8000-000000000125",
+    ))).toThrowError(expect.objectContaining({ code: "GLOBAL_ACTIVE_LIMIT" }));
+  });
+
+  it.each([0, -1, 1.5, 33, Number.NaN, Infinity])(
+    "rejects invalid global active-turn limit %s",
+    (maxGlobalActiveTurns) => {
+      expect(() => new CaptainRemoteStore(createDatabasePath(), { maxGlobalActiveTurns }))
+        .toThrow("maxGlobalActiveTurns");
+    },
+  );
 
   it("claims FIFO while atomically enforcing running capacity", () => {
     const store = openStore();

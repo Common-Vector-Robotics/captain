@@ -432,6 +432,81 @@ describe("CaptainAuthenticator", () => {
       "x-captain-client-ip": "203.0.113.8",
     })).memberId).toBe("member-1");
   });
+
+  it("honors configured source and lookup failure rates and bursts", () => {
+    const { issued, store } = fixture();
+    let now = 0;
+    const options = {
+      now: () => now,
+      invalidAuthPerSourcePerMinute: 1,
+      invalidAuthPerSourceBurst: 1,
+      invalidAuthGlobalPerMinute: 100,
+    };
+    const bySource = new CaptainAuthenticator(store, options);
+    const firstWrong = `cap_v1_${differentBase64Url(issued.lookupId)}.${issued.secret}`;
+    const secondWrong = `cap_v1_${differentBase64Url(firstWrong.slice(7, 23))}.${issued.secret}`;
+
+    expectProblem(() => bySource.authenticate(request(
+      "198.51.100.3",
+      authorization(firstWrong),
+    )), 401);
+    expectProblem(() => bySource.authenticate(request(
+      "198.51.100.3",
+      authorization(secondWrong),
+    )), 429, 60);
+    now = 60_000;
+    expectProblem(() => bySource.authenticate(request(
+      "198.51.100.3",
+      authorization(secondWrong),
+    )), 401);
+
+    now = 0;
+    const byLookup = new CaptainAuthenticator(store, options);
+    const knownWrong = `cap_v1_${issued.lookupId}.${differentBase64Url(issued.secret)}`;
+    expectProblem(() => byLookup.authenticate(request(
+      "198.51.100.4",
+      authorization(knownWrong),
+    )), 401);
+    expectProblem(() => byLookup.authenticate(request(
+      "198.51.100.5",
+      authorization(knownWrong),
+    )), 429, 60);
+    now = 60_000;
+    expectProblem(() => byLookup.authenticate(request(
+      "198.51.100.6",
+      authorization(knownWrong),
+    )), 401);
+  });
+
+  it("honors the configured global invalid-auth rate across sources", () => {
+    const { issued, store } = fixture();
+    let now = 0;
+    const authenticator = new CaptainAuthenticator(store, {
+      now: () => now,
+      invalidAuthPerSourcePerMinute: 10,
+      invalidAuthPerSourceBurst: 5,
+      invalidAuthGlobalPerMinute: 1,
+    });
+
+    expectProblem(() => authenticator.authenticate(request(
+      "198.51.100.3",
+      authorization(`cap_v1_${differentBase64Url(issued.lookupId)}.${issued.secret}`),
+    )), 401);
+    expectProblem(() => authenticator.authenticate(request(
+      "198.51.100.4",
+      authorization(`cap_v1_${differentBase64Url(issued.lookupId)}.${differentBase64Url(issued.secret)}`),
+    )), 429, 60);
+    now = 60_000;
+    expectProblem(() => authenticator.authenticate(request(
+      "198.51.100.5",
+      authorization(`cap_v1_${differentBase64Url(issued.lookupId)}.${issued.secret}`),
+    )), 401);
+
+    expect(authenticator.authenticate(request(
+      "198.51.100.4",
+      authorization(issued.token),
+    )).memberId).toBe("member-1");
+  });
 });
 
 describe("PollLimiter", () => {
@@ -444,6 +519,22 @@ describe("PollLimiter", () => {
     expect(() => limiter.check("member-2")).not.toThrow();
 
     now = 2_000;
+    expect(() => limiter.check("member-1")).not.toThrow();
+  });
+
+  it("honors a configured poll rate and burst", () => {
+    let now = 0;
+    const limiter = new PollLimiter({
+      now: () => now,
+      ratePerMinute: 1,
+      burst: 1,
+    });
+
+    limiter.check("member-1");
+    expectProblem(() => limiter.check("member-1"), 429, 60);
+    now = 59_999;
+    expectProblem(() => limiter.check("member-1"), 429, 1);
+    now = 60_000;
     expect(() => limiter.check("member-1")).not.toThrow();
   });
 });

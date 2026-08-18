@@ -50,6 +50,12 @@ const TERMINAL_TURN_STATES = new Set<TerminalTurnState>([
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const SQLITE_BUSY_RETRY_MS = 10;
 const SQLITE_BUSY_WAIT = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+const DEFAULT_MAX_GLOBAL_ACTIVE_TURNS = 32;
+const MAX_GLOBAL_ACTIVE_TURNS = 32;
+
+export interface CaptainRemoteStoreOptions {
+  maxGlobalActiveTurns?: number;
+}
 
 export interface StoredTurnError {
   code: string;
@@ -197,8 +203,25 @@ function enableWal(database: DatabaseSync): void {
 
 export class CaptainRemoteStore {
   private database: DatabaseSync | null = null;
+  private readonly maxGlobalActiveTurns: number;
 
-  constructor(private readonly databasePath: string) {}
+  constructor(
+    private readonly databasePath: string,
+    options: CaptainRemoteStoreOptions = {},
+  ) {
+    const maxGlobalActiveTurns = options.maxGlobalActiveTurns
+      ?? DEFAULT_MAX_GLOBAL_ACTIVE_TURNS;
+    if (
+      !Number.isSafeInteger(maxGlobalActiveTurns)
+      || maxGlobalActiveTurns < 1
+      || maxGlobalActiveTurns > MAX_GLOBAL_ACTIVE_TURNS
+    ) {
+      throw new TypeError(
+        `maxGlobalActiveTurns must be between 1 and ${MAX_GLOBAL_ACTIVE_TURNS}.`,
+      );
+    }
+    this.maxGlobalActiveTurns = maxGlobalActiveTurns;
+  }
 
   initialize(): void {
     if (this.database) return;
@@ -276,8 +299,16 @@ export class CaptainRemoteStore {
   }
 
   createMember(name: string, email: string, issued: IssuedToken): StoredMember {
+    return this.createMemberWithId(randomUUID(), name, email, issued);
+  }
+
+  createMemberWithId(
+    memberId: string,
+    name: string,
+    email: string,
+    issued: IssuedToken,
+  ): StoredMember {
     const database = this.getDatabase();
-    const memberId = randomUUID();
     const createdAt = new Date().toISOString();
     database.prepare(`
       INSERT INTO members (
@@ -350,7 +381,7 @@ export class CaptainRemoteStore {
       if (memberActive >= 1) {
         throw new HttpProblem(429, "MEMBER_ACTIVE_LIMIT", "Member already has active work.");
       }
-      if (this.countGlobalActive() >= 32) {
+      if (this.countGlobalActive() >= this.maxGlobalActiveTurns) {
         throw new HttpProblem(429, "GLOBAL_ACTIVE_LIMIT", "Global active-turn limit reached.");
       }
 

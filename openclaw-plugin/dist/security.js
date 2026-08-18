@@ -182,22 +182,28 @@ export class SecurityProblem extends HttpProblem {
 }
 export class CaptainAuthenticator {
     store;
-    sourceLimiter = new TokenBucketLimiter({
-        ratePerMinute: 10,
-        burst: 5,
-    });
-    lookupLimiter = new TokenBucketLimiter({
-        ratePerMinute: 10,
-        burst: 5,
-    });
-    globalLimiter = new TokenBucketLimiter({
-        ratePerMinute: 100,
-        burst: 100,
-    });
+    sourceLimiter;
+    lookupLimiter;
+    globalLimiter;
     now;
     events;
     constructor(store, options = {}) {
         this.store = store;
+        const invalidAuthPerSourcePerMinute = options.invalidAuthPerSourcePerMinute ?? 10;
+        const invalidAuthPerSourceBurst = options.invalidAuthPerSourceBurst ?? 5;
+        const invalidAuthGlobalPerMinute = options.invalidAuthGlobalPerMinute ?? 100;
+        this.sourceLimiter = new TokenBucketLimiter({
+            ratePerMinute: invalidAuthPerSourcePerMinute,
+            burst: invalidAuthPerSourceBurst,
+        });
+        this.lookupLimiter = new TokenBucketLimiter({
+            ratePerMinute: invalidAuthPerSourcePerMinute,
+            burst: invalidAuthPerSourceBurst,
+        });
+        this.globalLimiter = new TokenBucketLimiter({
+            ratePerMinute: invalidAuthGlobalPerMinute,
+            burst: invalidAuthGlobalPerMinute,
+        });
         this.now = options.now ?? Date.now;
         this.events = options.events ?? new LimitEventAggregator();
     }
@@ -260,13 +266,14 @@ function publicMember(member) {
     };
 }
 export class PollLimiter {
-    limiter = new TokenBucketLimiter({
-        ratePerMinute: 30,
-        burst: 5,
-    });
+    limiter;
     now;
     events;
     constructor(options = {}) {
+        this.limiter = new TokenBucketLimiter({
+            ratePerMinute: options.ratePerMinute ?? 30,
+            burst: options.burst ?? 5,
+        });
         this.now = options.now ?? Date.now;
         this.events = options.events ?? new LimitEventAggregator();
     }

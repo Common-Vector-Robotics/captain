@@ -102,12 +102,23 @@ function registerRuntime(api) {
             const events = new LimitEventAggregator({
                 emit: (counts) => emitLimitCounts(api, counts),
             });
-            const store = new CaptainRemoteStore(config.databasePath);
+            const store = new CaptainRemoteStore(config.databasePath, {
+                maxGlobalActiveTurns: config.maxGlobalActiveTurns,
+            });
             const resources = { store, events };
             try {
                 store.initialize();
-                const authenticator = new CaptainAuthenticator(store, { events });
-                const pollLimiter = new PollLimiter({ events });
+                const authenticator = new CaptainAuthenticator(store, {
+                    events,
+                    invalidAuthPerSourcePerMinute: config.invalidAuthPerSourcePerMinute,
+                    invalidAuthPerSourceBurst: config.invalidAuthPerSourceBurst,
+                    invalidAuthGlobalPerMinute: config.invalidAuthGlobalPerMinute,
+                });
+                const pollLimiter = new PollLimiter({
+                    events,
+                    ratePerMinute: config.pollPerMinute,
+                    burst: config.pollBurst,
+                });
                 const embeddedRuntime = {
                     resolveWorkspace: () => api.runtime.agent.resolveAgentWorkspaceDir(api.config, "captain"),
                     run: (params) => api.runtime.agent.runEmbeddedAgent({

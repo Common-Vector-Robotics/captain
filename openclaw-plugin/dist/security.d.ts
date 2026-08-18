@@ -48,6 +48,9 @@ export interface MemberAuthStore {
 export interface CaptainAuthenticatorOptions {
     now?: () => number;
     events?: LimitEventAggregator;
+    invalidAuthPerSourcePerMinute?: number;
+    invalidAuthPerSourceBurst?: number;
+    invalidAuthGlobalPerMinute?: number;
 }
 export declare class CaptainAuthenticator {
     private readonly store;
@@ -62,6 +65,8 @@ export declare class CaptainAuthenticator {
 export interface PollLimiterOptions {
     now?: () => number;
     events?: LimitEventAggregator;
+    ratePerMinute?: number;
+    burst?: number;
 }
 export declare class PollLimiter {
     private readonly limiter;

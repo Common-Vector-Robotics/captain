@@ -25,6 +25,9 @@ export interface StoredReport {
     updatedAt: string;
 }
 export type TerminalTurnState = Exclude<TurnState, "queued" | "started">;
+export interface CaptainRemoteStoreOptions {
+    maxGlobalActiveTurns?: number;
+}
 export interface StoredTurnError {
     code: string;
     message: string;
@@ -57,10 +60,12 @@ export type ReserveTurnResult = {
 export declare class CaptainRemoteStore {
     private readonly databasePath;
     private database;
-    constructor(databasePath: string);
+    private readonly maxGlobalActiveTurns;
+    constructor(databasePath: string, options?: CaptainRemoteStoreOptions);
     initialize(): void;
     close(): void;
     createMember(name: string, email: string, issued: IssuedToken): StoredMember;
+    createMemberWithId(memberId: string, name: string, email: string, issued: IssuedToken): StoredMember;
     listMembers(): StoredMember[];
     findMemberForAuth(lookupId: string): StoredMemberAuth | null;
     rotateMember(memberId: string, issued: IssuedToken): StoredMember;

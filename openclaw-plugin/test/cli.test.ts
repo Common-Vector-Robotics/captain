@@ -62,6 +62,12 @@ function createApi(path: string) {
 async function runCli(
   apiFixture: ReturnType<typeof createApi>,
   args: string[],
+  options: {
+    stdoutBehavior?: (
+      value: string,
+      callback: ((error?: Error | null) => void) | undefined,
+    ) => boolean;
+  } = {},
 ): Promise<{ stdout: string; stderr: string; error?: unknown }> {
   const program = new Command();
   program.exitOverride();
@@ -75,8 +81,18 @@ async function runCli(
       stderr += value;
     },
   });
-  const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation((value) => {
-    stdout += String(value);
+  const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation((
+    value,
+    encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
+    suppliedCallback?: (error?: Error | null) => void,
+  ) => {
+    const text = String(value);
+    stdout += text;
+    const callback = typeof encodingOrCallback === "function"
+      ? encodingOrCallback
+      : suppliedCallback;
+    if (options.stdoutBehavior) return options.stdoutBehavior(text, callback);
+    queueMicrotask(() => callback?.());
     return true;
   });
   const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation((value) => {
@@ -196,6 +212,7 @@ describe("Captain member CLI", () => {
     expect(rotated.error).toBeUndefined();
     expect(replacement).toBeDefined();
     expect(replacement).not.toBe(oldToken);
+    expect(rotated.stdout.match(new RegExp(memberId!, "g"))).toHaveLength(1);
     expect(rotated.stdout.match(new RegExp(replacement!.replace(".", "\\."), "g"))).toHaveLength(1);
     expect(rotated.stdout).not.toContain(oldToken!);
 
@@ -214,6 +231,74 @@ describe("Captain member CLI", () => {
     expect(authenticate(reopened, replacement!)).toBe(false);
     reopened.close();
   });
+
+  it.each(["synchronous", "callback"] as const)(
+    "does not activate an added member after a %s stdout failure",
+    async (failureMode) => {
+      const path = databasePath();
+      const fixture = createApi(path);
+      const result = await runCli(fixture, [
+        "captain", "members", "add",
+        "--name", "Sam Lee",
+        "--email", "sam@example.com",
+      ], {
+        stdoutBehavior: (_value, callback) => {
+          if (failureMode === "synchronous") throw new Error("broken pipe");
+          if (callback) queueMicrotask(() => callback(new Error("broken pipe")));
+          return true;
+        },
+      });
+
+      expect(result.error).toBeDefined();
+      expect(result.stderr).toContain("Could not add Captain member.");
+      expect(result.stderr).not.toContain("broken pipe");
+      const store = new CaptainRemoteStore(path);
+      store.initialize();
+      expect(store.listMembers()).toEqual([]);
+      store.close();
+      expect(fixture.api.logger.error).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["synchronous", "callback"] as const)(
+    "keeps the old token valid after a %s rotate stdout failure",
+    async (failureMode) => {
+      const path = databasePath();
+      const fixture = createApi(path);
+      const added = await runCli(fixture, [
+        "captain", "members", "add",
+        "--name", "Sam Lee",
+        "--email", "sam@example.com",
+      ]);
+      const memberId = added.stdout.match(/[0-9a-f]{8}-[0-9a-f-]{27}/i)?.[0];
+      const oldToken = added.stdout.match(/cap_v1_[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{43}/)?.[0];
+
+      const result = await runCli(
+        fixture,
+        ["captain", "members", "rotate", memberId!],
+        {
+          stdoutBehavior: (_value, callback) => {
+            if (failureMode === "synchronous") throw new Error("broken pipe");
+            if (callback) queueMicrotask(() => callback(new Error("broken pipe")));
+            return true;
+          },
+        },
+      );
+
+      expect(result.error).toBeDefined();
+      expect(result.stderr).toContain("Could not rotate Captain member.");
+      expect(result.stderr).not.toContain("broken pipe");
+      const replacement = result.stdout.match(
+        /cap_v1_[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{43}/,
+      )?.[0];
+      const store = new CaptainRemoteStore(path);
+      store.initialize();
+      expect(authenticate(store, oldToken!)).toBe(true);
+      if (replacement) expect(authenticate(store, replacement)).toBe(false);
+      store.close();
+      expect(fixture.api.logger.error).not.toHaveBeenCalled();
+    },
+  );
 
   it("validates nonempty names and email syntax before creating a store", async () => {
     const emptyNamePath = join(databasePath(), "empty.sqlite3");
@@ -242,7 +327,7 @@ describe("Captain member CLI", () => {
     const path = databasePath();
     const fixture = createApi(path);
     const close = vi.spyOn(CaptainRemoteStore.prototype, "close");
-    vi.spyOn(CaptainRemoteStore.prototype, "createMember").mockImplementation(() => {
+    vi.spyOn(CaptainRemoteStore.prototype, "createMemberWithId").mockImplementation(() => {
       throw new Error(`cap_v1_PRIVATE_TOKEN ${path}`);
     });
 
@@ -254,10 +339,38 @@ describe("Captain member CLI", () => {
 
     expect(result.error).toBeDefined();
     expect(close).toHaveBeenCalledTimes(1);
-    expect(result.stdout).toBe("");
+    expect(result.stdout.match(/cap_v1_[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{43}/)).toHaveLength(1);
     expect(result.stderr).toContain("Could not add Captain member.");
     expect(result.stderr).not.toContain("cap_v1_PRIVATE_TOKEN");
     expect(result.stderr).not.toContain(path);
+    expect(fixture.api.logger.error).not.toHaveBeenCalled();
+  });
+
+  it("keeps the old token valid when rotate activation fails after delivery", async () => {
+    const path = databasePath();
+    const fixture = createApi(path);
+    const added = await runCli(fixture, [
+      "captain", "members", "add",
+      "--name", "Sam Lee",
+      "--email", "sam@example.com",
+    ]);
+    const memberId = added.stdout.match(/[0-9a-f]{8}-[0-9a-f-]{27}/i)?.[0];
+    const oldToken = added.stdout.match(/cap_v1_[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{43}/)?.[0];
+    vi.spyOn(CaptainRemoteStore.prototype, "rotateMember").mockImplementation(() => {
+      throw new Error(`cap_v1_PRIVATE_TOKEN ${path}`);
+    });
+
+    const result = await runCli(fixture, ["captain", "members", "rotate", memberId!]);
+
+    expect(result.error).toBeDefined();
+    expect(result.stdout.match(/cap_v1_[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{43}/)).toHaveLength(1);
+    expect(result.stderr).toContain("Could not rotate Captain member.");
+    expect(result.stderr).not.toContain("cap_v1_PRIVATE_TOKEN");
+    expect(result.stderr).not.toContain(path);
+    const store = new CaptainRemoteStore(path);
+    store.initialize();
+    expect(authenticate(store, oldToken!)).toBe(true);
+    store.close();
     expect(fixture.api.logger.error).not.toHaveBeenCalled();
   });
 });

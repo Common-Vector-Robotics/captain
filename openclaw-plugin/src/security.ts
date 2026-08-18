@@ -231,21 +231,15 @@ export interface MemberAuthStore {
 export interface CaptainAuthenticatorOptions {
   now?: () => number;
   events?: LimitEventAggregator;
+  invalidAuthPerSourcePerMinute?: number;
+  invalidAuthPerSourceBurst?: number;
+  invalidAuthGlobalPerMinute?: number;
 }
 
 export class CaptainAuthenticator {
-  private readonly sourceLimiter = new TokenBucketLimiter({
-    ratePerMinute: 10,
-    burst: 5,
-  });
-  private readonly lookupLimiter = new TokenBucketLimiter({
-    ratePerMinute: 10,
-    burst: 5,
-  });
-  private readonly globalLimiter = new TokenBucketLimiter({
-    ratePerMinute: 100,
-    burst: 100,
-  });
+  private readonly sourceLimiter: TokenBucketLimiter;
+  private readonly lookupLimiter: TokenBucketLimiter;
+  private readonly globalLimiter: TokenBucketLimiter;
   private readonly now: () => number;
   private readonly events: LimitEventAggregator;
 
@@ -253,6 +247,21 @@ export class CaptainAuthenticator {
     private readonly store: MemberAuthStore,
     options: CaptainAuthenticatorOptions = {},
   ) {
+    const invalidAuthPerSourcePerMinute = options.invalidAuthPerSourcePerMinute ?? 10;
+    const invalidAuthPerSourceBurst = options.invalidAuthPerSourceBurst ?? 5;
+    const invalidAuthGlobalPerMinute = options.invalidAuthGlobalPerMinute ?? 100;
+    this.sourceLimiter = new TokenBucketLimiter({
+      ratePerMinute: invalidAuthPerSourcePerMinute,
+      burst: invalidAuthPerSourceBurst,
+    });
+    this.lookupLimiter = new TokenBucketLimiter({
+      ratePerMinute: invalidAuthPerSourcePerMinute,
+      burst: invalidAuthPerSourceBurst,
+    });
+    this.globalLimiter = new TokenBucketLimiter({
+      ratePerMinute: invalidAuthGlobalPerMinute,
+      burst: invalidAuthGlobalPerMinute,
+    });
     this.now = options.now ?? Date.now;
     this.events = options.events ?? new LimitEventAggregator();
   }
@@ -330,17 +339,20 @@ function publicMember(member: StoredMemberAuth): StoredMember {
 export interface PollLimiterOptions {
   now?: () => number;
   events?: LimitEventAggregator;
+  ratePerMinute?: number;
+  burst?: number;
 }
 
 export class PollLimiter {
-  private readonly limiter = new TokenBucketLimiter({
-    ratePerMinute: 30,
-    burst: 5,
-  });
+  private readonly limiter: TokenBucketLimiter;
   private readonly now: () => number;
   private readonly events: LimitEventAggregator;
 
   constructor(options: PollLimiterOptions = {}) {
+    this.limiter = new TokenBucketLimiter({
+      ratePerMinute: options.ratePerMinute ?? 30,
+      burst: options.burst ?? 5,
+    });
     this.now = options.now ?? Date.now;
     this.events = options.events ?? new LimitEventAggregator();
   }

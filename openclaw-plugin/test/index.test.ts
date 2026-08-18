@@ -142,6 +142,32 @@ async function callRoute(handler: OpenClawPluginHttpRouteHandler): Promise<Recor
   return response;
 }
 
+async function callRequest(
+  handler: OpenClawPluginHttpRouteHandler,
+  request: Partial<IncomingMessage>,
+): Promise<RecordedResponse> {
+  const response = recorder();
+  await handler(request as IncomingMessage, response as unknown as ServerResponse);
+  return response;
+}
+
+function pollRequest(token: string, source: string, reportId = "missing"): Partial<IncomingMessage> {
+  const authorization = `Bearer ${token}`;
+  return {
+    method: "GET",
+    url: `/captain/v1/reports/${reportId}/turns/00000000-0000-4000-8000-000000000001`,
+    headers: {
+      authorization,
+      "x-captain-client-ip": source,
+    },
+    rawHeaders: [
+      "Authorization", authorization,
+      "X-Captain-Client-IP", source,
+    ],
+    socket: { remoteAddress: "127.0.0.1" } as never,
+  };
+}
+
 function serviceContext(api: OpenClawPluginApi) {
   return {
     config: api.config,
@@ -234,6 +260,188 @@ describe("Captain remote plugin entry", () => {
 
     expect(initialize).not.toHaveBeenCalled();
     expect((await callRoute(fixture.route.handler)).statusCode).toBe(503);
+  });
+
+  it("wires the configured minimum global active-turn limit into admission", async () => {
+    const path = databasePath();
+    const alice = issueMemberToken();
+    const bob = issueMemberToken();
+    const store = new CaptainRemoteStore(path);
+    store.initialize();
+    store.createMember("Alice", "alice@example.com", alice);
+    store.createMember("Bob", "bob@example.com", bob);
+    store.close();
+    let releaseRun!: (value: unknown) => void;
+    const pendingRun = new Promise<unknown>((resolve) => {
+      releaseRun = resolve;
+    });
+    const fixture = createApi({
+      pluginConfig: { databasePath: path, maxGlobalActiveTurns: 1 },
+      runEmbeddedAgent: () => pendingRun,
+    });
+    await fixture.service.start(serviceContext(fixture.api));
+    const server = await listen(fixture.route.handler);
+    const submit = (token: string, turnId: string) => fetch(
+      `${server.baseUrl}/captain/v1/reports/configured-cap/turns`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          turn_id: turnId,
+          kind: "report",
+          report: { summary: ["Hold this configured-cap turn."] },
+          metadata: {},
+        }),
+      },
+    );
+    try {
+      expect((await submit(alice.token, "00000000-0000-4000-8000-000000000011")).status)
+        .toBe(202);
+      await waitFor(() => fixture.runEmbeddedAgent.mock.calls.length === 1);
+
+      const blocked = await submit(bob.token, "00000000-0000-4000-8000-000000000012");
+      expect(blocked.status).toBe(429);
+      expect(await blocked.json()).toEqual({
+        error: {
+          code: "GLOBAL_ACTIVE_LIMIT",
+          message: "Global active-turn limit reached.",
+        },
+      });
+    } finally {
+      releaseRun({
+        meta: { durationMs: 1, livenessState: "working", stopReason: "stop" },
+        payloads: [],
+      });
+      await fixture.service.stop?.(serviceContext(fixture.api));
+      await server.close();
+    }
+  });
+
+  it("wires configured minimum poll burst and refill rate", async () => {
+    const path = databasePath();
+    const issued = issueMemberToken();
+    const store = new CaptainRemoteStore(path);
+    store.initialize();
+    store.createMember("Alice", "alice@example.com", issued);
+    store.close();
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const fixture = createApi({
+      pluginConfig: { databasePath: path, pollPerMinute: 1, pollBurst: 1 },
+    });
+    await fixture.service.start(serviceContext(fixture.api));
+    try {
+      expect((await callRequest(
+        fixture.route.handler,
+        pollRequest(issued.token, "198.51.100.1"),
+      )).statusCode).toBe(404);
+      const blocked = await callRequest(
+        fixture.route.handler,
+        pollRequest(issued.token, "198.51.100.1"),
+      );
+      expect(blocked.statusCode).toBe(429);
+      expect(blocked.headers["retry-after"]).toBe("60");
+
+      now = 60_000;
+      expect((await callRequest(
+        fixture.route.handler,
+        pollRequest(issued.token, "198.51.100.1"),
+      )).statusCode).toBe(404);
+    } finally {
+      await fixture.service.stop?.(serviceContext(fixture.api));
+    }
+  });
+
+  it("wires configured minimum source and lookup invalid-auth limits", async () => {
+    const path = databasePath();
+    const issued = issueMemberToken();
+    const store = new CaptainRemoteStore(path);
+    store.initialize();
+    store.createMember("Alice", "alice@example.com", issued);
+    store.close();
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const fixture = createApi({
+      pluginConfig: {
+        databasePath: path,
+        invalidAuthPerSourcePerMinute: 1,
+        invalidAuthPerSourceBurst: 1,
+      },
+    });
+    await fixture.service.start(serviceContext(fixture.api));
+    try {
+      expect((await callRequest(
+        fixture.route.handler,
+        pollRequest(issueMemberToken().token, "198.51.100.1", "source"),
+      )).statusCode).toBe(401);
+      const sourceBlocked = await callRequest(
+        fixture.route.handler,
+        pollRequest(issueMemberToken().token, "198.51.100.1", "source"),
+      );
+      expect(sourceBlocked.statusCode).toBe(429);
+      expect(sourceBlocked.headers["retry-after"]).toBe("60");
+
+      now = 60_000;
+      expect((await callRequest(
+        fixture.route.handler,
+        pollRequest(issueMemberToken().token, "198.51.100.1", "source-refilled"),
+      )).statusCode).toBe(401);
+
+      now = 120_000;
+      const wrongSecret = `${issued.secret[0] === "A" ? "B" : "A"}${issued.secret.slice(1)}`;
+      const wrongKnownToken = `cap_v1_${issued.lookupId}.${wrongSecret}`;
+      expect((await callRequest(
+        fixture.route.handler,
+        pollRequest(wrongKnownToken, "198.51.100.2", "lookup"),
+      )).statusCode).toBe(401);
+      const lookupBlocked = await callRequest(
+        fixture.route.handler,
+        pollRequest(wrongKnownToken, "198.51.100.3", "lookup"),
+      );
+      expect(lookupBlocked.statusCode).toBe(429);
+      expect(lookupBlocked.headers["retry-after"]).toBe("60");
+
+      now = 180_000;
+      expect((await callRequest(
+        fixture.route.handler,
+        pollRequest(wrongKnownToken, "198.51.100.4", "lookup-refilled"),
+      )).statusCode).toBe(401);
+    } finally {
+      await fixture.service.stop?.(serviceContext(fixture.api));
+    }
+  });
+
+  it("wires the configured minimum global invalid-auth limit", async () => {
+    const path = databasePath();
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const fixture = createApi({
+      pluginConfig: { databasePath: path, invalidAuthGlobalPerMinute: 1 },
+    });
+    await fixture.service.start(serviceContext(fixture.api));
+    try {
+      expect((await callRequest(
+        fixture.route.handler,
+        pollRequest(issueMemberToken().token, "198.51.100.1", "global"),
+      )).statusCode).toBe(401);
+      const blocked = await callRequest(
+        fixture.route.handler,
+        pollRequest(issueMemberToken().token, "198.51.100.2", "global"),
+      );
+      expect(blocked.statusCode).toBe(429);
+      expect(blocked.headers["retry-after"]).toBe("60");
+
+      now = 60_000;
+      expect((await callRequest(
+        fixture.route.handler,
+        pollRequest(issueMemberToken().token, "198.51.100.3", "global-refilled"),
+      )).statusCode).toBe(401);
+    } finally {
+      await fixture.service.stop?.(serviceContext(fixture.api));
+    }
   });
 
   it("starts recovery before readiness and stops worker, aggregation, then SQLite once", async () => {

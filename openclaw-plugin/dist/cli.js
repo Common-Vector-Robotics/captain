@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { issueMemberToken } from "./security.js";
@@ -14,15 +15,43 @@ function databasePath(pluginConfig) {
     }
     return configured;
 }
-function withStore(path, operation) {
+async function withStore(path, operation) {
     const store = new CaptainRemoteStore(path);
     try {
         store.initialize();
-        return operation(store);
+        return await operation(store);
     }
     finally {
         store.close();
     }
+}
+function writeStdout(value) {
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const onError = (error) => finish(error);
+        const finish = (error) => {
+            if (settled)
+                return;
+            settled = true;
+            if (error) {
+                // Node invokes the write callback before its matching error event.
+                setImmediate(() => process.stdout.off("error", onError));
+                reject(error);
+                return;
+            }
+            process.stdout.off("error", onError);
+            resolve();
+        };
+        process.stdout.once("error", onError);
+        try {
+            process.stdout.write(value, finish);
+        }
+        catch (error) {
+            process.stdout.off("error", onError);
+            settled = true;
+            reject(error);
+        }
+    });
 }
 function fail(command, message, code) {
     return command.error(message, { exitCode: 1, code });
@@ -40,7 +69,7 @@ export function registerCaptainCli(api) {
             .description("Add a Captain remote member")
             .requiredOption("--name <name>", "Member display name")
             .requiredOption("--email <email>", "Member email address")
-            .action((options) => {
+            .action(async (options) => {
             const name = options.name.trim();
             const email = options.email.trim();
             if (!name)
@@ -49,9 +78,12 @@ export function registerCaptainCli(api) {
                 fail(add, "Member email is invalid.", "captain.members.email");
             }
             try {
+                const memberId = randomUUID();
                 const issued = issueMemberToken();
-                const member = withStore(databasePath(api.pluginConfig), (store) => (store.createMember(name, email, issued)));
-                process.stdout.write(`Member added: ${member.memberId}\nToken: ${issued.token}\n`);
+                await withStore(databasePath(api.pluginConfig), async (store) => {
+                    await writeStdout(`Member added: ${memberId}\nToken: ${issued.token}\n`);
+                    store.createMemberWithId(memberId, name, email, issued);
+                });
             }
             catch {
                 fail(add, "Could not add Captain member.", "captain.members.add");
@@ -60,9 +92,9 @@ export function registerCaptainCli(api) {
         const list = members
             .command("list")
             .description("List Captain remote members")
-            .action(() => {
+            .action(async () => {
             try {
-                const stored = withStore(databasePath(api.pluginConfig), (store) => store.listMembers());
+                const stored = await withStore(databasePath(api.pluginConfig), (store) => store.listMembers());
                 for (const member of stored) {
                     const status = member.revokedAt ? "revoked" : "active";
                     process.stdout.write(`${member.memberId}\t${member.name}\t${member.email}\t${status}\n`);
@@ -75,16 +107,19 @@ export function registerCaptainCli(api) {
         const rotate = members
             .command("rotate <member-id>")
             .description("Rotate a Captain remote member token")
-            .action((memberId) => {
+            .action(async (memberId) => {
             if (!MEMBER_ID.test(memberId)) {
                 fail(rotate, "Member ID is invalid.", "captain.members.member-id");
             }
             try {
-                const issued = issueMemberToken();
-                withStore(databasePath(api.pluginConfig), (store) => {
+                await withStore(databasePath(api.pluginConfig), async (store) => {
+                    if (!store.listMembers().some((member) => member.memberId === memberId)) {
+                        throw new Error("Member not found.");
+                    }
+                    const issued = issueMemberToken();
+                    await writeStdout(`Member: ${memberId}\nToken: ${issued.token}\n`);
                     store.rotateMember(memberId, issued);
                 });
-                process.stdout.write(`Token: ${issued.token}\n`);
             }
             catch {
                 fail(rotate, "Could not rotate Captain member.", "captain.members.rotate");
@@ -93,12 +128,12 @@ export function registerCaptainCli(api) {
         const revoke = members
             .command("revoke <member-id>")
             .description("Revoke a Captain remote member")
-            .action((memberId) => {
+            .action(async (memberId) => {
             if (!MEMBER_ID.test(memberId)) {
                 fail(revoke, "Member ID is invalid.", "captain.members.member-id");
             }
             try {
-                withStore(databasePath(api.pluginConfig), (store) => {
+                await withStore(databasePath(api.pluginConfig), (store) => {
                     store.revokeMember(memberId);
                 });
                 process.stdout.write(`Member revoked: ${memberId}\n`);
