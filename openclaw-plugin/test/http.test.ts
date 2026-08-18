@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { CaptainResult, TurnInput } from "../src/contracts.js";
+import { HttpProblem, type CaptainResult, type TurnInput } from "../src/contracts.js";
 import { createCaptainHttpHandler } from "../src/http.js";
 import {
   CaptainAuthenticator,
@@ -59,6 +59,7 @@ function createMember(store: CaptainRemoteStore, name: string): MemberFixture {
 async function startFixture(options: {
   maxRequestBytes?: number;
   pollLimiter?: PollLimiter;
+  wakeWorker?: ReturnType<typeof vi.fn>;
 } = {}): Promise<HttpFixture> {
   const directory = mkdtempSync(join(tmpdir(), "captain-http-test-"));
   temporaryDirectories.push(directory);
@@ -68,7 +69,7 @@ async function startFixture(options: {
 
   const alice = createMember(store, "Alice");
   const bob = createMember(store, "Bob");
-  const wakeWorker = vi.fn();
+  const wakeWorker = options.wakeWorker ?? vi.fn();
   const handler = createCaptainHttpHandler({
     store,
     authenticator: new CaptainAuthenticator(store),
@@ -166,6 +167,32 @@ describe("Captain HTTP submit", () => {
       turnId: TURN_ID,
     })).toMatchObject({ state: "queued", payload: reportTurn() });
     expect(fixture.wakeWorker).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns the durable queued envelope when the wake callback throws", async () => {
+    const wakeWorker = vi.fn(() => {
+      throw new Error("private wake failure");
+    });
+    const fixture = await startFixture({ wakeWorker });
+
+    const response = await postTurn(fixture, fixture.alice);
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({
+      report_id: "report-1",
+      turn_id: TURN_ID,
+      turn_status: "queued",
+    });
+    expect(fixture.store.getTurn({
+      memberId: fixture.alice.member.memberId,
+      reportId: "report-1",
+      turnId: TURN_ID,
+    })).toMatchObject({ state: "queued" });
+    expect(wakeWorker).toHaveBeenCalledTimes(1);
+
+    const replay = await postTurn(fixture, fixture.alice);
+    expect(replay.status).toBe(202);
+    expect(wakeWorker).toHaveBeenCalledTimes(1);
   });
 
   it("returns the saved envelope for a replay at capacity without another wake", async () => {
@@ -359,6 +386,8 @@ describe("Captain HTTP submit", () => {
 
     const missingBody = await expectProblem(missing, 401, "UNAUTHORIZED");
     const revokedBody = await expectProblem(revoked, 401, "UNAUTHORIZED");
+    expect(missing.headers.get("www-authenticate")).toBe('Bearer realm="captain"');
+    expect(revoked.headers.get("www-authenticate")).toBe('Bearer realm="captain"');
     expect(revokedBody).toEqual(missingBody);
     expect(fixture.wakeWorker).not.toHaveBeenCalled();
   });
@@ -410,34 +439,36 @@ describe("Captain HTTP poll and dispatch", () => {
 
   it("rejects queries, overmatched paths, invalid IDs, and wrong methods", async () => {
     const fixture = await startFixture();
-    const cases: Array<[string, RequestInit, number, string]> = [
+    const cases: Array<[string, RequestInit, number, string, string | null]> = [
       [`${submitUrl(fixture.baseUrl)}?trace=1`, {
         method: "POST",
         headers: { ...authorization(fixture.alice), "content-type": "application/json" },
         body: JSON.stringify(reportTurn()),
-      }, 404, "NOT_FOUND"],
-      [`${pollUrl(fixture.baseUrl)}?`, { headers: authorization(fixture.alice) }, 404, "NOT_FOUND"],
+      }, 404, "NOT_FOUND", null],
+      [`${pollUrl(fixture.baseUrl)}?`, { headers: authorization(fixture.alice) }, 404, "NOT_FOUND", null],
       [`${fixture.baseUrl}/captain/v1/reports/report%2Fone/turns`, {
         method: "POST",
         headers: { ...authorization(fixture.alice), "content-type": "application/json" },
         body: JSON.stringify(reportTurn()),
-      }, 404, "NOT_FOUND"],
+      }, 404, "NOT_FOUND", null],
       [`${submitUrl(fixture.baseUrl)}/not-a-uuid`, {
         headers: authorization(fixture.alice),
-      }, 404, "NOT_FOUND"],
+      }, 404, "NOT_FOUND", null],
       [submitUrl(fixture.baseUrl), {
         method: "GET",
         headers: authorization(fixture.alice),
-      }, 405, "METHOD_NOT_ALLOWED"],
+      }, 405, "METHOD_NOT_ALLOWED", "POST"],
       [pollUrl(fixture.baseUrl), {
         method: "POST",
         headers: { ...authorization(fixture.alice), "content-type": "application/json" },
         body: JSON.stringify(reportTurn()),
-      }, 405, "METHOD_NOT_ALLOWED"],
+      }, 405, "METHOD_NOT_ALLOWED", "GET"],
     ];
 
-    for (const [url, init, status, code] of cases) {
-      await expectProblem(await fetch(url, init), status, code);
+    for (const [url, init, status, code, allow] of cases) {
+      const response = await fetch(url, init);
+      await expectProblem(response, status, code);
+      expect(response.headers.get("allow")).toBe(allow);
     }
     expect(fixture.wakeWorker).not.toHaveBeenCalled();
   });
@@ -472,5 +503,49 @@ describe("Captain HTTP poll and dispatch", () => {
     expect(internalText).not.toContain(sessionId);
     expect(internalText).not.toContain("private stack");
     expect(internalText).not.toContain(fixture.alice.member.memberId);
+  });
+
+  it("replaces recognized problem messages with fixed public text", async () => {
+    const fixture = await startFixture();
+    const sensitive = `token=/private/captain.sqlite ${"x".repeat(10_000)}`;
+    vi.spyOn(fixture.store, "getTurn").mockImplementation(() => {
+      throw new HttpProblem(409, "TURN_CONFLICT", sensitive);
+    });
+
+    const response = await fetch(pollUrl(fixture.baseUrl), {
+      headers: authorization(fixture.alice),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: {
+        code: "TURN_CONFLICT",
+        message: "Turn ID already has different content.",
+      },
+    });
+  });
+
+  it("downgrades unknown and status-mismatched problems to fixed internal errors", async () => {
+    const fixture = await startFixture();
+    const sensitive = `member=${fixture.alice.member.memberId} ${"x".repeat(10_000)}`;
+    const sensitiveCode = `PRIVATE_DATABASE_${"Y".repeat(10_000)}`;
+    const getTurn = vi.spyOn(fixture.store, "getTurn");
+    getTurn.mockImplementationOnce(() => {
+      throw new HttpProblem(418, sensitiveCode, sensitive);
+    });
+    getTurn.mockImplementationOnce(() => {
+      throw new HttpProblem(400, "TURN_CONFLICT", sensitive);
+    });
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await fetch(pollUrl(fixture.baseUrl), {
+        headers: authorization(fixture.alice),
+      });
+      const body = await expectProblem(response, 500, "INTERNAL_ERROR");
+      const serialized = JSON.stringify(body);
+      expect(serialized).not.toContain(sensitive);
+      expect(serialized).not.toContain(sensitiveCode);
+      expect(serialized.length).toBeLessThan(128);
+    }
   });
 });

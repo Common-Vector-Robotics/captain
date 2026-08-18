@@ -18,6 +18,7 @@ const SUBMIT = /^\/captain\/v1\/reports\/([A-Za-z0-9._-]{1,128})\/turns$/;
 const POLL = /^\/captain\/v1\/reports\/([A-Za-z0-9._-]{1,128})\/turns\/([0-9a-f-]{36})$/i;
 const APPLICATION_JSON = /^application\/json(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?$/i;
 const DEFAULT_MAX_REQUEST_BYTES = 262_144;
+const BEARER_CHALLENGE = 'Bearer realm="captain"';
 
 export interface HttpDependencies {
   store: CaptainRemoteStore;
@@ -34,18 +35,69 @@ interface ErrorBody {
   };
 }
 
+interface JsonResponseOptions {
+  retryAfterSeconds?: number;
+  allow?: "GET" | "POST";
+  authenticate?: boolean;
+}
+
+const PUBLIC_PROBLEMS: Readonly<Record<string, ErrorBody["error"]>> = {
+  "400:INVALID_JSON": {
+    code: "INVALID_JSON",
+    message: "Request body must be valid JSON.",
+  },
+  "400:INVALID_REQUEST": {
+    code: "INVALID_REQUEST",
+    message: "Request is invalid.",
+  },
+  "401:UNAUTHORIZED": {
+    code: "UNAUTHORIZED",
+    message: "Authentication required.",
+  },
+  "404:NOT_FOUND": {
+    code: "NOT_FOUND",
+    message: "Captain resource not found.",
+  },
+  "409:TURN_CONFLICT": {
+    code: "TURN_CONFLICT",
+    message: "Turn ID already has different content.",
+  },
+  "413:PAYLOAD_TOO_LARGE": {
+    code: "PAYLOAD_TOO_LARGE",
+    message: "Request body is too large.",
+  },
+  "415:UNSUPPORTED_MEDIA_TYPE": {
+    code: "UNSUPPORTED_MEDIA_TYPE",
+    message: "Content-Type must be application/json.",
+  },
+  "429:GLOBAL_ACTIVE_LIMIT": {
+    code: "GLOBAL_ACTIVE_LIMIT",
+    message: "Global active-turn limit reached.",
+  },
+  "429:MEMBER_ACTIVE_LIMIT": {
+    code: "MEMBER_ACTIVE_LIMIT",
+    message: "Member already has active work.",
+  },
+  "429:RATE_LIMITED": {
+    code: "RATE_LIMITED",
+    message: "Too many requests.",
+  },
+};
+
 function writeJson(
   res: ServerResponse,
   status: number,
   body: TurnEnvelope | ErrorBody,
-  retryAfterSeconds?: number,
+  options: JsonResponseOptions = {},
 ): void {
   res.statusCode = status;
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Content-Type", "application/json; charset=utf-8");
-  if (retryAfterSeconds !== undefined) {
-    res.setHeader("Retry-After", String(Math.max(1, Math.ceil(retryAfterSeconds))));
+  if (options.retryAfterSeconds !== undefined) {
+    res.setHeader("Retry-After", String(Math.max(1, Math.ceil(options.retryAfterSeconds))));
   }
+  if (options.allow) res.setHeader("Allow", options.allow);
+  if (options.authenticate) res.setHeader("WWW-Authenticate", BEARER_CHALLENGE);
   res.end(JSON.stringify(body));
 }
 
@@ -138,10 +190,14 @@ function retryAfter(error: HttpProblem): number | undefined {
 
 function writeProblem(res: ServerResponse, error: unknown): void {
   if (error instanceof HttpProblem) {
-    writeJson(res, error.status, {
-      error: { code: error.code, message: error.message },
-    }, retryAfter(error));
-    return;
+    const fixed = PUBLIC_PROBLEMS[`${error.status}:${error.code}`];
+    if (fixed) {
+      writeJson(res, error.status, { error: fixed }, {
+        retryAfterSeconds: retryAfter(error),
+        authenticate: error.status === 401,
+      });
+      return;
+    }
   }
   writeJson(res, 500, {
     error: { code: "INTERNAL_ERROR", message: "Internal server error." },
@@ -176,7 +232,10 @@ export function createCaptainHttpHandler(
 
       if (submit) {
         if (req.method !== "POST") {
-          throw problem(405, "METHOD_NOT_ALLOWED", "Method not allowed.");
+          writeJson(res, 405, {
+            error: { code: "METHOD_NOT_ALLOWED", message: "Method not allowed." },
+          }, { allow: "POST" });
+          return true;
         }
         const member = deps.authenticator.authenticate(req);
         if (!contentTypeIsJson(req)) {
@@ -198,7 +257,13 @@ export function createCaptainHttpHandler(
           requestDigest: digestTurnInput(input),
           payloadJson: canonicalizeTurnInput(input),
         });
-        if (reserved.status === "created") deps.wakeWorker();
+        if (reserved.status === "created") {
+          try {
+            deps.wakeWorker();
+          } catch {
+            // The durable queued response remains authoritative if notification fails.
+          }
+        }
 
         const status = reserved.turn.state === "queued" || reserved.turn.state === "started"
           ? 202
@@ -208,7 +273,10 @@ export function createCaptainHttpHandler(
       }
 
       if (req.method !== "GET") {
-        throw problem(405, "METHOD_NOT_ALLOWED", "Method not allowed.");
+        writeJson(res, 405, {
+          error: { code: "METHOD_NOT_ALLOWED", message: "Method not allowed." },
+        }, { allow: "GET" });
+        return true;
       }
       const member = deps.authenticator.authenticate(req);
       deps.pollLimiter.check(member.memberId);
