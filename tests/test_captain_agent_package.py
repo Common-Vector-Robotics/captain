@@ -276,7 +276,7 @@ def test_plugin_readme_explains_the_remote_team_trust_boundary():
     readme = (PLUGIN / "README.md").read_text(encoding="utf-8")
     normalized = " ".join(readme.split()).lower()
 
-    assert "trusted team" in normalized
+    assert "shared trust boundary" in normalized
     assert "captain-specific user accounts" in normalized
     assert "separate gateways" in normalized
     assert "shared gateway credential" in normalized

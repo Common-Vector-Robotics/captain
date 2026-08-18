@@ -21,10 +21,10 @@ configure OpenClaw, Captain, or ClickUp.
 
 ## Set up a remote team
 
-Use one shared Gateway only for a trusted team. Anyone admitted to that
-Gateway can ask Captain to use the capabilities configured for the `captain`
-agent. OpenClaw profiles, device names, and session ownership help people see
-who started work, but they are not permission boundaries.
+A Gateway is a shared trust boundary. Anyone with access may be able to use
+Captain's sessions, tools, credentials, and files. OpenClaw's profile, device,
+and session-owner labels show who started work, but they do not restrict
+access. Only share a Gateway with people you trust with all of those resources.
 
 The plugin does not create Captain-specific user accounts. Team access has
 three parts:
