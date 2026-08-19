@@ -143,7 +143,6 @@ export function registerCaptainCli(api) {
             }
         });
     }, {
-        commands: ["captain"],
         descriptors: [{
                 name: "captain",
                 description: "Manage Captain remote access",

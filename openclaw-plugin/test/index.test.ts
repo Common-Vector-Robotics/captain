@@ -189,7 +189,13 @@ describe("Captain remote plugin entry", () => {
     expect(fixture.api.registerService).toHaveBeenCalledTimes(1);
     expect(fixture.service.id).toBe("captain-remote");
     expect(fixture.api.registerCli).toHaveBeenCalledTimes(1);
-    expect(fixture.cliOptions).toMatchObject({ commands: ["captain"] });
+    expect(fixture.cliOptions).toEqual({
+      descriptors: [{
+        name: "captain",
+        description: "Manage Captain remote access",
+        hasSubcommands: true,
+      }],
+    });
   });
 
   it("returns one fixed unavailable response before readiness and after stop", async () => {

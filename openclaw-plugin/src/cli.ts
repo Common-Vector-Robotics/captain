@@ -160,7 +160,6 @@ export function registerCaptainCli(api: OpenClawPluginApi): void {
         }
       });
   }, {
-    commands: ["captain"],
     descriptors: [{
       name: "captain",
       description: "Manage Captain remote access",

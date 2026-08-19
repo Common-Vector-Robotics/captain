@@ -133,11 +133,21 @@ function authenticate(store: CaptainRemoteStore, token: string): boolean {
 }
 
 describe("Captain member CLI", () => {
-  it("registers only the root captain command metadata", () => {
+  it("advertises one effective Captain CLI root", () => {
     const fixture = createApi(databasePath());
+    const options = fixture.options;
+    const effectiveNames = [
+      ...(options?.commands ?? []),
+      ...(options?.descriptors ?? []).map((descriptor) => descriptor.name),
+    ];
 
     expect(fixture.api.registerCli).toHaveBeenCalledTimes(1);
-    expect(fixture.options).toMatchObject({ commands: ["captain"] });
+    expect(effectiveNames).toEqual(["captain"]);
+    expect(options?.descriptors).toEqual([{
+      name: "captain",
+      description: "Manage Captain remote access",
+      hasSubcommands: true,
+    }]);
   });
 
   it("adds a member and prints its UUID and raw token once", async () => {
