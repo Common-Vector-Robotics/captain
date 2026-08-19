@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -478,7 +478,8 @@ describe("Captain remote plugin entry", () => {
   });
 
   it("flushes one fixed limit summary without letting logger failure block shutdown", async () => {
-    const fixture = createApi({ path: databasePath() });
+    const path = databasePath();
+    const fixture = createApi({ path });
     await fixture.service.start(serviceContext(fixture.api));
     const server = await listen(fixture.route.handler);
     try {
@@ -498,8 +499,14 @@ describe("Captain remote plugin entry", () => {
         auth_failed: 1,
         auth_rate_limited: 0,
         poll_rate_limited: 0,
+        job_rate_limited: 0,
       }));
       expect(JSON.stringify(fixture.logger.warn.mock.calls)).not.toContain("user-controlled-marker");
+      const audit = readFileSync(`${path}.audit.jsonl`, "utf8");
+      expect(audit).toContain('"event":"limit_summary"');
+      expect(audit).toContain('"code":"AUTH_FAILED"');
+      expect(audit).toContain('"count":1');
+      expect(audit).not.toContain("user-controlled-marker");
       expect((await callRoute(fixture.route.handler)).statusCode).toBe(503);
     } finally {
       await server.close();

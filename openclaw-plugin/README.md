@@ -117,6 +117,10 @@ openclaw captain members rotate <member-id>
 openclaw captain members revoke <member-id>
 ```
 
+Member display names are limited to 100 characters and cannot contain control
+characters. The email and a valid display name are required before a token is
+issued.
+
 `add` prints the member UUID and raw token once. Deliver the token using your
 team's credential-sharing method, then clear any temporary copy. Do not place a
 member token in a URL, query string, ticket, chat log, shell-history command, or
@@ -174,6 +178,26 @@ token appears.
 After a successful test report and poll, rotate the member token and confirm the
 old value receives `401`. Revoke the test member and confirm reports, replies,
 and polls are denied.
+
+## Review the audit trail
+
+The plugin appends credential-free operator events to
+`captain-remote.sqlite3.audit.jsonl` beside the configured database. Each JSON
+line has the same small field set and records member lifecycle, authenticated
+submit and poll outcomes, turn transitions and timing, stable errors, or an
+aggregated limit count. The file has owner-only permissions and has no public
+HTTP endpoint.
+
+Repeated authentication, polling, and job-limit rejections are summarized at
+bounded intervals instead of producing one audit line per rejected request.
+The Nginx `captain_remote` access log is the separate ingress record for public
+requests and request or connection limiting. Its shipped format omits query
+strings and Authorization. Keep both files in the operator's normal protected
+log retention and review process.
+
+Audit events do not contain raw tokens, token digests, Authorization headers,
+source addresses, raw paths or queries, OpenClaw session or run IDs, stack
+traces, report bodies, exact replies, or Captain result text.
 
 ## Restart, recovery, and `unknown_outcome`
 

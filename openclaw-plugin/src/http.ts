@@ -10,12 +10,14 @@ import {
 } from "./contracts.js";
 import {
   CaptainAuthenticator,
+  LimitEventAggregator,
   PollLimiter,
 } from "./security.js";
 import { CaptainRemoteStore, type StoredTurn } from "./store.js";
 
 const SUBMIT = /^\/captain\/v1\/reports\/([A-Za-z0-9._-]{1,128})\/turns$/;
 const POLL = /^\/captain\/v1\/reports\/([A-Za-z0-9._-]{1,128})\/turns\/([0-9a-f-]{36})$/i;
+const AUDIT_TURN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const APPLICATION_JSON = /^application\/json(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?$/i;
 const DEFAULT_MAX_REQUEST_BYTES = 262_144;
 const BEARER_CHALLENGE = 'Bearer realm="captain"';
@@ -25,6 +27,7 @@ export interface HttpDependencies {
   authenticator: CaptainAuthenticator;
   pollLimiter: PollLimiter;
   maxRequestBytes?: number;
+  events?: LimitEventAggregator;
   wakeWorker(): void;
 }
 
@@ -112,7 +115,10 @@ function contentTypeIsJson(req: IncomingMessage): boolean {
   return typeof value === "string" && APPLICATION_JSON.test(value.trim());
 }
 
-function readBoundedBody(req: IncomingMessage, maxRequestBytes: number): Promise<Buffer> {
+export function readBoundedBody(
+  req: IncomingMessage,
+  maxRequestBytes: number,
+): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let bytesRead = 0;
@@ -121,6 +127,7 @@ function readBoundedBody(req: IncomingMessage, maxRequestBytes: number): Promise
     const cleanup = () => {
       req.off("data", onData);
       req.off("end", onEnd);
+      req.off("close", onClose);
       req.off("aborted", onAborted);
       req.off("error", onError);
     };
@@ -148,7 +155,23 @@ function readBoundedBody(req: IncomingMessage, maxRequestBytes: number): Promise
       chunks.push(chunk);
       bytesRead += chunk.length;
     };
-    const onEnd = () => settle(() => resolve(Buffer.concat(chunks, bytesRead)));
+    const incompleteBody = () => problem(
+      400,
+      "INVALID_REQUEST",
+      "Request body was incomplete.",
+    );
+    const onEnd = () => settle(() => {
+      if (!req.complete) {
+        reject(incompleteBody());
+        return;
+      }
+      resolve(Buffer.concat(chunks, bytesRead));
+    });
+    const onClose = () => settle(() => reject(
+      req.complete
+        ? problem(400, "INVALID_REQUEST", "Request body could not be read.")
+        : incompleteBody(),
+    ));
     const onAborted = () => settle(() => reject(problem(
       400,
       "INVALID_REQUEST",
@@ -162,6 +185,7 @@ function readBoundedBody(req: IncomingMessage, maxRequestBytes: number): Promise
 
     req.on("data", onData);
     req.on("end", onEnd);
+    req.on("close", onClose);
     req.on("aborted", onAborted);
     req.on("error", onError);
   });
@@ -204,6 +228,21 @@ function writeProblem(res: ServerResponse, error: unknown): void {
   });
 }
 
+function stableAuditCode(error: unknown): string {
+  if (error instanceof HttpProblem) {
+    return PUBLIC_PROBLEMS[`${error.status}:${error.code}`]?.code ?? "INTERNAL_ERROR";
+  }
+  return "INTERNAL_ERROR";
+}
+
+function isAggregatedLimit(error: unknown): boolean {
+  return error instanceof HttpProblem && (
+    error.code === "MEMBER_ACTIVE_LIMIT"
+    || error.code === "GLOBAL_ACTIVE_LIMIT"
+    || error.code === "RATE_LIMITED"
+  );
+}
+
 function validateMaxRequestBytes(value: number | undefined): number {
   const resolved = value ?? DEFAULT_MAX_REQUEST_BYTES;
   if (!Number.isSafeInteger(resolved) || resolved <= 0) {
@@ -218,6 +257,10 @@ export function createCaptainHttpHandler(
   const maxRequestBytes = validateMaxRequestBytes(deps.maxRequestBytes);
 
   return async (req, res) => {
+    let memberId: string | undefined;
+    let operation: "submit" | "poll" | undefined;
+    let reportId: string | undefined;
+    let turnId: string | undefined;
     try {
       const target = req.url ?? "";
       if (target.includes("?")) {
@@ -237,7 +280,10 @@ export function createCaptainHttpHandler(
           }, { allow: "POST" });
           return true;
         }
+        operation = "submit";
+        reportId = submit[1];
         const member = deps.authenticator.authenticate(req);
+        memberId = member.memberId;
         if (!contentTypeIsJson(req)) {
           throw problem(415, "UNSUPPORTED_MEDIA_TYPE", "Content-Type must be application/json.");
         }
@@ -250,6 +296,7 @@ export function createCaptainHttpHandler(
           throw problem(400, "INVALID_JSON", "Request body must be valid JSON.");
         }
         const input = parseTurnInput(decoded);
+        turnId = input.turn_id;
         const reserved = deps.store.reserveTurn({
           memberId: member.memberId,
           reportId: submit[1],
@@ -268,6 +315,16 @@ export function createCaptainHttpHandler(
         const status = reserved.turn.state === "queued" || reserved.turn.state === "started"
           ? 202
           : 200;
+        deps.store.recordAudit({
+          event: "submit_authenticated",
+          memberId,
+          operation: "submit",
+          route: "submit",
+          reportId,
+          turnId,
+          toState: reserved.turn.state,
+          code: reserved.status === "created" ? "CREATED" : "EXISTING",
+        });
         writeJson(res, status, envelope(reserved.turn));
         return true;
       }
@@ -278,7 +335,11 @@ export function createCaptainHttpHandler(
         }, { allow: "GET" });
         return true;
       }
+      operation = "poll";
+      reportId = poll![1];
+      turnId = AUDIT_TURN_ID.test(poll![2]) ? poll![2] : undefined;
       const member = deps.authenticator.authenticate(req);
+      memberId = member.memberId;
       deps.pollLimiter.check(member.memberId);
       const turn = deps.store.getTurn({
         memberId: member.memberId,
@@ -286,9 +347,42 @@ export function createCaptainHttpHandler(
         turnId: poll![2],
       });
       if (!turn) throw problem(404, "NOT_FOUND", "Captain resource not found.");
+      deps.store.recordAudit({
+        event: "poll_authenticated",
+        memberId,
+        operation: "poll",
+        route: "poll",
+        reportId,
+        turnId,
+        toState: turn.state,
+        code: "FOUND",
+      });
       writeJson(res, 200, envelope(turn));
       return true;
     } catch (error) {
+      if (memberId && operation) {
+        if (
+          error instanceof HttpProblem
+          && ["MEMBER_ACTIVE_LIMIT", "GLOBAL_ACTIVE_LIMIT"].includes(error.code)
+        ) {
+          deps.events?.record("job_rate_limited");
+        }
+        if (!isAggregatedLimit(error)) {
+          try {
+            deps.store.recordAudit({
+              event: "http_error",
+              memberId,
+              operation,
+              route: operation,
+              reportId,
+              turnId,
+              code: stableAuditCode(error),
+            });
+          } catch {
+            // Audit I/O must not disclose or replace the fixed public error.
+          }
+        }
+      }
       if (!res.writableEnded && !res.destroyed) writeProblem(res, error);
       return true;
     }

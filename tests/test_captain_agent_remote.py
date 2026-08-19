@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT / "agent-plugin"))
 
 from captain_agent.client_state import (
     PendingCaptainQuestions,
-    RemoteClientState,
+    RemoteClientState as _RemoteClientState,
     RemoteStateConflict,
     remote_state_path,
 )
@@ -34,6 +34,7 @@ from captain_agent.remote import (
     RemoteConfig,
     RemoteConfigurationError,
     read_remote_config,
+    remote_profile_id,
 )
 from captain_agent.reporting import CaptainReportResult
 
@@ -57,6 +58,22 @@ TERMINAL_RESULT = {
     "questions": [],
     "warnings": [],
 }
+
+TEST_PROFILE_ID = "a" * 64
+
+
+def RemoteClientState(path, *, env=None, profile_id=TEST_PROFILE_ID):
+    """Open test state under one explicit non-secret remote profile."""
+
+    return _RemoteClientState(path, profile_id=profile_id, env=env)
+
+
+def remote_state_for_env(path, env):
+    """Open state under the same derived profile that dispatch will use."""
+
+    config = read_remote_config(env)
+    assert config is not None
+    return RemoteClientState(path, profile_id=remote_profile_id(config), env=env)
 
 
 class FakeClock:
@@ -448,13 +465,139 @@ def test_concurrent_report_insert_returns_one_winning_turn(tmp_path):
     assert count == 1
 
 
+def test_remote_profile_id_is_one_way_stable_and_configuration_scoped():
+    """Origin or credential changes must select a different non-secret state namespace."""
+
+    first = RemoteConfig("https://captain.example/", "member-token-one")
+    equivalent = RemoteConfig("https://captain.example", "member-token-one")
+    another_origin = RemoteConfig("https://other.example", "member-token-one")
+    another_credential = RemoteConfig("https://captain.example", "member-token-two")
+
+    profile_id = remote_profile_id(first)
+
+    assert profile_id == remote_profile_id(equivalent)
+    assert profile_id != remote_profile_id(another_origin)
+    assert profile_id != remote_profile_id(another_credential)
+    assert len(profile_id) == 64
+    assert set(profile_id) <= set("0123456789abcdef")
+    assert "captain.example" not in profile_id
+    assert "member-token" not in profile_id
+
+
+def test_remote_state_requires_an_explicit_profile_namespace(tmp_path):
+    """No caller may silently reopen durable state as an unscoped client."""
+
+    with pytest.raises(TypeError, match="profile_id"):
+        _RemoteClientState(tmp_path / "remote.sqlite3")
+
+
+def test_turns_and_pending_questions_are_namespaced_by_remote_profile(tmp_path):
+    """Equal report IDs on different remotes must never replay or answer each other."""
+
+    path = tmp_path / "remote.sqlite3"
+    first = RemoteClientState(path, profile_id="a" * 64)
+    second = RemoteClientState(path, profile_id="b" * 64)
+
+    first_turn = first.get_or_create_report_turn("shared-report", "same-digest")
+    second_turn = second.get_or_create_report_turn("shared-report", "same-digest")
+    first.replace_pending("shared-report", first_turn, ["First Captain?"])
+    second.replace_pending("shared-report", second_turn, ["Second Captain?"])
+
+    assert first_turn != second_turn
+    assert first.get_or_create_report_turn("shared-report", "same-digest") == first_turn
+    assert second.get_or_create_report_turn("shared-report", "same-digest") == second_turn
+    assert first.get_pending("shared-report").questions == ("First Captain?",)
+    assert second.get_pending("shared-report").questions == ("Second Captain?",)
+
+    first.clear_pending("shared-report")
+    assert first.get_pending("shared-report") is None
+    assert second.get_pending("shared-report").questions == ("Second Captain?",)
+
+
+def test_existing_unscoped_state_is_migrated_but_never_claimed_by_a_profile(tmp_path):
+    """A v1 database upgrade must quarantine legacy rows instead of guessing ownership."""
+
+    path = tmp_path / "remote.sqlite3"
+    legacy_turn = "00000000-0000-4000-8000-000000000001"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE remote_turns(
+                report_id TEXT NOT NULL,
+                turn_kind TEXT NOT NULL,
+                parent_turn_id TEXT NOT NULL,
+                payload_digest TEXT NOT NULL,
+                turn_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(report_id, turn_kind, parent_turn_id, payload_digest)
+            );
+            CREATE UNIQUE INDEX one_initial_remote_turn_per_report
+                ON remote_turns(report_id)
+                WHERE turn_kind = 'report' AND parent_turn_id = '';
+            CREATE TABLE pending_questions(
+                report_id TEXT PRIMARY KEY,
+                parent_turn_id TEXT NOT NULL,
+                questions_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+        connection.execute(
+            "INSERT INTO remote_turns VALUES (?, 'report', '', ?, ?, ?)",
+            ("shared-report", "legacy-digest", legacy_turn, "2026-08-18T12:00:00Z"),
+        )
+        connection.execute(
+            "INSERT INTO pending_questions VALUES (?, ?, ?, ?)",
+            (
+                "shared-report",
+                legacy_turn,
+                '["Legacy question?"]',
+                "2026-08-18T12:00:01Z",
+            ),
+        )
+
+    scoped = RemoteClientState(path, profile_id="c" * 64)
+
+    assert scoped.get_pending("shared-report") is None
+    scoped_turn = scoped.get_or_create_report_turn("shared-report", "current-digest")
+    assert scoped_turn != legacy_turn
+    assert scoped.get_or_create_report_turn("shared-report", "current-digest") == scoped_turn
+
+    with sqlite3.connect(path) as connection:
+        turn_rows = connection.execute(
+            "SELECT profile_id, turn_id FROM remote_turns ORDER BY created_at"
+        ).fetchall()
+        pending_rows = connection.execute(
+            "SELECT profile_id FROM pending_questions"
+        ).fetchall()
+    assert turn_rows == [("0" * 64, legacy_turn), ("c" * 64, scoped_turn)]
+    assert pending_rows == [("0" * 64,)]
+
+
+def test_profile_scoped_database_contains_no_raw_origin_or_credential(tmp_path):
+    """Durable retry state may retain only the one-way remote profile identifier."""
+
+    path = tmp_path / "remote.sqlite3"
+    config = RemoteConfig("https://captain.example", "member-token-private")
+    profile_id = remote_profile_id(config)
+    state = RemoteClientState(path, profile_id=profile_id)
+    state.get_or_create_report_turn("report-1", "digest-1")
+
+    persisted = path.read_bytes()
+    assert profile_id.encode() in persisted
+    assert b"captain.example" not in persisted
+    assert b"member-token-private" not in persisted
+
+
 def test_remote_state_path_honors_exact_override_then_xdg_default(monkeypatch, tmp_path):
     """Remote state follows the report-store path convention without sharing its file."""
 
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
 
-    assert remote_state_path({"CAPTAIN_REMOTE_STATE_PATH": "  /tmp/exact.sqlite3  "}) == Path(
-        "/tmp/exact.sqlite3"
+    exact = str(tmp_path / " remote state.sqlite3 ")
+    assert remote_state_path({"CAPTAIN_REMOTE_STATE_PATH": exact}) == Path(exact)
+    assert remote_state_path({"CAPTAIN_REMOTE_STATE_PATH": "   "}) == (
+        tmp_path / "home" / ".local" / "state" / "captain-agent" / "remote.sqlite3"
     )
     assert remote_state_path({"XDG_STATE_HOME": "~/state-home"}) == (
         tmp_path / "home" / "state-home" / "captain-agent" / "remote.sqlite3"
@@ -1273,6 +1416,44 @@ def test_invalid_remote_report_does_not_create_continuation_state(tmp_path):
     assert not state_path.exists()
 
 
+def test_partially_migrated_remote_state_fails_closed_without_network(tmp_path):
+    """A partial profile migration must return fixed configuration feedback."""
+
+    state_path = tmp_path / "remote.sqlite3"
+    with sqlite3.connect(state_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE remote_turns(
+                profile_id TEXT NOT NULL,
+                report_id TEXT NOT NULL,
+                turn_kind TEXT NOT NULL,
+                parent_turn_id TEXT NOT NULL,
+                payload_digest TEXT NOT NULL,
+                turn_id TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+
+    with scripted_server([]) as (url, requests, _script):
+        result = handle_captain_turn(
+            "report-1",
+            VALID_REPORT,
+            {},
+            env={
+                "CAPTAIN_REMOTE_URL": url,
+                "CAPTAIN_MEMBER_TOKEN": "member-token",
+                "CAPTAIN_REMOTE_STATE_PATH": str(state_path),
+            },
+        )
+
+    assert result.status == "needs_configuration"
+    assert result.captain_feedback == (
+        "Captain remote continuation state could not be opened."
+    )
+    assert requests == []
+
+
 def test_oversized_remote_report_does_not_reserve_state_and_smaller_retry_proceeds(
     tmp_path,
 ):
@@ -1315,14 +1496,15 @@ def test_oversized_remote_reply_preserves_pending_without_reserving_turn(tmp_pat
     """An unsendable reply must not consume or conflict with pending context."""
 
     state_path = tmp_path / "remote.sqlite3"
-    state = RemoteClientState(state_path)
-    state.replace_pending("report-1", "parent-turn", ["Ship Friday?"])
     with scripted_server([]) as (url, requests, _script):
         env = {
             "CAPTAIN_REMOTE_URL": url,
             "CAPTAIN_MEMBER_TOKEN": "member-token",
             "CAPTAIN_REMOTE_STATE_PATH": str(state_path),
         }
+        remote_state_for_env(state_path, env).replace_pending(
+            "report-1", "parent-turn", ["Ship Friday?"]
+        )
         result = handle_captain_turn(
             "report-1",
             reply="x" * 300_000,
@@ -1331,7 +1513,7 @@ def test_oversized_remote_reply_preserves_pending_without_reserving_turn(tmp_pat
 
     assert result.status == "failed"
     assert requests == []
-    assert RemoteClientState(state_path, env=env).get_pending("report-1").questions == (
+    assert remote_state_for_env(state_path, env).get_pending("report-1").questions == (
         "Ship Friday?",
     )
     with sqlite3.connect(state_path) as connection:
@@ -1344,8 +1526,6 @@ def test_submit_429_deadline_failure_preserves_pending_reply(tmp_path, monkeypat
     """A never-accepted reply must leave its current parent available for retry."""
 
     state_path = tmp_path / "remote.sqlite3"
-    state = RemoteClientState(state_path)
-    state.replace_pending("report-1", "parent-turn", ["Ship Friday?"])
     clock = FakeClock()
     original_init = RemoteCaptainClient.__init__
 
@@ -1367,11 +1547,14 @@ def test_submit_429_deadline_failure_preserves_pending_reply(tmp_path, monkeypat
             "CAPTAIN_MEMBER_TOKEN": "member-token",
             "CAPTAIN_REMOTE_STATE_PATH": str(state_path),
         }
+        remote_state_for_env(state_path, env).replace_pending(
+            "report-1", "parent-turn", ["Ship Friday?"]
+        )
         result = handle_captain_turn("report-1", reply="Yes", env=env)
 
     assert result.status == "failed"
     assert len(requests) == 1
-    assert RemoteClientState(state_path, env=env).get_pending("report-1").questions == (
+    assert remote_state_for_env(state_path, env).get_pending("report-1").questions == (
         "Ship Friday?",
     )
 
@@ -1380,21 +1563,19 @@ def test_remote_report_uses_stable_turn_after_lost_submit_response(tmp_path):
     """Re-entry after ambiguity must POST the durable idempotency key again."""
 
     state_path = tmp_path / "remote.sqlite3"
-    with scripted_server([{"disconnect": True}]) as (url, first_requests, _script):
+    with scripted_server([{"disconnect": True}, None]) as (url, requests, script):
         env = {
             "CAPTAIN_REMOTE_URL": url,
             "CAPTAIN_MEMBER_TOKEN": "member-token",
             "CAPTAIN_REMOTE_STATE_PATH": str(state_path),
         }
         first = handle_captain_turn("report-1", VALID_REPORT, {"client": "pytest"}, env=env)
-    first_turn = json.loads(first_requests[0]["body"])["turn_id"]
-    assert first.status == "unknown_outcome"
-
-    with scripted_server([{"body": envelope(first_turn)}]) as (url, second_requests, _script):
-        env["CAPTAIN_REMOTE_URL"] = url
+        first_turn = json.loads(requests[0]["body"])["turn_id"]
+        assert first.status == "unknown_outcome"
+        script[0] = {"body": envelope(first_turn)}
         second = handle_captain_turn("report-1", VALID_REPORT, {"client": "pytest"}, env=env)
     assert second.status == "updated"
-    assert json.loads(second_requests[0]["body"])["turn_id"] == first_turn
+    assert json.loads(requests[1]["body"])["turn_id"] == first_turn
 
 
 def test_remote_report_updates_pending_only_from_terminal_response(tmp_path):
@@ -1409,7 +1590,7 @@ def test_remote_report_updates_pending_only_from_terminal_response(tmp_path):
             "CAPTAIN_MEMBER_TOKEN": "member-token",
             "CAPTAIN_REMOTE_STATE_PATH": str(state_path),
         }
-        state = RemoteClientState(state_path, env=env)
+        state = remote_state_for_env(state_path, env)
         digest = hashlib.sha256(
             json.dumps(
                 {"metadata": {"client": "pytest"}, "report": VALID_REPORT},
@@ -1422,15 +1603,13 @@ def test_remote_report_updates_pending_only_from_terminal_response(tmp_path):
         script.append({"body": envelope(turn_id, result=question_result)})
         result = handle_captain_turn("report-1", VALID_REPORT, {"client": "pytest"}, env=env)
     assert result.questions == ["Ship Friday?"]
-    assert RemoteClientState(state_path, env=env).get_pending("report-1").parent_turn_id == turn_id
+    assert remote_state_for_env(state_path, env).get_pending("report-1").parent_turn_id == turn_id
 
 
 def test_remote_reply_preserves_exact_text_and_replaces_pending(tmp_path):
     """A reply body contains only the exact user text and its stable generated turn."""
 
     state_path = tmp_path / "remote.sqlite3"
-    state = RemoteClientState(state_path)
-    state.replace_pending("report-1", "parent-turn", ["Ship Friday?"])
     reply = "  Yes, Friday is correct.\n"
     replacement = {**TERMINAL_RESULT, "status": "needs_clarification", "questions": ["What time Friday?"]}
 
@@ -1440,6 +1619,8 @@ def test_remote_reply_preserves_exact_text_and_replaces_pending(tmp_path):
             "CAPTAIN_MEMBER_TOKEN": "member-token",
             "CAPTAIN_REMOTE_STATE_PATH": str(state_path),
         }
+        state = remote_state_for_env(state_path, env)
+        state.replace_pending("report-1", "parent-turn", ["Ship Friday?"])
         reply_digest = hashlib.sha256(reply.encode("utf-8")).hexdigest()
         reply_turn = state.get_or_create_reply_turn("report-1", "parent-turn", reply_digest)
         script.append({"body": envelope(reply_turn, result=replacement)})
@@ -1451,7 +1632,7 @@ def test_remote_reply_preserves_exact_text_and_replaces_pending(tmp_path):
         "kind": "reply",
         "reply": reply,
     }
-    pending = RemoteClientState(state_path, env=env).get_pending("report-1")
+    pending = remote_state_for_env(state_path, env).get_pending("report-1")
     assert pending.parent_turn_id == reply_turn
     assert pending.questions == ("What time Friday?",)
 
@@ -1460,33 +1641,34 @@ def test_remote_terminal_reply_without_questions_clears_pending(tmp_path):
     """A completed continuation removes only its now-answered question context."""
 
     state_path = tmp_path / "remote.sqlite3"
-    state = RemoteClientState(state_path)
-    state.replace_pending("report-1", "parent-turn", ["Ship Friday?"])
     reply = "Yes"
-    reply_digest = hashlib.sha256(reply.encode("utf-8")).hexdigest()
-    reply_turn = state.get_or_create_reply_turn("report-1", "parent-turn", reply_digest)
-    with scripted_server([{"body": envelope(reply_turn)}]) as (url, _requests, _script):
+    with scripted_server([]) as (url, _requests, script):
         env = {
             "CAPTAIN_REMOTE_URL": url,
             "CAPTAIN_MEMBER_TOKEN": "member-token",
             "CAPTAIN_REMOTE_STATE_PATH": str(state_path),
         }
+        state = remote_state_for_env(state_path, env)
+        state.replace_pending("report-1", "parent-turn", ["Ship Friday?"])
+        reply_digest = hashlib.sha256(reply.encode("utf-8")).hexdigest()
+        reply_turn = state.get_or_create_reply_turn("report-1", "parent-turn", reply_digest)
+        script.append({"body": envelope(reply_turn)})
         result = handle_captain_turn("report-1", reply=reply, env=env)
     assert result.status == "updated"
-    assert RemoteClientState(state_path, env=env).get_pending("report-1") is None
+    assert remote_state_for_env(state_path, env).get_pending("report-1") is None
 
 
 def test_queued_reply_keeps_pending_context(tmp_path):
     """A client poll deadline cannot erase the question needed for re-entry."""
 
     state_path = tmp_path / "remote.sqlite3"
-    state = RemoteClientState(state_path)
-    state.replace_pending("report-1", "parent-turn", ["Ship Friday?"])
     env = {
         "CAPTAIN_REMOTE_URL": "http://127.0.0.1:1",
         "CAPTAIN_MEMBER_TOKEN": "member-token",
         "CAPTAIN_REMOTE_STATE_PATH": str(state_path),
     }
+    state = remote_state_for_env(state_path, env)
+    state.replace_pending("report-1", "parent-turn", ["Ship Friday?"])
     monkeypatch_result = CaptainReportResult(
         report_id="report-1", status="queued", captain_feedback="queued"
     )
@@ -1497,28 +1679,29 @@ def test_queued_reply_keeps_pending_context(tmp_path):
     finally:
         RemoteCaptainClient.submit_and_poll = original
     assert result.status == "queued"
-    assert RemoteClientState(state_path, env=env).get_pending("report-1").questions == ("Ship Friday?",)
+    assert remote_state_for_env(state_path, env).get_pending("report-1").questions == ("Ship Friday?",)
 
 
 def test_terminal_envelope_with_queued_public_result_keeps_pending(tmp_path):
     """A public queued result is not completion evidence for continuation state."""
 
     state_path = tmp_path / "remote.sqlite3"
-    state = RemoteClientState(state_path)
-    state.replace_pending("report-1", "parent-turn", ["Ship Friday?"])
     reply = "Yes"
-    reply_digest = hashlib.sha256(reply.encode("utf-8")).hexdigest()
-    reply_turn = state.get_or_create_reply_turn("report-1", "parent-turn", reply_digest)
     queued_result = {**TERMINAL_RESULT, "status": "queued"}
-    with scripted_server([{"body": envelope(reply_turn, result=queued_result)}]) as (url, _requests, _script):
+    with scripted_server([]) as (url, _requests, script):
         env = {
             "CAPTAIN_REMOTE_URL": url,
             "CAPTAIN_MEMBER_TOKEN": "member-token",
             "CAPTAIN_REMOTE_STATE_PATH": str(state_path),
         }
+        state = remote_state_for_env(state_path, env)
+        state.replace_pending("report-1", "parent-turn", ["Ship Friday?"])
+        reply_digest = hashlib.sha256(reply.encode("utf-8")).hexdigest()
+        reply_turn = state.get_or_create_reply_turn("report-1", "parent-turn", reply_digest)
+        script.append({"body": envelope(reply_turn, result=queued_result)})
         result = handle_captain_turn("report-1", reply=reply, env=env)
     assert result.status == "queued"
-    assert RemoteClientState(state_path, env=env).get_pending("report-1").questions == ("Ship Friday?",)
+    assert remote_state_for_env(state_path, env).get_pending("report-1").questions == ("Ship Friday?",)
 
 
 def test_reply_without_pending_and_mixed_report_reply_fail_before_io(tmp_path):
@@ -1537,6 +1720,110 @@ def test_reply_without_pending_and_mixed_report_reply_fail_before_io(tmp_path):
     assert requests == []
 
 
+def test_switching_remote_credential_cannot_replay_or_answer_same_report(tmp_path):
+    """A token change must create an independent turn and hide the prior pending reply."""
+
+    state_path = tmp_path / "remote.sqlite3"
+    with scripted_server([]) as (url, requests, script):
+        first_env = {
+            "CAPTAIN_REMOTE_URL": url,
+            "CAPTAIN_MEMBER_TOKEN": "member-token-one",
+            "CAPTAIN_REMOTE_STATE_PATH": str(state_path),
+        }
+        second_env = {**first_env, "CAPTAIN_MEMBER_TOKEN": "member-token-two"}
+
+        def terminal_with_question(request):
+            turn_id = json.loads(request["body"])["turn_id"]
+            return {
+                "body": envelope(
+                    turn_id,
+                    result={
+                        **TERMINAL_RESULT,
+                        "status": "needs_clarification",
+                        "questions": ["First profile question?"],
+                    },
+                )
+            }
+
+        def terminal_without_question(request):
+            turn_id = json.loads(request["body"])["turn_id"]
+            return {"body": envelope(turn_id)}
+
+        script.extend([terminal_with_question, terminal_without_question])
+        first = handle_captain_turn("report-1", VALID_REPORT, {}, env=first_env)
+        second = handle_captain_turn("report-1", VALID_REPORT, {}, env=second_env)
+        cross_profile_reply = handle_captain_turn(
+            "report-1", reply="Yes", env=second_env
+        )
+
+    first_turn = json.loads(requests[0]["body"])["turn_id"]
+    second_turn = json.loads(requests[1]["body"])["turn_id"]
+    assert first.questions == ["First profile question?"]
+    assert second.status == "updated"
+    assert first_turn != second_turn
+    assert cross_profile_reply.status == "needs_clarification"
+    assert len(requests) == 2
+    assert remote_state_for_env(state_path, first_env).get_pending("report-1") is not None
+    assert remote_state_for_env(state_path, second_env).get_pending("report-1") is None
+
+
+def test_local_cancellation_clears_only_the_applicable_profile_without_http(tmp_path):
+    """A refusal clears local pending state without sending the refusal as a reply."""
+
+    state_path = tmp_path / "remote.sqlite3"
+    with scripted_server([]) as (url, requests, _script):
+        first_env = {
+            "CAPTAIN_REMOTE_URL": url,
+            "CAPTAIN_MEMBER_TOKEN": "member-token-one",
+            "CAPTAIN_REMOTE_STATE_PATH": str(state_path),
+        }
+        second_env = {**first_env, "CAPTAIN_MEMBER_TOKEN": "member-token-two"}
+        remote_state_for_env(state_path, first_env).replace_pending(
+            "report-1", "first-parent", ["First question?"]
+        )
+        remote_state_for_env(state_path, second_env).replace_pending(
+            "report-1", "second-parent", ["Second question?"]
+        )
+
+        result = handle_captain_turn(
+            "report-1",
+            env=first_env,
+            cancel_pending=True,
+        )
+
+    assert result.status == "needs_clarification"
+    assert "cleared locally" in result.captain_feedback
+    assert requests == []
+    assert remote_state_for_env(state_path, first_env).get_pending("report-1") is None
+    assert remote_state_for_env(state_path, second_env).get_pending("report-1") is not None
+    assert b"refusal" not in state_path.read_bytes()
+
+
+def test_cancellation_rejects_mixed_content_without_clearing_or_sending(tmp_path):
+    """Cancellation is a distinct local action, never a report or reply modifier."""
+
+    state_path = tmp_path / "remote.sqlite3"
+    with scripted_server([]) as (url, requests, _script):
+        env = {
+            "CAPTAIN_REMOTE_URL": url,
+            "CAPTAIN_MEMBER_TOKEN": "member-token",
+            "CAPTAIN_REMOTE_STATE_PATH": str(state_path),
+        }
+        remote_state_for_env(state_path, env).replace_pending(
+            "report-1", "parent-turn", ["Question?"]
+        )
+        mixed = handle_captain_turn(
+            "report-1",
+            reply="Do not send that",
+            env=env,
+            cancel_pending=True,
+        )
+
+    assert mixed.status == "failed"
+    assert requests == []
+    assert remote_state_for_env(state_path, env).get_pending("report-1") is not None
+
+
 def test_local_reply_requires_remote_mode_without_calling_local(monkeypatch):
     """Local report replay remains report-only until a remote continuation exists."""
 
@@ -1545,4 +1832,15 @@ def test_local_reply_requires_remote_mode_without_calling_local(monkeypatch):
         lambda *_args, **_kwargs: pytest.fail("local report handler was called"),
     )
     result = handle_captain_turn("report-1", reply="Yes", env={})
+    assert result.status == "needs_configuration"
+
+
+def test_local_cancellation_requires_complete_remote_profile(monkeypatch):
+    """Without a remote profile there is no safe local namespace to clear."""
+
+    monkeypatch.setattr(
+        "captain_agent.dispatch.handle_session_report",
+        lambda *_args, **_kwargs: pytest.fail("local report handler was called"),
+    )
+    result = handle_captain_turn("report-1", cancel_pending=True, env={})
     assert result.status == "needs_configuration"

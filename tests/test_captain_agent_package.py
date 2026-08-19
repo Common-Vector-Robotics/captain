@@ -186,11 +186,16 @@ def test_shared_skill_continues_only_clear_user_authored_replies():
     payloads = payloads_in(skill)
     initial_keys = {"report_id", "report", "metadata"}
     follow_up_keys = {"report_id", "reply"}
+    cancellation_keys = {"report_id", "cancel_pending"}
 
     assert [set(payload) for payload in initial_payloads] == [initial_keys]
-    assert [set(payload) for payload in continuation_payloads] == [follow_up_keys]
+    assert [set(payload) for payload in continuation_payloads] == [
+        cancellation_keys,
+        follow_up_keys,
+    ]
     assert sum(set(payload) == initial_keys for payload in payloads) == 1
     assert sum(set(payload) == follow_up_keys for payload in payloads) == 1
+    assert sum(set(payload) == cancellation_keys for payload in payloads) == 1
     assert all(
         "reply" not in payload or set(payload) == follow_up_keys
         for payload in payloads
@@ -199,6 +204,10 @@ def test_shared_skill_continues_only_clear_user_authored_replies():
         not ({"report", "metadata"} & set(payload)) or set(payload) == initial_keys
         for payload in payloads
     )
+    assert (
+        "For a refusal or cancellation, call the same tool with only "
+        "`{report_id, cancel_pending: true}`. Do not include or forward the refusal text."
+    ) in normalized_skill
 
 
 def test_launcher_is_executable_and_valid_shell():
@@ -291,6 +300,26 @@ async def test_mcp_keeps_one_tool_and_accepts_optional_exact_reply(monkeypatch):
     assert [tool.name for tool in tools.tools] == ["captain_session_report"]
     assert result.is_error is False
     assert result.structured_content["report_id"] == "report-1"
+    assert result.structured_content["status"] == "needs_configuration"
+
+
+@pytest.mark.anyio
+async def test_mcp_tool_accepts_local_pending_cancellation(monkeypatch):
+    """Cancellation extends the single dispatch tool without adding a remote request API."""
+
+    monkeypatch.delenv("CAPTAIN_REMOTE_URL", raising=False)
+    monkeypatch.delenv("CAPTAIN_MEMBER_TOKEN", raising=False)
+    from captain_agent.server import mcp
+
+    async with Client(mcp, raise_exceptions=True) as client:
+        tools = await client.list_tools()
+        result = await client.call_tool(
+            "captain_session_report",
+            {"report_id": "report-1", "cancel_pending": True},
+        )
+
+    assert [tool.name for tool in tools.tools] == ["captain_session_report"]
+    assert result.is_error is False
     assert result.structured_content["status"] == "needs_configuration"
 
 

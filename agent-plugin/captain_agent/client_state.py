@@ -21,6 +21,8 @@ MAX_PENDING_QUESTIONS = 20
 MAX_QUESTION_CHARACTERS = 1_000
 MAX_TIMESTAMP_CHARACTERS = 128
 SQLITE_BUSY_TIMEOUT_SECONDS = 1.0
+LEGACY_UNSCOPED_PROFILE_ID = "0" * 64
+PROFILE_ID_CHARACTERS = frozenset("0123456789abcdef")
 
 
 class RemoteStateConflict(Exception):
@@ -56,8 +58,8 @@ class PendingCaptainQuestions:
 def remote_state_path(env: Mapping[str, str]) -> Path:
     """Choose the privacy-limited SQLite path for remote client state."""
 
-    override = str(env.get("CAPTAIN_REMOTE_STATE_PATH", "")).strip()
-    if override:
+    override = str(env.get("CAPTAIN_REMOTE_STATE_PATH", ""))
+    if override.strip():
         return Path(override).expanduser()
 
     xdg_state_home = str(env.get("XDG_STATE_HOME", "")).strip()
@@ -83,6 +85,19 @@ def _require_text(value: object, name: str, limit: int) -> str:
     return value
 
 
+def _require_profile_id(value: object) -> str:
+    """Accept only a non-legacy lowercase SHA-256 profile identifier."""
+
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in PROFILE_ID_CHARACTERS for character in value)
+        or value == LEGACY_UNSCOPED_PROFILE_ID
+    ):
+        raise ValueError("profile_id must be a non-legacy SHA-256 identifier")
+    return value
+
+
 def _validated_questions(questions: Sequence[str]) -> tuple[str, ...]:
     """Return the exact valid question strings that continuation needs."""
 
@@ -100,8 +115,15 @@ def _validated_questions(questions: Sequence[str]) -> tuple[str, ...]:
 class RemoteClientState:
     """Store turn IDs and the one pending Captain question context per report."""
 
-    def __init__(self, path: Path, *, env: Mapping[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        profile_id: str,
+        env: Mapping[str, str] | None = None,
+    ) -> None:
         self.path = Path(path)
+        self.profile_id = _require_profile_id(profile_id)
         self._env = os.environ if env is None else env
         self._initialize_store()
 
@@ -123,33 +145,40 @@ class RemoteClientState:
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
+                self._migrate_unscoped_schema(connection)
                 connection.execute(
                     """
                     CREATE TABLE IF NOT EXISTS remote_turns(
+                        profile_id TEXT NOT NULL,
                         report_id TEXT NOT NULL,
                         turn_kind TEXT NOT NULL,
                         parent_turn_id TEXT NOT NULL,
                         payload_digest TEXT NOT NULL,
                         turn_id TEXT NOT NULL,
                         created_at TEXT NOT NULL,
-                        UNIQUE(report_id, turn_kind, parent_turn_id, payload_digest)
+                        UNIQUE(
+                            profile_id, report_id, turn_kind,
+                            parent_turn_id, payload_digest
+                        )
                     )
                     """
                 )
                 connection.execute(
                     """
                     CREATE UNIQUE INDEX IF NOT EXISTS one_initial_remote_turn_per_report
-                    ON remote_turns(report_id)
+                    ON remote_turns(profile_id, report_id)
                     WHERE turn_kind = 'report' AND parent_turn_id = ''
                     """
                 )
                 connection.execute(
                     """
                     CREATE TABLE IF NOT EXISTS pending_questions(
-                        report_id TEXT PRIMARY KEY,
+                        profile_id TEXT NOT NULL,
+                        report_id TEXT NOT NULL,
                         parent_turn_id TEXT NOT NULL,
                         questions_json TEXT NOT NULL,
-                        updated_at TEXT NOT NULL
+                        updated_at TEXT NOT NULL,
+                        PRIMARY KEY(profile_id, report_id)
                     )
                     """
                 )
@@ -157,6 +186,88 @@ class RemoteClientState:
             except Exception:
                 connection.rollback()
                 raise
+
+    def _migrate_unscoped_schema(self, connection: sqlite3.Connection) -> None:
+        """Quarantine v1 rows under an unreachable legacy namespace."""
+
+        turn_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(remote_turns)")
+        }
+        pending_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(pending_questions)")
+        }
+        if not turn_columns and not pending_columns:
+            return
+        turn_is_scoped = "profile_id" in turn_columns
+        pending_is_scoped = "profile_id" in pending_columns
+        if turn_is_scoped and pending_is_scoped:
+            return
+        if turn_is_scoped != pending_is_scoped or not turn_columns or not pending_columns:
+            raise RemoteStateConflict("remote state schema is partially scoped")
+
+        connection.execute("DROP INDEX IF EXISTS one_initial_remote_turn_per_report")
+        connection.execute("ALTER TABLE remote_turns RENAME TO remote_turns_unscoped_v1")
+        connection.execute("ALTER TABLE pending_questions RENAME TO pending_questions_unscoped_v1")
+        connection.execute(
+            """
+            CREATE TABLE remote_turns(
+                profile_id TEXT NOT NULL,
+                report_id TEXT NOT NULL,
+                turn_kind TEXT NOT NULL,
+                parent_turn_id TEXT NOT NULL,
+                payload_digest TEXT NOT NULL,
+                turn_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(
+                    profile_id, report_id, turn_kind,
+                    parent_turn_id, payload_digest
+                )
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX one_initial_remote_turn_per_report
+            ON remote_turns(profile_id, report_id)
+            WHERE turn_kind = 'report' AND parent_turn_id = ''
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE pending_questions(
+                profile_id TEXT NOT NULL,
+                report_id TEXT NOT NULL,
+                parent_turn_id TEXT NOT NULL,
+                questions_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(profile_id, report_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO remote_turns(
+                profile_id, report_id, turn_kind, parent_turn_id,
+                payload_digest, turn_id, created_at
+            )
+            SELECT ?, report_id, turn_kind, parent_turn_id,
+                payload_digest, turn_id, created_at
+            FROM remote_turns_unscoped_v1
+            """,
+            (LEGACY_UNSCOPED_PROFILE_ID,),
+        )
+        connection.execute(
+            """
+            INSERT INTO pending_questions(
+                profile_id, report_id, parent_turn_id, questions_json, updated_at
+            )
+            SELECT ?, report_id, parent_turn_id, questions_json, updated_at
+            FROM pending_questions_unscoped_v1
+            """,
+            (LEGACY_UNSCOPED_PROFILE_ID,),
+        )
+        connection.execute("DROP TABLE remote_turns_unscoped_v1")
+        connection.execute("DROP TABLE pending_questions_unscoped_v1")
 
     def _uses_normal_state_parent(self) -> bool:
         """Return whether this path came from the current default state location."""
@@ -246,9 +357,9 @@ class RemoteClientState:
             """
             SELECT parent_turn_id, questions_json
             FROM pending_questions
-            WHERE report_id = ?
+            WHERE profile_id = ? AND report_id = ?
             """,
-            (report_id,),
+            (self.profile_id, report_id),
         ).fetchone()
         if row is None:
             return None
@@ -265,30 +376,48 @@ class RemoteClientState:
 
     def _turn_rows_in_transaction(
         self, connection: sqlite3.Connection, report_id: str
-    ) -> list[tuple[str, str, str, str, str, str]]:
+    ) -> list[tuple[str, str, str, str, str, str, str]]:
         """Read only structurally valid persisted turns for one report ID."""
 
         rows = connection.execute(
             """
-            SELECT report_id, turn_kind, parent_turn_id, payload_digest,
+            SELECT profile_id, report_id, turn_kind, parent_turn_id, payload_digest,
                 turn_id, created_at
             FROM remote_turns
-            WHERE report_id = ?
+            WHERE (
+                profile_id = ?
+                OR (typeof(profile_id) != 'text' AND CAST(profile_id AS TEXT) = ?)
+            ) AND (
+                report_id = ?
                 OR (typeof(report_id) != 'text' AND CAST(report_id AS TEXT) = ?)
+            )
             """,
-            (report_id, report_id),
+            (self.profile_id, self.profile_id, report_id, report_id),
         ).fetchall()
         validated_rows = []
         for row in rows:
-            if len(row) != 6:
+            if len(row) != 7:
                 raise RemoteStateConflict("remote turn row has an invalid shape")
-            stored_report_id, turn_kind, parent_turn_id, digest, turn_id, created_at = row
+            (
+                stored_profile_id,
+                stored_report_id,
+                turn_kind,
+                parent_turn_id,
+                digest,
+                turn_id,
+                created_at,
+            ) = row
             try:
+                _require_profile_id(stored_profile_id)
                 _require_text(stored_report_id, "report_id", MAX_REPORT_ID_CHARACTERS)
                 _require_text(turn_kind, "turn_kind", MAX_TURN_ID_CHARACTERS)
                 _require_text(digest, "payload_digest", MAX_DIGEST_CHARACTERS)
                 _require_text(created_at, "created_at", MAX_TIMESTAMP_CHARACTERS)
-                if stored_report_id != report_id or turn_kind not in {"report", "reply"}:
+                if (
+                    stored_profile_id != self.profile_id
+                    or stored_report_id != report_id
+                    or turn_kind not in {"report", "reply"}
+                ):
                     raise ValueError("remote turn row has an unexpected report or kind")
                 if turn_kind == "report":
                     if parent_turn_id != "":
@@ -307,7 +436,7 @@ class RemoteClientState:
 
     @staticmethod
     def _matching_turn(
-        rows: Sequence[tuple[str, str, str, str, str, str]],
+        rows: Sequence[tuple[str, str, str, str, str, str, str]],
         turn_kind: str,
         parent_turn_id: str,
         payload_digest: str,
@@ -317,13 +446,13 @@ class RemoteClientState:
         matches = [
             row
             for row in rows
-            if row[1] == turn_kind
-            and row[2] == parent_turn_id
-            and row[3] == payload_digest
+            if row[2] == turn_kind
+            and row[3] == parent_turn_id
+            and row[4] == payload_digest
         ]
         if len(matches) > 1:
             raise RemoteStateConflict("remote turn state contains duplicate retry rows")
-        return matches[0][4] if matches else None
+        return matches[0][5] if matches else None
 
     def _get_or_create_turn(
         self,
@@ -339,14 +468,14 @@ class RemoteClientState:
             try:
                 rows = self._turn_rows_in_transaction(connection, report_id)
                 if turn_kind == "report":
-                    prior_reports = [row for row in rows if row[1] == "report"]
+                    prior_reports = [row for row in rows if row[2] == "report"]
                     if prior_reports:
-                        if len(prior_reports) != 1 or prior_reports[0][3] != payload_digest:
+                        if len(prior_reports) != 1 or prior_reports[0][4] != payload_digest:
                             raise RemoteStateConflict(
                                 "report_id already has a different initial payload"
                             )
                         connection.commit()
-                        return prior_reports[0][4]
+                        return prior_reports[0][5]
                 else:
                     pending = self._pending_in_transaction(connection, report_id)
                     if pending is None or pending.parent_turn_id != parent_turn_id:
@@ -364,12 +493,13 @@ class RemoteClientState:
                 connection.execute(
                     """
                     INSERT INTO remote_turns(
-                        report_id, turn_kind, parent_turn_id, payload_digest,
+                        profile_id, report_id, turn_kind, parent_turn_id, payload_digest,
                         turn_id, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT DO NOTHING
                     """,
                     (
+                        self.profile_id,
                         report_id,
                         turn_kind,
                         parent_turn_id,
@@ -442,14 +572,20 @@ class RemoteClientState:
                 connection.execute(
                     """
                     INSERT INTO pending_questions(
-                        report_id, parent_turn_id, questions_json, updated_at
-                    ) VALUES (?, ?, ?, ?)
-                    ON CONFLICT(report_id) DO UPDATE SET
+                        profile_id, report_id, parent_turn_id, questions_json, updated_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(profile_id, report_id) DO UPDATE SET
                         parent_turn_id = excluded.parent_turn_id,
                         questions_json = excluded.questions_json,
                         updated_at = excluded.updated_at
                     """,
-                    (report_id, parent_turn_id, questions_json, _current_utc_time()),
+                    (
+                        self.profile_id,
+                        report_id,
+                        parent_turn_id,
+                        questions_json,
+                        _current_utc_time(),
+                    ),
                 )
                 connection.commit()
             except Exception:
@@ -464,7 +600,8 @@ class RemoteClientState:
             connection.execute("BEGIN IMMEDIATE")
             try:
                 connection.execute(
-                    "DELETE FROM pending_questions WHERE report_id = ?", (report_id,)
+                    "DELETE FROM pending_questions WHERE profile_id = ? AND report_id = ?",
+                    (self.profile_id, report_id),
                 )
                 connection.commit()
             except Exception:

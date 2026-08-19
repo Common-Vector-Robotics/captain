@@ -333,6 +333,25 @@ describe("Captain member CLI", () => {
     expect(existsSync(invalidEmailPath)).toBe(false);
   });
 
+  it.each([
+    "Line\nBreak",
+    "Tabbed\tName",
+    `Delete${String.fromCharCode(0x7f)}Name`,
+    "x".repeat(101),
+  ])("rejects unsafe bounded member name %j before token output", async (name) => {
+    const path = databasePath();
+    const result = await runCli(createApi(path), [
+      "captain", "members", "add",
+      "--name", name,
+      "--email", "sam@example.com",
+    ]);
+
+    expect(result.error).toBeDefined();
+    expect(result.stderr).toContain("Member name is invalid.");
+    expect(result.stdout).not.toMatch(/cap_v1_/);
+    expect(existsSync(path)).toBe(false);
+  });
+
   it("opens and closes one store per command and redacts internal failures", async () => {
     const path = databasePath();
     const fixture = createApi(path);

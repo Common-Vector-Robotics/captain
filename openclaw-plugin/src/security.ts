@@ -156,6 +156,7 @@ const LIMIT_EVENT_KINDS = [
   "auth_failed",
   "auth_rate_limited",
   "poll_rate_limited",
+  "job_rate_limited",
 ] as const;
 
 export type LimitEventKind = typeof LIMIT_EVENT_KINDS[number];
@@ -171,6 +172,7 @@ function emptyLimitCounts(): LimitCounts {
     auth_failed: 0,
     auth_rate_limited: 0,
     poll_rate_limited: 0,
+    job_rate_limited: 0,
   };
 }
 

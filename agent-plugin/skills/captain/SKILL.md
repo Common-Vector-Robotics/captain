@@ -115,9 +115,16 @@ The coding agent must not compose an answer on the user's behalf. The MCP tool i
 | Several questions then user says "Tell Captain it is blocked" | Ask which question they mean |
 | User says "Run the tests" | Keep local and leave pending |
 | User says "What is the weather?" | Keep local and leave pending |
-| User says "Do not send that" | Do not forward; clear the conversational pending intent |
+| User says "Do not send that" | Do not forward; clear the pending context locally |
 
-Treat a refusal or cancellation as conversationally canceled. This skill has no direct state-management API, so do not claim that it cleared an underlying local SQLite pending row.
+For a refusal or cancellation, call the same tool with only `{report_id, cancel_pending: true}`. Do not include or forward the refusal text.
+
+```json
+{
+  "report_id": "stable-session-or-uuid",
+  "cancel_pending": true
+}
+```
 
 For an eligible follow-up, call the selected host-specific tool with this exact shape:
 

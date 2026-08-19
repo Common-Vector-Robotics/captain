@@ -57,9 +57,15 @@ function writeUnavailable(res) {
     }));
     return true;
 }
-function emitLimitCounts(api, counts) {
+function emitLimitCounts(api, store, counts) {
     if (!Object.values(counts).some((count) => count > 0))
         return;
+    try {
+        store.recordLimitSummary(counts);
+    }
+    catch {
+        // A fixed logger summary remains available if the audit device is unavailable.
+    }
     try {
         api.logger.warn(JSON.stringify({ event: "captain_remote_limits", ...counts }));
     }
@@ -75,7 +81,7 @@ async function closeResources(api, resources) {
         resources.events.close();
         const counts = resources.events.flush();
         try {
-            emitLimitCounts(api, counts);
+            emitLimitCounts(api, resources.store, counts);
         }
         finally {
             resources.store.close();
@@ -99,11 +105,11 @@ function registerRuntime(api) {
                 throw new Error('Captain remote requires the configured agent "captain".');
             }
             const config = resolveConfig(api.pluginConfig);
-            const events = new LimitEventAggregator({
-                emit: (counts) => emitLimitCounts(api, counts),
-            });
             const store = new CaptainRemoteStore(config.databasePath, {
                 maxGlobalActiveTurns: config.maxGlobalActiveTurns,
+            });
+            const events = new LimitEventAggregator({
+                emit: (counts) => emitLimitCounts(api, store, counts),
             });
             const resources = { store, events };
             try {
@@ -138,6 +144,7 @@ function registerRuntime(api) {
                     store,
                     authenticator,
                     pollLimiter,
+                    events,
                     maxRequestBytes: config.maxRequestBytes,
                     wakeWorker: () => worker.wake(),
                 });

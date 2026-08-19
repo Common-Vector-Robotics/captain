@@ -14,6 +14,7 @@ from .remote import (
     RemoteCaptainClient,
     RemoteConfigurationError,
     read_remote_config,
+    remote_profile_id,
     serialize_remote_payload,
 )
 from .reporting import (
@@ -91,14 +92,17 @@ def handle_captain_turn(
     metadata: Mapping[str, Any] | None = None,
     reply: str | None = None,
     env: Mapping[str, str] | None = None,
+    cancel_pending: bool = False,
 ) -> CaptainReportResult:
     """Send one report or one exact follow-up through the selected transport."""
 
-    if report is not None and reply is not None:
+    if not isinstance(cancel_pending, bool) or (
+        cancel_pending and (report is not None or reply is not None)
+    ) or (report is not None and reply is not None):
         return _result(
             report_id,
             "failed",
-            "Provide either report or reply, not both.",
+            "Provide exactly one report, reply, or local cancellation.",
         )
 
     environment = os.environ if env is None else env
@@ -112,7 +116,7 @@ def handle_captain_turn(
         )
 
     if remote_config is None:
-        if reply is not None:
+        if reply is not None or cancel_pending:
             return _result(
                 report_id,
                 "needs_configuration",
@@ -131,7 +135,9 @@ def handle_captain_turn(
         )
 
     remote_metadata: Mapping[str, Any] = {} if metadata is None else metadata
-    if reply is not None:
+    if cancel_pending:
+        pass
+    elif reply is not None:
         if not isinstance(reply, str) or not reply.strip():
             return _result(
                 report_id,
@@ -151,7 +157,9 @@ def handle_captain_turn(
             return validation
 
     preflight_payload: Mapping[str, Any]
-    if reply is not None:
+    if cancel_pending:
+        preflight_payload = {}
+    elif reply is not None:
         preflight_payload = {
             "turn_id": PREFLIGHT_TURN_ID,
             "kind": "reply",
@@ -165,22 +173,42 @@ def handle_captain_turn(
             "report": report,
             "metadata": remote_metadata,
         }
-    try:
-        serialize_remote_payload(preflight_payload, PREFLIGHT_TURN_ID)
-    except ValueError:
-        return _result(
-            report_id,
-            "failed",
-            "The remote Captain request must be valid JSON up to 262,144 bytes.",
-        )
+    if not cancel_pending:
+        try:
+            serialize_remote_payload(preflight_payload, PREFLIGHT_TURN_ID)
+        except ValueError:
+            return _result(
+                report_id,
+                "failed",
+                "The remote Captain request must be valid JSON up to 262,144 bytes.",
+            )
 
     try:
-        state = RemoteClientState(remote_state_path(environment), env=environment)
-    except (OSError, ValueError, sqlite3.Error):
+        state = RemoteClientState(
+            remote_state_path(environment),
+            profile_id=remote_profile_id(remote_config),
+            env=environment,
+        )
+    except (OSError, ValueError, sqlite3.Error, RemoteStateConflict):
         return _result(
             report_id,
             "needs_configuration",
             "Captain remote continuation state could not be opened.",
+        )
+
+    if cancel_pending:
+        try:
+            state.clear_pending(report_id)
+        except (OSError, ValueError, sqlite3.Error, RemoteStateConflict):
+            return _result(
+                report_id,
+                "failed",
+                "Captain continuation state could not be cleared.",
+            )
+        return _result(
+            report_id,
+            "needs_clarification",
+            "Pending Captain reply was cleared locally; nothing was sent.",
         )
 
     if reply is not None:

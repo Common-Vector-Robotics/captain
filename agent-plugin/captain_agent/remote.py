@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import time
@@ -148,6 +149,21 @@ class RemoteConfig:
     def __post_init__(self) -> None:
         object.__setattr__(self, "base_url", _validated_origin(self.base_url))
         object.__setattr__(self, "member_token", _validated_token(self.member_token))
+
+
+def remote_profile_id(config: RemoteConfig) -> str:
+    """Derive a stable non-secret namespace from one normalized remote credential."""
+
+    credential_identity = hashlib.sha256(
+        config.member_token.encode("utf-8")
+    ).digest()
+    framed = (
+        b"captain-remote-profile-v1\0"
+        + config.base_url.encode("ascii")
+        + b"\0"
+        + credential_identity
+    )
+    return hashlib.sha256(framed).hexdigest()
 
 
 def read_remote_config(env: Mapping[str, str]) -> RemoteConfig | None:

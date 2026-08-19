@@ -201,8 +201,9 @@ describe("Captain embedded runtime boundary", () => {
     expect(captured[0].prompt).toContain("Alice Admin");
     expect(captured[0].prompt).toContain("alice.admin@example.com");
     expect(captured[0].prompt).toContain(JSON.stringify(input.report));
-    expect(captured[0].prompt).toContain("captain_session_report");
-    expect(captured[0].prompt).toContain("/captain");
+    expect(captured[0].prompt).toContain(
+      "Do not call captain_session_report, any /captain endpoint, or any other recursive Captain-reporting path.",
+    );
     expect(captured[0].prompt).toContain("canonical Captain result JSON");
     expect(captured[0].prompt).not.toContain("client-secret-marker");
 

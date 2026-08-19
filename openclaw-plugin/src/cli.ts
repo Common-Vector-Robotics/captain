@@ -5,7 +5,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
 import { issueMemberToken } from "./security.js";
-import { CaptainRemoteStore } from "./store.js";
+import { CaptainRemoteStore, normalizeMemberName } from "./store.js";
 
 const EMAIL = /^[\w.!#$%&'*+/=?^`{|}~-]+@[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?(?:\.[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?)*$/i;
 const MEMBER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -85,9 +85,16 @@ export function registerCaptainCli(api: OpenClawPluginApi): void {
       .requiredOption("--name <name>", "Member display name")
       .requiredOption("--email <email>", "Member email address")
       .action(async (options: { name: string; email: string }) => {
-        const name = options.name.trim();
+        let name: string;
+        try {
+          name = normalizeMemberName(options.name);
+        } catch {
+          const message = options.name.trim()
+            ? "Member name is invalid."
+            : "Member name is required.";
+          fail(add, message, "captain.members.name");
+        }
         const email = options.email.trim();
-        if (!name) fail(add, "Member name is required.", "captain.members.name");
         if (!EMAIL.test(email)) {
           fail(add, "Member email is invalid.", "captain.members.email");
         }

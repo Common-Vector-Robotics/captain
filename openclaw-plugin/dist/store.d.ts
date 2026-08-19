@@ -1,3 +1,4 @@
+import { AuditLog, type AuditEventInput } from "./audit.js";
 import { type CaptainResult, type TurnInput, type TurnState } from "./contracts.js";
 import type { IssuedToken } from "./security.js";
 export interface StoredMember {
@@ -25,8 +26,10 @@ export interface StoredReport {
     updatedAt: string;
 }
 export type TerminalTurnState = Exclude<TurnState, "queued" | "started">;
+export declare const MAX_MEMBER_NAME_CHARACTERS = 100;
 export interface CaptainRemoteStoreOptions {
     maxGlobalActiveTurns?: number;
+    auditLog?: AuditLog;
 }
 export interface StoredTurnError {
     code: string;
@@ -57,13 +60,17 @@ export type ReserveTurnResult = {
     report: StoredReport;
     turn: StoredTurn;
 };
+export declare function normalizeMemberName(value: string): string;
 export declare class CaptainRemoteStore {
     private readonly databasePath;
     private database;
     private readonly maxGlobalActiveTurns;
+    private readonly audit;
     constructor(databasePath: string, options?: CaptainRemoteStoreOptions);
     initialize(): void;
     close(): void;
+    recordAudit(event: AuditEventInput): void;
+    recordLimitSummary(counts: Record<string, number>): void;
     createMember(name: string, email: string, issued: IssuedToken): StoredMember;
     createMemberWithId(memberId: string, name: string, email: string, issued: IssuedToken): StoredMember;
     listMembers(): StoredMember[];

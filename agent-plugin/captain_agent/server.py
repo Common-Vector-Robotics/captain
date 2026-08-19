@@ -21,10 +21,17 @@ def captain_session_report(
     report: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
     reply: str | None = None,
+    cancel_pending: bool = False,
 ) -> CaptainReportResult:
-    """Send a report or an exact user-authored follow-up to Captain."""
+    """Send a report/reply or clear one local pending continuation."""
 
-    return handle_captain_turn(report_id, report, metadata, reply)
+    return handle_captain_turn(
+        report_id,
+        report,
+        metadata,
+        reply,
+        cancel_pending=cancel_pending,
+    )
 
 
 def main() -> None:

@@ -433,6 +433,32 @@ describe("CaptainAuthenticator", () => {
     })).memberId).toBe("member-1");
   });
 
+  it("returns the longest retry when source, lookup, and global buckets all reject", () => {
+    const { issued, store } = fixture();
+    const authenticator = new CaptainAuthenticator(store, {
+      now: () => 0,
+      invalidAuthPerSourcePerMinute: 1,
+      invalidAuthPerSourceBurst: 1,
+      invalidAuthGlobalPerMinute: 2,
+    });
+    const knownWrong = `cap_v1_${issued.lookupId}.${differentBase64Url(issued.secret)}`;
+    const otherLookup = differentBase64Url(issued.lookupId);
+
+    expectProblem(() => authenticator.authenticate(request(
+      "198.51.100.3",
+      authorization(knownWrong),
+    )), 401);
+    expectProblem(() => authenticator.authenticate(request(
+      "198.51.100.4",
+      authorization(`cap_v1_${otherLookup}.${issued.secret}`),
+    )), 401);
+
+    expectProblem(() => authenticator.authenticate(request(
+      "198.51.100.3",
+      authorization(knownWrong),
+    )), 429, 60);
+  });
+
   it("honors configured source and lookup failure rates and bursts", () => {
     const { issued, store } = fixture();
     let now = 0;
@@ -558,11 +584,13 @@ describe("LimitEventAggregator", () => {
         auth_failed: 2,
         auth_rate_limited: 0,
         poll_rate_limited: 0,
+        job_rate_limited: 0,
       }]);
       expect(events.flush()).toEqual({
         auth_failed: 0,
         auth_rate_limited: 0,
         poll_rate_limited: 0,
+        job_rate_limited: 0,
       });
     } finally {
       events.close();
@@ -590,6 +618,20 @@ describe("LimitEventAggregator", () => {
       auth_failed: 6,
       auth_rate_limited: 1,
       poll_rate_limited: 1,
+      job_rate_limited: 0,
     });
+  });
+
+  it("stops interval emissions immediately when closed", () => {
+    vi.useFakeTimers();
+    const emit = vi.fn();
+    const events = new LimitEventAggregator({ intervalMs: 10, emit });
+    events.record("auth_failed");
+
+    events.close();
+    vi.advanceTimersByTime(100);
+
+    expect(emit).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 });

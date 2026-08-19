@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import { AuditLog, type AuditEventInput } from "./audit.js";
 import {
   HttpProblem,
   type CaptainResult,
@@ -52,9 +53,12 @@ const SQLITE_BUSY_RETRY_MS = 10;
 const SQLITE_BUSY_WAIT = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 const DEFAULT_MAX_GLOBAL_ACTIVE_TURNS = 32;
 const MAX_GLOBAL_ACTIVE_TURNS = 32;
+export const MAX_MEMBER_NAME_CHARACTERS = 100;
+const MEMBER_NAME_CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 
 export interface CaptainRemoteStoreOptions {
   maxGlobalActiveTurns?: number;
+  auditLog?: AuditLog;
 }
 
 export interface StoredTurnError {
@@ -174,6 +178,17 @@ function required(value: string, field: string): string {
   return normalized;
 }
 
+export function normalizeMemberName(value: string): string {
+  const normalized = required(value, "Member name");
+  if (
+    normalized.length > MAX_MEMBER_NAME_CHARACTERS
+    || MEMBER_NAME_CONTROL.test(normalized)
+  ) {
+    throw new TypeError("Member name is invalid.");
+  }
+  return normalized;
+}
+
 function isLockedDatabase(error: unknown): boolean {
   return error instanceof Error
     && error.message === "database is locked"
@@ -201,9 +216,17 @@ function enableWal(database: DatabaseSync): void {
   }
 }
 
+function elapsedMilliseconds(start: string | null, finish: string | null): number {
+  const startMs = start === null ? Number.NaN : Date.parse(start);
+  const finishMs = finish === null ? Number.NaN : Date.parse(finish);
+  if (!Number.isFinite(startMs) || !Number.isFinite(finishMs)) return 0;
+  return Math.max(0, finishMs - startMs);
+}
+
 export class CaptainRemoteStore {
   private database: DatabaseSync | null = null;
   private readonly maxGlobalActiveTurns: number;
+  private readonly audit: AuditLog;
 
   constructor(
     private readonly databasePath: string,
@@ -221,6 +244,7 @@ export class CaptainRemoteStore {
       );
     }
     this.maxGlobalActiveTurns = maxGlobalActiveTurns;
+    this.audit = options.auditLog ?? new AuditLog(`${databasePath}.audit.jsonl`);
   }
 
   initialize(): void {
@@ -232,6 +256,7 @@ export class CaptainRemoteStore {
 
     const database = new DatabaseSync(this.databasePath, { timeout: SQLITE_BUSY_TIMEOUT_MS });
     try {
+      this.audit.initialize();
       chmodSync(this.databasePath, 0o600);
       database.exec(`
         PRAGMA foreign_keys = ON;
@@ -288,6 +313,7 @@ export class CaptainRemoteStore {
       `);
     } catch (error) {
       database.close();
+      this.audit.close();
       throw error;
     }
     this.database = database;
@@ -296,6 +322,15 @@ export class CaptainRemoteStore {
   close(): void {
     this.database?.close();
     this.database = null;
+    this.audit.close();
+  }
+
+  recordAudit(event: AuditEventInput): void {
+    this.audit.record(event);
+  }
+
+  recordLimitSummary(counts: Record<string, number>): void {
+    this.audit.recordLimitSummary(counts);
   }
 
   createMember(name: string, email: string, issued: IssuedToken): StoredMember {
@@ -316,13 +351,20 @@ export class CaptainRemoteStore {
       ) VALUES (?, ?, ?, ?, ?, ?)
     `).run(
       memberId,
-      required(name, "Member name"),
+      normalizeMemberName(name),
       required(email, "Member email"),
       issued.lookupId,
       issued.digest,
       createdAt,
     );
-    return this.getMember(memberId);
+    const member = this.getMember(memberId);
+    this.recordAudit({
+      event: "member_created",
+      memberId: member.memberId,
+      operation: "member",
+      route: "local_cli",
+    });
+    return member;
   }
 
   listMembers(): StoredMember[] {
@@ -352,7 +394,14 @@ export class CaptainRemoteStore {
       WHERE member_id = ?
     `).run(issued.lookupId, issued.digest, rotatedAt, memberId);
     if (result.changes !== 1) throw new Error("Member not found.");
-    return this.getMember(memberId);
+    const member = this.getMember(memberId);
+    this.recordAudit({
+      event: "member_rotated",
+      memberId: member.memberId,
+      operation: "member",
+      route: "local_cli",
+    });
+    return member;
   }
 
   revokeMember(memberId: string): StoredMember {
@@ -360,11 +409,18 @@ export class CaptainRemoteStore {
       UPDATE members SET revoked_at = ? WHERE member_id = ?
     `).run(new Date().toISOString(), memberId);
     if (result.changes !== 1) throw new Error("Member not found.");
-    return this.getMember(memberId);
+    const member = this.getMember(memberId);
+    this.recordAudit({
+      event: "member_revoked",
+      memberId: member.memberId,
+      operation: "member",
+      route: "local_cli",
+    });
+    return member;
   }
 
   reserveTurn(input: ReserveTurnInput): ReserveTurnResult {
-    return this.inImmediateTransaction(() => {
+    const reserved = this.inImmediateTransaction<ReserveTurnResult>(() => {
       const existing = this.selectTurn(input);
       if (existing) {
         if (existing.requestDigest !== input.requestDigest) {
@@ -412,6 +468,18 @@ export class CaptainRemoteStore {
       if (!turn) throw new Error("Reserved turn was not persisted.");
       return { status: "created", report: this.selectReport(input), turn };
     });
+    if (reserved.status === "created") {
+      this.recordAudit({
+        event: "turn_queued",
+        memberId: input.memberId,
+        operation: "turn",
+        route: "submit",
+        reportId: input.reportId,
+        turnId: input.turnId,
+        toState: "queued",
+      });
+    }
+    return reserved;
   }
 
   getTurn(key: TurnKey): StoredTurn | null {
@@ -423,7 +491,7 @@ export class CaptainRemoteStore {
       throw new TypeError("maxRunning must be a positive safe integer.");
     }
 
-    return this.inImmediateTransaction(() => {
+    const claimed = this.inImmediateTransaction(() => {
       const running = this.getDatabase().prepare(`
         SELECT COUNT(*) AS count FROM turns WHERE state = 'started'
       `).get() as { count: number };
@@ -459,6 +527,20 @@ export class CaptainRemoteStore {
         report: this.selectReport(key),
       };
     });
+    if (claimed) {
+      this.recordAudit({
+        event: "turn_started",
+        memberId: claimed.memberId,
+        operation: "turn",
+        route: "worker",
+        reportId: claimed.reportId,
+        turnId: claimed.turnId,
+        fromState: "queued",
+        toState: "started",
+        durationMs: elapsedMilliseconds(claimed.createdAt, claimed.startedAt),
+      });
+    }
+    return claimed;
   }
 
   finishTurn(
@@ -471,8 +553,10 @@ export class CaptainRemoteStore {
       throw new HttpProblem(400, "INVALID_TURN_STATE", "Turn state must be terminal.");
     }
 
+    const started = this.getTurn(key);
+    let finishedAt = "";
     this.inImmediateTransaction(() => {
-      const finishedAt = new Date().toISOString();
+      finishedAt = new Date().toISOString();
       const updated = this.getDatabase().prepare(`
         UPDATE turns
         SET state = ?, result_json = ?, error_code = ?, error_message = ?, finished_at = ?
@@ -492,10 +576,32 @@ export class CaptainRemoteStore {
       }
       this.touchReport(key, finishedAt);
     });
+    this.recordAudit({
+      event: `turn_${state}`,
+      memberId: key.memberId,
+      operation: "turn",
+      route: "worker",
+      reportId: key.reportId,
+      turnId: key.turnId,
+      fromState: "started",
+      toState: state,
+      durationMs: elapsedMilliseconds(started?.startedAt ?? null, finishedAt),
+      code: error?.code,
+    });
   }
 
   recoverStartedTurns(): number {
     const finishedAt = new Date().toISOString();
+    const started = this.getDatabase().prepare(`
+      SELECT member_id, report_id, turn_id, started_at
+      FROM turns WHERE state = 'started'
+      ORDER BY created_at, rowid
+    `).all() as unknown as Array<{
+      member_id: string;
+      report_id: string;
+      turn_id: string;
+      started_at: string | null;
+    }>;
     const result = this.getDatabase().prepare(`
       UPDATE turns
       SET state = 'unknown_outcome',
@@ -504,6 +610,20 @@ export class CaptainRemoteStore {
           finished_at = ?
       WHERE state = 'started'
     `).run(finishedAt);
+    for (const turn of started) {
+      this.recordAudit({
+        event: "turn_unknown_outcome",
+        memberId: turn.member_id,
+        operation: "turn",
+        route: "worker",
+        reportId: turn.report_id,
+        turnId: turn.turn_id,
+        fromState: "started",
+        toState: "unknown_outcome",
+        durationMs: elapsedMilliseconds(turn.started_at, finishedAt),
+        code: "RESTART_RECOVERY",
+      });
+    }
     return Number(result.changes);
   }
 

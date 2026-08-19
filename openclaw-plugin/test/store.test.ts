@@ -277,6 +277,10 @@ describe("CaptainRemoteStore members", () => {
       .toThrow("Member name is required.");
     expect(() => store.createMember("Alice", " ", issueMemberToken()))
       .toThrow("Member email is required.");
+    expect(() => store.createMember("Line\nBreak", "alice@example.com", issueMemberToken()))
+      .toThrow("Member name is invalid.");
+    expect(() => store.createMember("x".repeat(101), "alice@example.com", issueMemberToken()))
+      .toThrow("Member name is invalid.");
   });
 
   it("uses owner-only filesystem modes and WAL", () => {

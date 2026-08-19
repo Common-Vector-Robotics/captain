@@ -129,12 +129,14 @@ const LIMIT_EVENT_KINDS = [
     "auth_failed",
     "auth_rate_limited",
     "poll_rate_limited",
+    "job_rate_limited",
 ];
 function emptyLimitCounts() {
     return {
         auth_failed: 0,
         auth_rate_limited: 0,
         poll_rate_limited: 0,
+        job_rate_limited: 0,
     };
 }
 export class LimitEventAggregator {

@@ -1,15 +1,17 @@
 import { once } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
+import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HttpProblem, type CaptainResult, type TurnInput } from "../src/contracts.js";
-import { createCaptainHttpHandler } from "../src/http.js";
+import { createCaptainHttpHandler, readBoundedBody } from "../src/http.js";
 import {
   CaptainAuthenticator,
   issueMemberToken,
+  LimitEventAggregator,
   PollLimiter,
   type IssuedToken,
 } from "../src/security.js";
@@ -30,6 +32,8 @@ interface HttpFixture {
   alice: MemberFixture;
   bob: MemberFixture;
   wakeWorker: ReturnType<typeof vi.fn>;
+  auditPath: string;
+  events: LimitEventAggregator;
 }
 
 const servers: Server[] = [];
@@ -63,17 +67,20 @@ async function startFixture(options: {
 } = {}): Promise<HttpFixture> {
   const directory = mkdtempSync(join(tmpdir(), "captain-http-test-"));
   temporaryDirectories.push(directory);
-  const store = new CaptainRemoteStore(join(directory, "captain.sqlite"));
+  const databasePath = join(directory, "captain.sqlite");
+  const store = new CaptainRemoteStore(databasePath);
   store.initialize();
   stores.push(store);
 
   const alice = createMember(store, "Alice");
   const bob = createMember(store, "Bob");
   const wakeWorker = options.wakeWorker ?? vi.fn();
+  const events = new LimitEventAggregator();
   const handler = createCaptainHttpHandler({
     store,
-    authenticator: new CaptainAuthenticator(store),
-    pollLimiter: options.pollLimiter ?? new PollLimiter(),
+    authenticator: new CaptainAuthenticator(store, { events }),
+    pollLimiter: options.pollLimiter ?? new PollLimiter({ events }),
+    events,
     maxRequestBytes: options.maxRequestBytes,
     wakeWorker,
   });
@@ -90,7 +97,17 @@ async function startFixture(options: {
     alice,
     bob,
     wakeWorker,
+    auditPath: `${databasePath}.audit.jsonl`,
+    events,
   };
+}
+
+function auditEvents(fixture: HttpFixture): Array<Record<string, unknown>> {
+  return readFileSync(fixture.auditPath, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 function reportTurn(turnId = TURN_ID, summary = "Implemented the HTTP boundary."): TurnInput {
@@ -149,6 +166,109 @@ async function expectProblem(
 }
 
 describe("Captain HTTP submit", () => {
+  it("rejects an incomplete real socket on close when abort events are unavailable", async () => {
+    let requestWasComplete: boolean | undefined;
+    let settleOutcome!: (value: unknown) => void;
+    const outcome = new Promise<unknown>((resolve) => {
+      settleOutcome = resolve;
+    });
+    const server = createServer((req) => {
+      const originalEmit = req.emit.bind(req);
+      req.emit = ((event: string, ...args: unknown[]) => {
+        if (event === "aborted") return false;
+        return originalEmit(event as never, ...(args as never[]));
+      }) as typeof req.emit;
+      void readBoundedBody(req, DEFAULT_MAX_REQUEST_BYTES).then(
+        () => settleOutcome("resolved"),
+        (error) => {
+          requestWasComplete = req.complete;
+          settleOutcome(error);
+        },
+      );
+    });
+    servers.push(server);
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Test server did not bind TCP.");
+
+    const socket = createConnection(address.port, "127.0.0.1");
+    await once(socket, "connect");
+    const closed = once(socket, "close");
+    socket.write(
+      "POST /captain/v1/reports/report-1/turns HTTP/1.1\r\n"
+      + "Host: 127.0.0.1\r\n"
+      + "Content-Type: application/json\r\n"
+      + "Content-Length: 100\r\n\r\n{",
+      () => socket.destroy(),
+    );
+    await closed;
+
+    const result = await Promise.race([
+      outcome,
+      new Promise((resolve) => setTimeout(() => resolve("pending"), 250)),
+    ]);
+    expect(result).toBeInstanceOf(HttpProblem);
+    expect(result).toMatchObject({ status: 400, code: "INVALID_REQUEST" });
+    expect(requestWasComplete).toBe(false);
+  });
+
+  it("a real reset partial body cannot insert a turn or poison the next request", async () => {
+    const fixture = await startFixture();
+    const port = Number(new URL(fixture.baseUrl).port);
+    const socket = createConnection(port, "127.0.0.1");
+    socket.on("error", () => undefined);
+    await once(socket, "connect");
+    socket.write(
+      "POST /captain/v1/reports/report-1/turns HTTP/1.1\r\n"
+      + "Host: 127.0.0.1\r\n"
+      + `Authorization: Bearer ${fixture.alice.issued.token}\r\n`
+      + "Content-Type: application/json\r\n"
+      + "Content-Length: 100\r\n\r\n{",
+    );
+    const closed = once(socket, "close");
+    socket.destroy();
+    await closed;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(fixture.store.getTurn({
+      memberId: fixture.alice.member.memberId,
+      reportId: "report-1",
+      turnId: TURN_ID,
+    })).toBeNull();
+    expect(fixture.wakeWorker).not.toHaveBeenCalled();
+    expect((await postTurn(fixture, fixture.alice)).status).toBe(202);
+  });
+
+  it("aggregates repeated job-limit outcomes instead of auditing each rejection", async () => {
+    const fixture = await startFixture();
+    expect((await postTurn(fixture, fixture.alice)).status).toBe(202);
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const limited = await postTurn(
+        fixture,
+        fixture.alice,
+        reportTurn(OTHER_TURN_ID),
+        { reportId: "report-2" },
+      );
+      await expectProblem(limited, 429, "MEMBER_ACTIVE_LIMIT");
+    }
+    const summary = fixture.events.flush();
+    fixture.store.recordLimitSummary(summary);
+
+    expect(summary).toMatchObject({ job_rate_limited: 20 });
+    const events = auditEvents(fixture);
+    expect(events.filter((event) => event.event === "http_error")).toEqual([]);
+    expect(events.filter((event) => event.code === "JOB_RATE_LIMITED")).toEqual([
+      expect.objectContaining({
+        event: "limit_summary",
+        operation: "limit",
+        route: "submit",
+        count: 20,
+      }),
+    ]);
+  });
+
   it("durably queues a validated turn and wakes the worker once", async () => {
     const fixture = await startFixture();
 
@@ -394,6 +514,65 @@ describe("Captain HTTP submit", () => {
 });
 
 describe("Captain HTTP poll and dispatch", () => {
+  it("audits authenticated submit, poll, and stable errors without request content", async () => {
+    const fixture = await startFixture();
+    expect((await postTurn(fixture, fixture.alice)).status).toBe(202);
+    expect((await fetch(pollUrl(fixture.baseUrl), {
+      headers: authorization(fixture.alice),
+    })).status).toBe(200);
+    const malformed = await fetch(submitUrl(fixture.baseUrl, "bad-report"), {
+      method: "POST",
+      headers: {
+        ...authorization(fixture.bob),
+        "content-type": "application/json",
+      },
+      body: '{"private-request-marker":',
+    });
+    await expectProblem(malformed, 400, "INVALID_JSON");
+
+    const operations = auditEvents(fixture).filter((event) => (
+      ["submit_authenticated", "poll_authenticated", "http_error"].includes(
+        String(event.event),
+      )
+    ));
+    expect(operations).toEqual([
+      expect.objectContaining({
+        event: "submit_authenticated",
+        member_id: fixture.alice.member.memberId,
+        operation: "submit",
+        route: "submit",
+        report_id: "report-1",
+        turn_id: TURN_ID,
+        to_state: "queued",
+        code: "CREATED",
+      }),
+      expect.objectContaining({
+        event: "poll_authenticated",
+        member_id: fixture.alice.member.memberId,
+        operation: "poll",
+        route: "poll",
+        report_id: "report-1",
+        turn_id: TURN_ID,
+        to_state: "queued",
+        code: "FOUND",
+      }),
+      expect.objectContaining({
+        event: "http_error",
+        member_id: fixture.bob.member.memberId,
+        operation: "submit",
+        route: "submit",
+        report_id: "bad-report",
+        turn_id: null,
+        code: "INVALID_JSON",
+      }),
+    ]);
+    const text = readFileSync(fixture.auditPath, "utf8");
+    expect(text).not.toContain("private-request-marker");
+    expect(text).not.toContain(fixture.alice.issued.token);
+    expect(text).not.toContain(fixture.bob.issued.token);
+    expect(text).not.toContain("Authorization");
+  });
+
   it("returns only the authenticated member-owned turn", async () => {
     const fixture = await startFixture();
     expect((await postTurn(fixture, fixture.bob)).status).toBe(202);

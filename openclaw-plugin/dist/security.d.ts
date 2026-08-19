@@ -23,7 +23,7 @@ export declare class TokenBucketLimiter {
     private makeRoom;
 }
 export declare function resolveClientSource(req: IncomingMessage): string;
-declare const LIMIT_EVENT_KINDS: readonly ["auth_failed", "auth_rate_limited", "poll_rate_limited"];
+declare const LIMIT_EVENT_KINDS: readonly ["auth_failed", "auth_rate_limited", "poll_rate_limited", "job_rate_limited"];
 export type LimitEventKind = typeof LIMIT_EVENT_KINDS[number];
 export interface LimitEventAggregatorOptions {
     intervalMs?: number;
