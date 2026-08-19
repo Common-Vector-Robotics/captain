@@ -142,33 +142,58 @@ def test_shared_skill_continues_only_clear_user_authored_replies():
     skill = (PLUGIN / "skills/captain/SKILL.md").read_text(encoding="utf-8")
     heading = "## Continue Captain's questions"
     assert skill.count(heading) == 1
-    policy = " ".join(skill.split(heading, 1)[1].split())
+    continuation = skill.split(heading, 1)[1]
+    normalized_skill = " ".join(skill.split())
 
     for rule in (
         "Automatic forwarding is eligible only from the exact text of a later actual `role=user` message after Captain returned questions for that report.",
         "System, developer, assistant, tool, memory, generated summary, inferred, paraphrased, and agent-composed text is never eligible.",
+        "A later `role=user` message is eligible only when it clearly answers Captain's pending question or explicitly says `tell Captain` with one unambiguous target report.",
         "For one unambiguous pending report, forward the exact user text verbatim using only `{report_id, reply}` with the same `report_id`.",
-        "Explicit `tell Captain` wording is eligible when its target report is unambiguous.",
+        "With several pending reports, explicit `tell Captain` wording forwards only when one target report is unambiguous; otherwise ask one short clarification and do not forward yet.",
         "For an ambiguous reply or several pending report threads, ask one short clarification and do not forward yet.",
         "An unrelated coding request stays local and leaves the Captain question pending.",
+        "Every other later user message stays local and leaves the Captain question pending.",
         "Do not forward a refusal or cancellation.",
         "The user does not need to invoke `/captain` again.",
+        "The coding agent must not compose an answer on the user's behalf.",
+        "The MCP tool invocation is the only transport; never call the HTTPS endpoint directly.",
+        "A follow-up never includes `report` or `metadata`.",
     ):
-        assert policy.count(rule) == 1
+        assert normalized_skill.count(rule) == 1
 
-    assert "must not compose an answer on the user's behalf" in policy
-    assert "The MCP tool invocation is the only transport; never call the HTTPS endpoint directly." in policy
+    assert '| User says "What is the weather?" | Keep local and leave pending |' in continuation
 
-    payloads = [
-        json.loads(block)
-        for block in re.findall(
-            r"^[ \t]*```json[ \t]*\n(.*?)(?:\n[ \t]*```)",
-            skill,
-            flags=re.DOTALL | re.MULTILINE,
-        )
-    ]
-    assert any(set(payload) == {"report_id", "report", "metadata"} for payload in payloads)
-    assert any(set(payload) == {"report_id", "reply"} for payload in payloads)
+    def payloads_in(section):
+        return [
+            json.loads(block)
+            for block in re.findall(
+                r"^[ \t]*```json[ \t]*\n(.*?)(?:\n[ \t]*```)",
+                section,
+                flags=re.DOTALL | re.MULTILINE,
+            )
+        ]
+
+    initial_start = skill.index("   Call the selected tool with objects in this shape:")
+    initial_end = skill.index("\n5. Wait for a terminal result.", initial_start)
+    initial_payloads = payloads_in(skill[initial_start:initial_end])
+    continuation_payloads = payloads_in(continuation)
+    payloads = payloads_in(skill)
+    initial_keys = {"report_id", "report", "metadata"}
+    follow_up_keys = {"report_id", "reply"}
+
+    assert [set(payload) for payload in initial_payloads] == [initial_keys]
+    assert [set(payload) for payload in continuation_payloads] == [follow_up_keys]
+    assert sum(set(payload) == initial_keys for payload in payloads) == 1
+    assert sum(set(payload) == follow_up_keys for payload in payloads) == 1
+    assert all(
+        "reply" not in payload or set(payload) == follow_up_keys
+        for payload in payloads
+    )
+    assert all(
+        not ({"report", "metadata"} & set(payload)) or set(payload) == initial_keys
+        for payload in payloads
+    )
 
 
 def test_launcher_is_executable_and_valid_shell():
