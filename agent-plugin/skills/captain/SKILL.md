@@ -101,7 +101,7 @@ After Captain returns questions for a report, apply these rules:
 - With several pending reports, explicit `tell Captain` wording forwards only when one target report is unambiguous; otherwise ask one short clarification and do not forward yet.
 - For an ambiguous reply or several pending report threads, ask one short clarification and do not forward yet.
 - An unrelated coding request stays local and leaves the Captain question pending.
-- Every other later user message stays local and leaves the Captain question pending.
+- Every other unrelated later user message, excluding a refusal or cancellation, stays local and leaves the Captain question pending.
 - Do not forward a refusal or cancellation.
 - The user does not need to invoke `/captain` again.
 
