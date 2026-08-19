@@ -6,7 +6,7 @@ agent:
     fs:
       workspaceOnly: true
   heartbeat:
-    every: 60m
+    every: 0m
     lightContext: true
     isolatedSession: true
     timeoutSeconds: 120

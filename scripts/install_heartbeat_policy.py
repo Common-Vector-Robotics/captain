@@ -9,6 +9,7 @@ stored the exact same text.
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import subprocess
@@ -19,6 +20,9 @@ from typing import Callable
 # This is the OpenClaw setting where Captain's heartbeat instructions belong.
 # Change this only if OpenClaw changes the setting name in a future release.
 CONFIG_PATH = "agents.entries.captain.heartbeat.prompt"
+CADENCE_CONFIG_PATH = "agents.entries.captain.heartbeat.every"
+DISABLED_CADENCE = "0m"
+ENABLED_CADENCE = "60m"
 
 # The script lives in ``scripts/``, so its parent directory is Captain's root
 # folder. Building the path this way makes the command work from any directory.
@@ -28,8 +32,10 @@ POLICY_PATH = Path(__file__).resolve().parents[1] / "HEARTBEAT.md"
 def install_policy(
     policy_path: Path = POLICY_PATH,
     run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    *,
+    enable: bool = False,
 ) -> str:
-    """Install the policy fail-closed and return its verified SHA-256."""
+    """Install the policy and optionally enable its hourly schedule safely."""
 
     # Read bytes first so the later comparison can detect even subtle changes,
     # such as a missing final newline. ``strict=True`` also gives a clear error
@@ -92,17 +98,97 @@ def install_policy(
     actual_hash = hashlib.sha256(actual_bytes).hexdigest()
     if actual_hash != expected_hash:
         raise SystemExit("Captain heartbeat prompt SHA-256 verification failed")
+
+    if enable:
+        enable_heartbeat(run=run)
     return actual_hash
+
+
+def _cadence_command(value: str) -> list[str]:
+    """Build one direct OpenClaw command for Captain's heartbeat cadence."""
+
+    return [
+        "openclaw",
+        "config",
+        "set",
+        CADENCE_CONFIG_PATH,
+        json.dumps(value),
+        "--strict-json",
+    ]
+
+
+def _read_cadence(
+    run: Callable[..., subprocess.CompletedProcess],
+) -> str:
+    """Read and validate the stored heartbeat cadence as one JSON string."""
+
+    result = run(
+        ["openclaw", "config", "get", CADENCE_CONFIG_PATH, "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise ValueError("OpenClaw returned an invalid heartbeat cadence") from error
+    if not isinstance(value, str):
+        raise ValueError("Captain heartbeat cadence read-back is not a string")
+    return value
+
+
+def _restore_disabled_cadence(
+    run: Callable[..., subprocess.CompletedProcess],
+) -> None:
+    """Return the heartbeat to its packaged disabled state after a bad check."""
+
+    command = _cadence_command(DISABLED_CADENCE)
+    run([*command, "--dry-run"], check=True)
+    run(command, check=True)
+    if _read_cadence(run) != DISABLED_CADENCE:
+        raise SystemExit("Captain heartbeat cadence rollback could not be verified")
+
+
+def enable_heartbeat(
+    run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> None:
+    """Enable the hourly heartbeat only after applying and verifying its policy."""
+
+    command = _cadence_command(ENABLED_CADENCE)
+    run([*command, "--dry-run"], check=True)
+    run(command, check=True)
+    try:
+        actual = _read_cadence(run)
+    except (ValueError, subprocess.CalledProcessError) as error:
+        _restore_disabled_cadence(run)
+        raise SystemExit("Captain heartbeat cadence verification failed") from error
+    if actual != ENABLED_CADENCE:
+        _restore_disabled_cadence(run)
+        raise SystemExit("Captain heartbeat cadence verification failed")
 
 
 def main() -> None:
     """Install the packaged policy and print a beginner-friendly confirmation."""
 
+    parser = argparse.ArgumentParser(
+        description="Install and verify Captain's OpenClaw heartbeat safety policy"
+    )
+    parser.add_argument(
+        "--enable",
+        action="store_true",
+        help="enable the hourly heartbeat after the policy is verified",
+    )
+    args = parser.parse_args()
+
     # Reaching these messages means the preview, write, read-back, byte check,
     # and hash check all succeeded. Any earlier problem exits with an error.
-    verified_hash = install_policy()
+    verified_hash = install_policy(enable=args.enable)
     print("Captain heartbeat policy installed and verified.")
     print(f"SHA-256: {verified_hash}")
+    if args.enable:
+        print("Captain heartbeat enabled: every 60m.")
+    else:
+        print("Captain heartbeat remains disabled until setup is complete.")
 
 
 # Run main() only when a person executes this file. Importing the module in a

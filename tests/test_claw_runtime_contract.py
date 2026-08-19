@@ -79,10 +79,8 @@ def test_setup_docs_state_the_explicit_default_schedule_timezone():
         assert "host computer's timezone" not in document
 
     assert "use another timezone or cadence" not in readme.lower()
-    assert (
-        "python3 scripts/configure_timezone.py --timezone <IANA_TIMEZONE>"
-        in readme
-    )
+    assert "CAPTAIN_TIME_ZONE=America/Detroit" in readme
+    assert readme.count('--timezone "$CAPTAIN_TIME_ZONE"') == 2
 
 
 def test_timezone_configurator_is_packaged_before_claw_inspection():
@@ -90,10 +88,11 @@ def test_timezone_configurator_is_packaged_before_claw_inspection():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     command = (
         "python3 scripts/configure_timezone.py "
-        "--timezone America/Detroit"
+        '--timezone "$CAPTAIN_TIME_ZONE"'
     )
 
     assert "scripts/configure_timezone.py" in package["files"]
+    assert "CAPTAIN_TIME_ZONE=America/Detroit" in readme
     assert command in readme
     assert readme.index(command) < readme.index("openclaw claws inspect .")
     assert "--check" in readme
@@ -112,10 +111,10 @@ def test_runtime_code_contains_no_fixed_deployment_timezone():
         assert "America/Detroit" not in source
 
 
-def test_profile_declares_hourly_isolated_lightweight_heartbeat():
+def test_profile_keeps_heartbeat_disabled_until_setup_finishes():
     profile = (ROOT / "profiles" / "openclaw.yml").read_text(encoding="utf-8")
     assert re.search(
-        r"(?ms)^  heartbeat:\n    every: 60m\n    lightContext: true\n"
+        r"(?ms)^  heartbeat:\n    every: 0m\n    lightContext: true\n"
         r"    isolatedSession: true\n    timeoutSeconds: 120$",
         profile,
     )
@@ -183,3 +182,68 @@ def test_heartbeat_installer_fails_closed_on_readback_mismatch(
             tmp_path,
             alter_readback=True,
         )
+
+
+def test_heartbeat_installer_enables_only_after_policy_verification(tmp_path):
+    policy = "# policy\n"
+    policy_path = tmp_path / "HEARTBEAT.md"
+    policy_path.write_text(policy, encoding="utf-8")
+    calls = []
+    state = {"prompt": None, "every": "0m"}
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        path = command[3]
+        if command[:3] == ["openclaw", "config", "set"]:
+            if "--dry-run" not in command:
+                state["prompt" if path.endswith("prompt") else "every"] = json.loads(
+                    command[4]
+                )
+            return subprocess.CompletedProcess(command, 0)
+
+        assert command[:3] == ["openclaw", "config", "get"]
+        value = state["prompt" if path.endswith("prompt") else "every"]
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(value))
+
+    install_policy(policy_path, run=fake_run, enable=True)
+
+    prompt_get = [
+        "openclaw", "config", "get",
+        "agents.entries.captain.heartbeat.prompt", "--json",
+    ]
+    cadence_apply = [
+        "openclaw", "config", "set",
+        "agents.entries.captain.heartbeat.every", json.dumps("60m"),
+        "--strict-json",
+    ]
+    cadence_get = [
+        "openclaw", "config", "get",
+        "agents.entries.captain.heartbeat.every", "--json",
+    ]
+    assert calls.index(prompt_get) < calls.index(cadence_apply) < calls.index(cadence_get)
+    assert state == {"prompt": policy, "every": "60m"}
+
+
+def test_heartbeat_installer_returns_to_disabled_when_enable_check_fails(tmp_path):
+    policy_path = tmp_path / "HEARTBEAT.md"
+    policy_path.write_text("# policy\n", encoding="utf-8")
+    state = {"prompt": None, "every": "0m"}
+
+    def fake_run(command, **kwargs):
+        path = command[3]
+        if command[:3] == ["openclaw", "config", "set"]:
+            if "--dry-run" not in command:
+                value = json.loads(command[4])
+                state["prompt" if path.endswith("prompt") else "every"] = value
+            return subprocess.CompletedProcess(command, 0)
+
+        key = "prompt" if path.endswith("prompt") else "every"
+        value = state[key]
+        if key == "every" and value == "60m":
+            value = "unexpected"
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(value))
+
+    with pytest.raises(SystemExit, match="heartbeat cadence"):
+        install_policy(policy_path, run=fake_run, enable=True)
+
+    assert state["every"] == "0m"
