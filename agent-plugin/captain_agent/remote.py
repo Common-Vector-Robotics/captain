@@ -11,6 +11,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 from http.client import HTTPException
+from ipaddress import ip_address
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -102,7 +103,7 @@ def _validated_origin(value: str) -> str:
     try:
         parsed = urlsplit(candidate)
         hostname = parsed.hostname
-        parsed.port
+        port = parsed.port
     except ValueError:
         raise _configuration_error() from None
 
@@ -119,12 +120,24 @@ def _validated_origin(value: str) -> str:
     ):
         raise _configuration_error()
 
+    try:
+        address = ip_address(hostname)
+        canonical_hostname = address.compressed
+        is_ipv6 = address.version == 6
+    except ValueError:
+        canonical_hostname = hostname.lower()
+        is_ipv6 = False
+
     if scheme != "https":
-        loopback = hostname.lower() in {"127.0.0.1", "::1", "localhost"}
+        loopback = canonical_hostname in {"127.0.0.1", "::1", "localhost"}
         if scheme != "http" or not loopback:
             raise _configuration_error()
 
-    return f"{scheme}://{parsed.netloc}"
+    authority = f"[{canonical_hostname}]" if is_ipv6 else canonical_hostname
+    default_port = 443 if scheme == "https" else 80
+    if port is not None and port != default_port:
+        authority = f"{authority}:{port}"
+    return f"{scheme}://{authority}"
 
 
 def _validated_token(value: str) -> str:

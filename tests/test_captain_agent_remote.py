@@ -490,6 +490,90 @@ def test_remote_profile_id_is_one_way_stable_and_configuration_scoped():
     assert MEMBER_ONE_TOKEN not in profile_id
 
 
+@pytest.mark.parametrize(
+    ("left", "right", "canonical"),
+    [
+        (
+            "https://CAPTAIN.Example/",
+            "https://captain.example",
+            "https://captain.example",
+        ),
+        (
+            "https://captain.example:443/",
+            "https://captain.example",
+            "https://captain.example",
+        ),
+        (
+            "http://LOCALHOST:80/",
+            "http://localhost",
+            "http://localhost",
+        ),
+        (
+            "http://127.0.0.1:80/",
+            "http://127.0.0.1",
+            "http://127.0.0.1",
+        ),
+        (
+            "http://[0:0:0:0:0:0:0:1]:80/",
+            "http://[::1]",
+            "http://[::1]",
+        ),
+        (
+            "HTTPS://[2001:0DB8:0:0:0:0:0:1]:443/",
+            "https://[2001:db8::1]",
+            "https://[2001:db8::1]",
+        ),
+    ],
+)
+def test_equivalent_remote_origins_share_one_canonical_profile(
+    left,
+    right,
+    canonical,
+):
+    """Equivalent network origins must not fork one member's durable state."""
+
+    left_config = RemoteConfig(left, MEMBER_ONE_TOKEN)
+    right_config = RemoteConfig(right, MEMBER_ONE_TOKEN)
+
+    assert left_config.base_url == canonical
+    assert right_config.base_url == canonical
+    assert remote_profile_id(left_config) == remote_profile_id(right_config)
+
+
+@pytest.mark.parametrize(
+    ("default_origin", "nondefault_origin", "canonical_nondefault"),
+    [
+        (
+            "https://captain.example",
+            "https://CAPTAIN.Example:8443/",
+            "https://captain.example:8443",
+        ),
+        (
+            "http://localhost",
+            "http://LOCALHOST:8787/",
+            "http://localhost:8787",
+        ),
+        (
+            "https://[2001:db8::1]",
+            "https://[2001:0DB8:0:0:0:0:0:1]:8443/",
+            "https://[2001:db8::1]:8443",
+        ),
+    ],
+)
+def test_nondefault_remote_ports_remain_distinct_profiles(
+    default_origin,
+    nondefault_origin,
+    canonical_nondefault,
+):
+    """A real port change must continue to select a separate remote profile."""
+
+    default_config = RemoteConfig(default_origin, MEMBER_ONE_TOKEN)
+    nondefault_config = RemoteConfig(nondefault_origin, MEMBER_ONE_TOKEN)
+
+    assert nondefault_config.base_url == canonical_nondefault
+    assert remote_profile_id(default_config) != remote_profile_id(nondefault_config)
+
+
 def test_turn_and_pending_context_continue_across_member_token_rotation(tmp_path):
     """A replacement secret for the same member must reopen the same durable profile."""
 
