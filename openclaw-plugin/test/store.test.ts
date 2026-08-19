@@ -256,14 +256,17 @@ describe("CaptainRemoteStore members", () => {
     expect(store.listMembers()[0]).not.toHaveProperty("digest");
   });
 
-  it("rotates a member lookup and retains a revoked auth record", () => {
+  it("rotates only the member secret and retains a revoked auth record", () => {
     const store = openStore();
     const firstToken = issueMemberToken();
     const alice = store.createMember("Alice", "alice@example.com", firstToken);
-    const nextToken = issueMemberToken();
+    const nextToken = store.prepareMemberRotation(alice.memberId);
 
     store.rotateMember(alice.memberId, nextToken);
-    expect(store.findMemberForAuth(firstToken.lookupId)).toBeNull();
+    expect(nextToken.lookupId).toBe(firstToken.lookupId);
+    expect(nextToken.secret).not.toBe(firstToken.secret);
+    expect(store.findMemberForAuth(firstToken.lookupId)?.digest)
+      .toEqual(nextToken.digest);
     expect(store.findMemberForAuth(nextToken.lookupId)?.revokedAt).toBeNull();
 
     store.revokeMember(alice.memberId);

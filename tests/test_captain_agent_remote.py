@@ -60,6 +60,11 @@ TERMINAL_RESULT = {
 }
 
 TEST_PROFILE_ID = "a" * 64
+MEMBER_ONE_LOOKUP = "abcdefghijklmnop"
+MEMBER_TWO_LOOKUP = "qrstuvwxyzABCDEF"
+MEMBER_ONE_TOKEN = f"cap_v1_{MEMBER_ONE_LOOKUP}.{'A' * 43}"
+MEMBER_ONE_ROTATED_TOKEN = f"cap_v1_{MEMBER_ONE_LOOKUP}.{'B' * 43}"
+MEMBER_TWO_TOKEN = f"cap_v1_{MEMBER_TWO_LOOKUP}.{'A' * 43}"
 
 
 def RemoteClientState(path, *, env=None, profile_id=TEST_PROFILE_ID):
@@ -466,22 +471,46 @@ def test_concurrent_report_insert_returns_one_winning_turn(tmp_path):
 
 
 def test_remote_profile_id_is_one_way_stable_and_configuration_scoped():
-    """Origin or credential changes must select a different non-secret state namespace."""
+    """Routine rotation preserves one member profile while origin/member changes isolate."""
 
-    first = RemoteConfig("https://captain.example/", "member-token-one")
-    equivalent = RemoteConfig("https://captain.example", "member-token-one")
-    another_origin = RemoteConfig("https://other.example", "member-token-one")
-    another_credential = RemoteConfig("https://captain.example", "member-token-two")
+    first = RemoteConfig("https://captain.example/", MEMBER_ONE_TOKEN)
+    equivalent = RemoteConfig("https://captain.example", MEMBER_ONE_ROTATED_TOKEN)
+    another_origin = RemoteConfig("https://other.example", MEMBER_ONE_TOKEN)
+    another_member = RemoteConfig("https://captain.example", MEMBER_TWO_TOKEN)
 
     profile_id = remote_profile_id(first)
 
     assert profile_id == remote_profile_id(equivalent)
     assert profile_id != remote_profile_id(another_origin)
-    assert profile_id != remote_profile_id(another_credential)
+    assert profile_id != remote_profile_id(another_member)
     assert len(profile_id) == 64
     assert set(profile_id) <= set("0123456789abcdef")
     assert "captain.example" not in profile_id
-    assert "member-token" not in profile_id
+    assert MEMBER_ONE_LOOKUP not in profile_id
+    assert MEMBER_ONE_TOKEN not in profile_id
+
+
+def test_turn_and_pending_context_continue_across_member_token_rotation(tmp_path):
+    """A replacement secret for the same member must reopen the same durable profile."""
+
+    path = tmp_path / "remote.sqlite3"
+    first_config = RemoteConfig("https://captain.example", MEMBER_ONE_TOKEN)
+    rotated_config = RemoteConfig(
+        "https://captain.example",
+        MEMBER_ONE_ROTATED_TOKEN,
+    )
+    first = RemoteClientState(path, profile_id=remote_profile_id(first_config))
+    turn_id = first.get_or_create_report_turn("report-1", "digest-1")
+    first.replace_pending("report-1", turn_id, ["Ship Friday?"])
+
+    rotated = RemoteClientState(path, profile_id=remote_profile_id(rotated_config))
+
+    assert rotated.get_or_create_report_turn("report-1", "digest-1") == turn_id
+    assert rotated.get_pending("report-1") == PendingCaptainQuestions(
+        "report-1",
+        turn_id,
+        ("Ship Friday?",),
+    )
 
 
 def test_remote_state_requires_an_explicit_profile_namespace(tmp_path):
@@ -578,7 +607,7 @@ def test_profile_scoped_database_contains_no_raw_origin_or_credential(tmp_path):
     """Durable retry state may retain only the one-way remote profile identifier."""
 
     path = tmp_path / "remote.sqlite3"
-    config = RemoteConfig("https://captain.example", "member-token-private")
+    config = RemoteConfig("https://captain.example", MEMBER_ONE_TOKEN)
     profile_id = remote_profile_id(config)
     state = RemoteClientState(path, profile_id=profile_id)
     state.get_or_create_report_turn("report-1", "digest-1")
@@ -586,7 +615,8 @@ def test_profile_scoped_database_contains_no_raw_origin_or_credential(tmp_path):
     persisted = path.read_bytes()
     assert profile_id.encode() in persisted
     assert b"captain.example" not in persisted
-    assert b"member-token-private" not in persisted
+    assert MEMBER_ONE_LOOKUP.encode() not in persisted
+    assert MEMBER_ONE_TOKEN.encode() not in persisted
 
 
 def test_remote_state_path_honors_exact_override_then_xdg_default(monkeypatch, tmp_path):

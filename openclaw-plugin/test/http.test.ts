@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { AuditEvent, AuditSink } from "../src/audit.js";
 import { HttpProblem, type CaptainResult, type TurnInput } from "../src/contracts.js";
 import { createCaptainHttpHandler, readBoundedBody } from "../src/http.js";
 import {
@@ -20,6 +21,16 @@ import { CaptainRemoteStore, type StoredMember } from "../src/store.js";
 const TURN_ID = "018f6f72-7c8a-7d8d-91a5-0b8d9f2f3a4b";
 const OTHER_TURN_ID = "018f6f72-7c8a-7d8d-91a5-0b8d9f2f3a4c";
 const DEFAULT_MAX_REQUEST_BYTES = 262_144;
+
+class RejectingAuditSink implements AuditSink {
+  initialize(): void {}
+
+  append(_event: AuditEvent): void {
+    throw new Error("audit projection unavailable");
+  }
+
+  close(): void {}
+}
 
 interface MemberFixture {
   member: StoredMember;
@@ -61,6 +72,7 @@ function createMember(store: CaptainRemoteStore, name: string): MemberFixture {
 }
 
 async function startFixture(options: {
+  auditLog?: AuditSink;
   maxRequestBytes?: number;
   pollLimiter?: PollLimiter;
   wakeWorker?: ReturnType<typeof vi.fn>;
@@ -68,7 +80,9 @@ async function startFixture(options: {
   const directory = mkdtempSync(join(tmpdir(), "captain-http-test-"));
   temporaryDirectories.push(directory);
   const databasePath = join(directory, "captain.sqlite");
-  const store = new CaptainRemoteStore(databasePath);
+  const store = new CaptainRemoteStore(databasePath, {
+    auditLog: options.auditLog,
+  });
   store.initialize();
   stores.push(store);
 
@@ -166,6 +180,34 @@ async function expectProblem(
 }
 
 describe("Captain HTTP submit", () => {
+  it("keeps submit, wake, poll, and fixed-error semantics when JSONL is unavailable", async () => {
+    const fixture = await startFixture({ auditLog: new RejectingAuditSink() });
+
+    const submitted = await postTurn(fixture, fixture.alice);
+    expect(submitted.status).toBe(202);
+    expect(fixture.wakeWorker).toHaveBeenCalledTimes(1);
+    expect(fixture.store.getTurn({
+      memberId: fixture.alice.member.memberId,
+      reportId: "report-1",
+      turnId: TURN_ID,
+    })?.state).toBe("queued");
+
+    const polled = await fetch(pollUrl(fixture.baseUrl), {
+      headers: authorization(fixture.alice),
+    });
+    expect(polled.status).toBe(200);
+
+    const invalid = await fetch(submitUrl(fixture.baseUrl, "invalid-report"), {
+      method: "POST",
+      headers: {
+        ...authorization(fixture.bob),
+        "content-type": "application/json",
+      },
+      body: "{",
+    });
+    await expectProblem(invalid, 400, "INVALID_JSON");
+  });
+
   it("rejects an incomplete real socket on close when abort events are unavailable", async () => {
     let requestWasComplete: boolean | undefined;
     let settleOutcome!: (value: unknown) => void;

@@ -81,6 +81,6 @@ export interface IssuedToken {
     secret: string;
     digest: Buffer;
 }
-export declare function issueMemberToken(): IssuedToken;
+export declare function issueMemberToken(lookupId?: string): IssuedToken;
 export declare function verifyMemberToken(secret: string, digest: Buffer): boolean;
 export {};

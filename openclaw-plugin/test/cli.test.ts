@@ -222,6 +222,7 @@ describe("Captain member CLI", () => {
     expect(rotated.error).toBeUndefined();
     expect(replacement).toBeDefined();
     expect(replacement).not.toBe(oldToken);
+    expect(replacement!.split(".")[0]).toBe(oldToken!.split(".")[0]);
     expect(rotated.stdout.match(new RegExp(memberId!, "g"))).toHaveLength(1);
     expect(rotated.stdout.match(new RegExp(replacement!.replace(".", "\\."), "g"))).toHaveLength(1);
     expect(rotated.stdout).not.toContain(oldToken!);
@@ -304,7 +305,10 @@ describe("Captain member CLI", () => {
       const store = new CaptainRemoteStore(path);
       store.initialize();
       expect(authenticate(store, oldToken!)).toBe(true);
-      if (replacement) expect(authenticate(store, replacement)).toBe(false);
+      if (replacement) {
+        expect(replacement.split(".")[0]).toBe(oldToken!.split(".")[0]);
+        expect(authenticate(store, replacement)).toBe(false);
+      }
       store.close();
       expect(fixture.api.logger.error).not.toHaveBeenCalled();
     },

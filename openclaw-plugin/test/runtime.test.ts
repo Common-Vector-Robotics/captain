@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { AuditEvent, AuditSink } from "../src/audit.js";
 import {
   canonicalizeTurnInput,
   digestTurnInput,
@@ -29,6 +30,16 @@ const temporaryDirectories: string[] = [];
 const stores: CaptainRemoteStore[] = [];
 const workers: CaptainTurnWorker[] = [];
 
+class RejectingAuditSink implements AuditSink {
+  initialize(): void {}
+
+  append(_event: AuditEvent): void {
+    throw new Error("audit projection unavailable");
+  }
+
+  close(): void {}
+}
+
 afterEach(async () => {
   await Promise.all(workers.splice(0).map((worker) => worker.stop()));
   for (const store of stores.splice(0)) store.close();
@@ -45,10 +56,10 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-function openStore(): CaptainRemoteStore {
+function openStore(auditLog?: AuditSink): CaptainRemoteStore {
   const directory = mkdtempSync(join(tmpdir(), "captain-runtime-test-"));
   temporaryDirectories.push(directory);
-  const store = new CaptainRemoteStore(join(directory, "captain.sqlite"));
+  const store = new CaptainRemoteStore(join(directory, "captain.sqlite"), { auditLog });
   store.initialize();
   stores.push(store);
   return store;
@@ -154,6 +165,24 @@ async function waitForTerminal(
 }
 
 describe("Captain embedded runtime boundary", () => {
+  it("does not strand execution when every JSONL projection attempt fails", async () => {
+    const store = openStore(new RejectingAuditSink());
+    const member = createMember(store, "Audit Offline");
+    const input = reportTurn(90, "Run while audit projection is offline.");
+    const reportId = "audit-offline";
+    reserve(store, member, reportId, input);
+    const run = vi.fn(async () => (
+      embeddedResult(JSON.stringify(captainResult(reportId)))
+    ));
+
+    createWorker(store, createRuntime(run)).start();
+    const key = { memberId: member.memberId, reportId, turnId: input.turn_id };
+    await waitFor(() => store.getTurn(key)?.state === "succeeded", "offline audit turn");
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(store.getTurn(key)).toMatchObject({ state: "succeeded", error: null });
+  });
+
   it("runs an authenticated report only through the fixed Captain parameters", async () => {
     const store = openStore();
     const alice = createMember(store, "Alice Admin");

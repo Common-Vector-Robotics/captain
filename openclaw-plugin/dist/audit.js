@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { chmodSync, closeSync, constants, fchmodSync, fsyncSync, mkdirSync, openSync, writeSync, } from "node:fs";
 import { dirname } from "node:path";
 const EVENT_NAMES = new Set([
@@ -34,6 +35,21 @@ const LIMIT_CODES = [
     ["poll_rate_limited", "POLL_RATE_LIMITED"],
     ["job_rate_limited", "JOB_RATE_LIMITED"],
 ];
+const AUDIT_KEYS = [
+    "event_id",
+    "timestamp",
+    "event",
+    "member_id",
+    "operation",
+    "route",
+    "report_id",
+    "turn_id",
+    "from_state",
+    "to_state",
+    "duration_ms",
+    "code",
+    "count",
+].sort();
 function optionalIdentifier(value, field) {
     if (value === undefined)
         return null;
@@ -65,6 +81,74 @@ function optionalDuration(value) {
     }
     return Math.round(value);
 }
+export function createAuditEvent(input, eventId = randomUUID(), timestamp = new Date().toISOString()) {
+    if (!UUID.test(eventId))
+        throw new TypeError("Audit event ID is invalid.");
+    if (typeof timestamp !== "string" || !Number.isFinite(Date.parse(timestamp))) {
+        throw new TypeError("Audit timestamp is invalid.");
+    }
+    if (!EVENT_NAMES.has(input.event))
+        throw new TypeError("Audit event is invalid.");
+    if (!OPERATIONS.has(input.operation))
+        throw new TypeError("Audit operation is invalid.");
+    if (!ROUTES.has(input.route))
+        throw new TypeError("Audit route is invalid.");
+    if (input.code !== undefined && !STABLE_CODE.test(input.code)) {
+        throw new TypeError("Audit code is invalid.");
+    }
+    return {
+        event_id: eventId,
+        timestamp,
+        event: input.event,
+        member_id: optionalIdentifier(input.memberId, "member"),
+        operation: input.operation,
+        route: input.route,
+        report_id: optionalIdentifier(input.reportId, "report"),
+        turn_id: optionalIdentifier(input.turnId, "turn"),
+        from_state: optionalState(input.fromState),
+        to_state: optionalState(input.toState),
+        duration_ms: optionalDuration(input.durationMs),
+        code: input.code ?? null,
+        count: optionalCount(input.count),
+    };
+}
+export function parseAuditEvent(serialized) {
+    const parsed = JSON.parse(serialized);
+    if (!parsed
+        || typeof parsed !== "object"
+        || JSON.stringify(Object.keys(parsed).sort()) !== JSON.stringify(AUDIT_KEYS)) {
+        throw new TypeError("Stored audit event shape is invalid.");
+    }
+    return createAuditEvent({
+        event: String(parsed.event),
+        memberId: parsed.member_id === null ? undefined : String(parsed.member_id),
+        operation: String(parsed.operation),
+        route: String(parsed.route),
+        reportId: parsed.report_id === null ? undefined : String(parsed.report_id),
+        turnId: parsed.turn_id === null ? undefined : String(parsed.turn_id),
+        fromState: parsed.from_state === null ? undefined : parsed.from_state,
+        toState: parsed.to_state === null ? undefined : parsed.to_state,
+        durationMs: parsed.duration_ms === null ? undefined : Number(parsed.duration_ms),
+        code: parsed.code === null ? undefined : String(parsed.code),
+        count: parsed.count === null ? undefined : Number(parsed.count),
+    }, String(parsed.event_id), String(parsed.timestamp));
+}
+export function limitSummaryAuditInputs(counts) {
+    const inputs = [];
+    for (const [kind, code] of LIMIT_CODES) {
+        const count = counts[kind];
+        if (!Number.isSafeInteger(count) || count <= 0)
+            continue;
+        inputs.push({
+            event: "limit_summary",
+            operation: "limit",
+            route: kind.startsWith("auth_") ? "auth" : kind.startsWith("poll_") ? "poll" : "submit",
+            code,
+            count,
+        });
+    }
+    return inputs;
+}
 export class AuditLog {
     path;
     descriptor = null;
@@ -89,32 +173,9 @@ export class AuditLog {
         }
         this.descriptor = descriptor;
     }
-    record(input) {
+    append(event) {
         if (this.descriptor === null)
             throw new Error("Captain audit log is not initialized.");
-        if (!EVENT_NAMES.has(input.event))
-            throw new TypeError("Audit event is invalid.");
-        if (!OPERATIONS.has(input.operation))
-            throw new TypeError("Audit operation is invalid.");
-        if (!ROUTES.has(input.route))
-            throw new TypeError("Audit route is invalid.");
-        if (input.code !== undefined && !STABLE_CODE.test(input.code)) {
-            throw new TypeError("Audit code is invalid.");
-        }
-        const event = {
-            timestamp: this.now(),
-            event: input.event,
-            member_id: optionalIdentifier(input.memberId, "member"),
-            operation: input.operation,
-            route: input.route,
-            report_id: optionalIdentifier(input.reportId, "report"),
-            turn_id: optionalIdentifier(input.turnId, "turn"),
-            from_state: optionalState(input.fromState),
-            to_state: optionalState(input.toState),
-            duration_ms: optionalDuration(input.durationMs),
-            code: input.code ?? null,
-            count: optionalCount(input.count),
-        };
         const line = Buffer.from(`${JSON.stringify(event)}\n`, "utf8");
         let offset = 0;
         while (offset < line.length) {
@@ -125,19 +186,12 @@ export class AuditLog {
         }
         fsyncSync(this.descriptor);
     }
+    record(input) {
+        this.append(createAuditEvent(input, randomUUID(), this.now()));
+    }
     recordLimitSummary(counts) {
-        for (const [kind, code] of LIMIT_CODES) {
-            const count = counts[kind];
-            if (!Number.isSafeInteger(count) || count <= 0)
-                continue;
-            this.record({
-                event: "limit_summary",
-                operation: "limit",
-                route: kind.startsWith("auth_") ? "auth" : kind.startsWith("poll_") ? "poll" : "submit",
-                code,
-                count,
-            });
-        }
+        for (const input of limitSummaryAuditInputs(counts))
+            this.record(input);
     }
     close() {
         if (this.descriptor === null)

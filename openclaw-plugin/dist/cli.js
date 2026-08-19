@@ -123,7 +123,7 @@ export function registerCaptainCli(api) {
                     if (!store.listMembers().some((member) => member.memberId === memberId)) {
                         throw new Error("Member not found.");
                     }
-                    const issued = issueMemberToken();
+                    const issued = store.prepareMemberRotation(memberId);
                     await writeStdout(`Member: ${memberId}\nToken: ${issued.token}\n`);
                     store.rotateMember(memberId, issued);
                 });

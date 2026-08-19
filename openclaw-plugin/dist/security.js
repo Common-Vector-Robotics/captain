@@ -4,6 +4,7 @@ import { HttpProblem } from "./contracts.js";
 const MAX_LIMITER_KEYS = 10_000;
 const DEFAULT_IDLE_TTL_MS = 15 * 60_000;
 const TOKEN_PATTERN = /^Bearer cap_v1_([A-Za-z0-9_-]{16})\.([A-Za-z0-9_-]{43})$/;
+const LOOKUP_ID_PATTERN = /^[A-Za-z0-9_-]{16}$/;
 const DUMMY_DIGEST = Buffer.alloc(32);
 export class TokenBucketLimiter {
     entries = new Map();
@@ -287,8 +288,10 @@ export class PollLimiter {
         throw new SecurityProblem(429, "RATE_LIMITED", "Too many poll requests.", decision.retryAfterSeconds);
     }
 }
-export function issueMemberToken() {
-    const lookupId = randomBytes(12).toString("base64url");
+export function issueMemberToken(lookupId = randomBytes(12).toString("base64url")) {
+    if (!LOOKUP_ID_PATTERN.test(lookupId)) {
+        throw new TypeError("Member token lookup ID is invalid.");
+    }
     const secret = randomBytes(32).toString("base64url");
     return {
         token: `cap_v1_${lookupId}.${secret}`,

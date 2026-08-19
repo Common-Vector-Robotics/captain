@@ -127,9 +127,10 @@ member token in a URL, query string, ticket, chat log, shell-history command, or
 proxy log.
 
 `list` shows member identity and lifecycle metadata without token material.
-`rotate` invalidates the old token and prints one replacement. `revoke`
-immediately denies submissions, replies, and polls while retaining durable
-records for operator review.
+`rotate` invalidates the old token and prints one replacement. It preserves the
+member's lookup identity, so the coding agent can continue the same pending
+report after routine rotation. `revoke` immediately denies submissions,
+replies, and polls while retaining durable records for operator review.
 
 The database stores a token lookup ID and SHA-256 digest, not the raw token.
 The default database is in the OpenClaw state directory at
@@ -181,12 +182,19 @@ and polls are denied.
 
 ## Review the audit trail
 
-The plugin appends credential-free operator events to
-`captain-remote.sqlite3.audit.jsonl` beside the configured database. Each JSON
-line has the same small field set and records member lifecycle, authenticated
-submit and poll outcomes, turn transitions and timing, stable errors, or an
-aggregated limit count. The file has owner-only permissions and has no public
-HTTP endpoint.
+The plugin commits every credential-free operator event to a SQLite outbox in
+the same transaction as the member, report, or turn change. It then projects
+events to `captain-remote.sqlite3.audit.jsonl` beside the configured database.
+Each JSON line has the same small field set and records member lifecycle,
+authenticated submit and poll outcomes, turn transitions and timing, stable
+errors, or an aggregated limit count. The file has owner-only permissions and
+has no public HTTP endpoint.
+
+JSONL projection is best-effort and at-least-once. Pending events retry during
+later operations, startup, and orderly shutdown. If a write succeeds but its
+delivery marker fails, the same stable `event_id` can appear again. Audit
+consumers should deduplicate on that field. A projection failure does not
+change committed request or worker behavior.
 
 Repeated authentication, polling, and job-limit rejections are summarized at
 bounded intervals instead of producing one audit line per rejected request.

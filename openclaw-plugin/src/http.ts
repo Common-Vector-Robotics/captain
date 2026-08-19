@@ -315,16 +315,6 @@ export function createCaptainHttpHandler(
         const status = reserved.turn.state === "queued" || reserved.turn.state === "started"
           ? 202
           : 200;
-        deps.store.recordAudit({
-          event: "submit_authenticated",
-          memberId,
-          operation: "submit",
-          route: "submit",
-          reportId,
-          turnId,
-          toState: reserved.turn.state,
-          code: reserved.status === "created" ? "CREATED" : "EXISTING",
-        });
         writeJson(res, status, envelope(reserved.turn));
         return true;
       }

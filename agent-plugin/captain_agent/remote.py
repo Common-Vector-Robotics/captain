@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -38,6 +39,9 @@ MAX_RESULT_ITEMS = 32
 MAX_RESULT_STRING_CHARACTERS = 4_096
 MAX_PENDING_QUESTIONS = 20
 MAX_PENDING_QUESTION_CHARACTERS = 1_000
+MEMBER_TOKEN_PATTERN = re.compile(
+    r"^cap_v1_([A-Za-z0-9_-]{16})\.[A-Za-z0-9_-]{43}$"
+)
 
 
 class RemoteConfigurationError(ValueError):
@@ -154,9 +158,13 @@ class RemoteConfig:
 def remote_profile_id(config: RemoteConfig) -> str:
     """Derive a stable non-secret namespace from one normalized remote credential."""
 
-    credential_identity = hashlib.sha256(
-        config.member_token.encode("utf-8")
-    ).digest()
+    member_token = MEMBER_TOKEN_PATTERN.fullmatch(config.member_token)
+    credential_identity = (
+        b"member-lookup\0" + member_token.group(1).encode("ascii")
+        if member_token
+        else b"credential-digest\0"
+        + hashlib.sha256(config.member_token.encode("utf-8")).digest()
+    )
     framed = (
         b"captain-remote-profile-v1\0"
         + config.base_url.encode("ascii")
