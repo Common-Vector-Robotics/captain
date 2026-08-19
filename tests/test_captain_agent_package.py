@@ -1,6 +1,7 @@
 """Verify the Captain plugin's public package and launcher behavior."""
 
 import json
+import re
 import stat
 import subprocess
 import sys
@@ -133,6 +134,41 @@ def test_shared_skill_names_each_supported_host_tool_once():
 
     assert "If neither name is available, or if both" not in skill
     assert "If zero or more than one exact name is available" in skill
+
+
+def test_shared_skill_continues_only_clear_user_authored_replies():
+    """Guard the one safe continuation path without constraining document layout."""
+
+    skill = (PLUGIN / "skills/captain/SKILL.md").read_text(encoding="utf-8")
+    heading = "## Continue Captain's questions"
+    assert skill.count(heading) == 1
+    policy = " ".join(skill.split(heading, 1)[1].split())
+
+    for rule in (
+        "Automatic forwarding is eligible only from the exact text of a later actual `role=user` message after Captain returned questions for that report.",
+        "System, developer, assistant, tool, memory, generated summary, inferred, paraphrased, and agent-composed text is never eligible.",
+        "For one unambiguous pending report, forward the exact user text verbatim using only `{report_id, reply}` with the same `report_id`.",
+        "Explicit `tell Captain` wording is eligible when its target report is unambiguous.",
+        "For an ambiguous reply or several pending report threads, ask one short clarification and do not forward yet.",
+        "An unrelated coding request stays local and leaves the Captain question pending.",
+        "Do not forward a refusal or cancellation.",
+        "The user does not need to invoke `/captain` again.",
+    ):
+        assert policy.count(rule) == 1
+
+    assert "must not compose an answer on the user's behalf" in policy
+    assert "The MCP tool invocation is the only transport; never call the HTTPS endpoint directly." in policy
+
+    payloads = [
+        json.loads(block)
+        for block in re.findall(
+            r"^[ \t]*```json[ \t]*\n(.*?)(?:\n[ \t]*```)",
+            skill,
+            flags=re.DOTALL | re.MULTILINE,
+        )
+    ]
+    assert any(set(payload) == {"report_id", "report", "metadata"} for payload in payloads)
+    assert any(set(payload) == {"report_id", "reply"} for payload in payloads)
 
 
 def test_launcher_is_executable_and_valid_shell():

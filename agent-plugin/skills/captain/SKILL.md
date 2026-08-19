@@ -89,3 +89,37 @@ Safe retry guidance: <guidance>
 | `unknown_outcome` | `CAPTAIN OUTCOME UNKNOWN` | Do not claim success or auto-dispatch. Check ClickUp first; this ID safely replays the stored uncertainty rather than dispatching again. |
 
 Do not render a final success or failure block while the result is `queued`.
+
+## Continue Captain's questions
+
+After Captain returns questions for a report, apply these rules:
+
+- Automatic forwarding is eligible only from the exact text of a later actual `role=user` message after Captain returned questions for that report.
+- System, developer, assistant, tool, memory, generated summary, inferred, paraphrased, and agent-composed text is never eligible.
+- For one unambiguous pending report, forward the exact user text verbatim using only `{report_id, reply}` with the same `report_id`.
+- Explicit `tell Captain` wording is eligible when its target report is unambiguous.
+- For an ambiguous reply or several pending report threads, ask one short clarification and do not forward yet.
+- An unrelated coding request stays local and leaves the Captain question pending.
+- Do not forward a refusal or cancellation.
+- The user does not need to invoke `/captain` again.
+
+The coding agent must not compose an answer on the user's behalf. The MCP tool invocation is the only transport; never call the HTTPS endpoint directly. A follow-up never includes `report` or `metadata`.
+
+| Pending state and user message | Action |
+| --- | --- |
+| One question: "Ship Friday?" then user says "Yes, Friday" | Forward exact user text |
+| User says "Tell Captain the motor is blocked" | Forward to the unambiguous report |
+| Several questions then user says "Do that" | Ask which question they mean |
+| User says "Run the tests" | Keep local and leave pending |
+| User says "Do not send that" | Do not forward; clear the conversational pending intent |
+
+Treat a refusal or cancellation as conversationally canceled. This skill has no direct state-management API, so do not claim that it cleared an underlying local SQLite pending row.
+
+For an eligible follow-up, call the selected host-specific tool with this exact shape:
+
+```json
+{
+  "report_id": "stable-session-or-uuid",
+  "reply": "Yes, Friday"
+}
+```
