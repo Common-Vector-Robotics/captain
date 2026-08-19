@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import stat
 from collections.abc import Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 
 MAX_REPORT_ID_CHARACTERS = 128
@@ -17,6 +19,7 @@ MAX_TURN_ID_CHARACTERS = 128
 MAX_DIGEST_CHARACTERS = 256
 MAX_PENDING_QUESTIONS = 20
 MAX_QUESTION_CHARACTERS = 1_000
+MAX_TIMESTAMP_CHARACTERS = 128
 SQLITE_BUSY_TIMEOUT_SECONDS = 1.0
 
 
@@ -97,13 +100,15 @@ def _validated_questions(questions: Sequence[str]) -> tuple[str, ...]:
 class RemoteClientState:
     """Store turn IDs and the one pending Captain question context per report."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, env: Mapping[str, str] | None = None) -> None:
         self.path = Path(path)
+        self._env = os.environ if env is None else env
         self._initialize_store()
 
     def _connect(self) -> sqlite3.Connection:
         """Open a short-lived connection that waits only briefly for another writer."""
 
+        self._assert_safe_store_path()
         return sqlite3.connect(
             self.path,
             timeout=SQLITE_BUSY_TIMEOUT_SECONDS,
@@ -113,8 +118,7 @@ class RemoteClientState:
     def _initialize_store(self) -> None:
         """Create the owner-only state directory, database, and small schema."""
 
-        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self.path.parent.chmod(0o700)
+        self._prepare_store_path()
 
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -154,7 +158,84 @@ class RemoteClientState:
                 connection.rollback()
                 raise
 
-        self.path.chmod(0o600)
+    def _uses_normal_state_parent(self) -> bool:
+        """Return whether this path came from the current default state location."""
+
+        override = str(self._env.get("CAPTAIN_REMOTE_STATE_PATH", "")).strip()
+        return not override and self.path == remote_state_path(self._env)
+
+    def _prepare_store_path(self) -> None:
+        """Create only missing Captain-owned paths and secure the database file."""
+
+        try:
+            parent_info = os.lstat(self.path.parent)
+            parent_existed = True
+        except FileNotFoundError:
+            self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=False)
+            parent_info = os.lstat(self.path.parent)
+            parent_existed = False
+
+        if stat.S_ISLNK(parent_info.st_mode):
+            raise ValueError("remote state parent must not be a symlink")
+        if not stat.S_ISDIR(parent_info.st_mode):
+            raise ValueError("remote state parent must be a directory")
+        if not parent_existed or self._uses_normal_state_parent():
+            os.chmod(self.path.parent, 0o700)
+
+        try:
+            database_info = os.lstat(self.path)
+        except FileNotFoundError:
+            self._create_private_database_file()
+        else:
+            if stat.S_ISLNK(database_info.st_mode):
+                raise ValueError("remote state database must not be a symlink")
+            self._secure_existing_database_file()
+
+    def _no_follow_flags(self) -> int:
+        """Use the strongest no-follow flag available on this operating system."""
+
+        return getattr(os, "O_NOFOLLOW_ANY", getattr(os, "O_NOFOLLOW", 0))
+
+    def _create_private_database_file(self) -> None:
+        """Create the SQLite file with private permissions before SQLite opens it."""
+
+        flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | self._no_follow_flags()
+        try:
+            descriptor = os.open(self.path, flags, 0o600)
+        except FileExistsError:
+            self._secure_existing_database_file()
+            return
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise ValueError("remote state database must be a regular file")
+            os.fchmod(descriptor, 0o600)
+        finally:
+            os.close(descriptor)
+
+    def _secure_existing_database_file(self) -> None:
+        """Validate and re-mode an existing regular database without following links."""
+
+        database_info = os.lstat(self.path)
+        if stat.S_ISLNK(database_info.st_mode):
+            raise ValueError("remote state database must not be a symlink")
+        flags = os.O_RDWR | self._no_follow_flags()
+        descriptor = os.open(self.path, flags)
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise ValueError("remote state database must be a regular file")
+            os.fchmod(descriptor, 0o600)
+        finally:
+            os.close(descriptor)
+
+    def _assert_safe_store_path(self) -> None:
+        """Reject a replaced symlink or non-regular database before SQLite opens it."""
+
+        parent_info = os.lstat(self.path.parent)
+        database_info = os.lstat(self.path)
+        if stat.S_ISLNK(parent_info.st_mode) or stat.S_ISLNK(database_info.st_mode):
+            raise ValueError("remote state path must not contain a symlink")
+        if not stat.S_ISDIR(parent_info.st_mode) or not stat.S_ISREG(database_info.st_mode):
+            raise ValueError("remote state path must use a directory and regular database")
 
     def _pending_in_transaction(
         self, connection: sqlite3.Connection, report_id: str
@@ -182,6 +263,67 @@ class RemoteClientState:
             return None
         return PendingCaptainQuestions(report_id, parent_turn_id, questions)
 
+    def _turn_rows_in_transaction(
+        self, connection: sqlite3.Connection, report_id: str
+    ) -> list[tuple[str, str, str, str, str, str]]:
+        """Read only structurally valid persisted turns for one report ID."""
+
+        rows = connection.execute(
+            """
+            SELECT report_id, turn_kind, parent_turn_id, payload_digest,
+                turn_id, created_at
+            FROM remote_turns
+            WHERE report_id = ?
+            """,
+            (report_id,),
+        ).fetchall()
+        validated_rows = []
+        for row in rows:
+            if len(row) != 6:
+                raise RemoteStateConflict("remote turn row has an invalid shape")
+            stored_report_id, turn_kind, parent_turn_id, digest, turn_id, created_at = row
+            try:
+                _require_text(stored_report_id, "report_id", MAX_REPORT_ID_CHARACTERS)
+                _require_text(turn_kind, "turn_kind", MAX_TURN_ID_CHARACTERS)
+                _require_text(digest, "payload_digest", MAX_DIGEST_CHARACTERS)
+                _require_text(created_at, "created_at", MAX_TIMESTAMP_CHARACTERS)
+                if stored_report_id != report_id or turn_kind not in {"report", "reply"}:
+                    raise ValueError("remote turn row has an unexpected report or kind")
+                if turn_kind == "report":
+                    if parent_turn_id != "":
+                        raise ValueError("initial remote turn has a parent")
+                else:
+                    _require_text(
+                        parent_turn_id, "parent_turn_id", MAX_TURN_ID_CHARACTERS
+                    )
+                parsed_turn_id = UUID(turn_id)
+                if parsed_turn_id.version != 4 or str(parsed_turn_id) != turn_id:
+                    raise ValueError("remote turn ID is not a canonical UUIDv4")
+            except (TypeError, ValueError, AttributeError):
+                raise RemoteStateConflict("remote turn row is malformed") from None
+            validated_rows.append(row)
+        return validated_rows
+
+    @staticmethod
+    def _matching_turn(
+        rows: Sequence[tuple[str, str, str, str, str, str]],
+        turn_kind: str,
+        parent_turn_id: str,
+        payload_digest: str,
+    ) -> str | None:
+        """Return the only validated row matching one exact retry relationship."""
+
+        matches = [
+            row
+            for row in rows
+            if row[1] == turn_kind
+            and row[2] == parent_turn_id
+            and row[3] == payload_digest
+        ]
+        if len(matches) > 1:
+            raise RemoteStateConflict("remote turn state contains duplicate retry rows")
+        return matches[0][4] if matches else None
+
     def _get_or_create_turn(
         self,
         report_id: str,
@@ -194,29 +336,28 @@ class RemoteClientState:
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
+                rows = self._turn_rows_in_transaction(connection, report_id)
                 if turn_kind == "report":
-                    prior_reports = connection.execute(
-                        """
-                        SELECT payload_digest, turn_id
-                        FROM remote_turns
-                        WHERE report_id = ? AND turn_kind = 'report'
-                            AND parent_turn_id = ''
-                        """,
-                        (report_id,),
-                    ).fetchall()
+                    prior_reports = [row for row in rows if row[1] == "report"]
                     if prior_reports:
-                        if prior_reports[0][0] != payload_digest:
+                        if len(prior_reports) != 1 or prior_reports[0][3] != payload_digest:
                             raise RemoteStateConflict(
                                 "report_id already has a different initial payload"
                             )
                         connection.commit()
-                        return prior_reports[0][1]
+                        return prior_reports[0][4]
                 else:
                     pending = self._pending_in_transaction(connection, report_id)
                     if pending is None or pending.parent_turn_id != parent_turn_id:
                         raise RemoteStateConflict(
                             "reply does not match the current pending Captain question"
                         )
+                    winner = self._matching_turn(
+                        rows, turn_kind, parent_turn_id, payload_digest
+                    )
+                    if winner is not None:
+                        connection.commit()
+                        return winner
 
                 generated_turn_id = str(uuid4())
                 connection.execute(
@@ -236,19 +377,16 @@ class RemoteClientState:
                         _current_utc_time(),
                     ),
                 )
-                winner = connection.execute(
-                    """
-                    SELECT turn_id
-                    FROM remote_turns
-                    WHERE report_id = ? AND turn_kind = ? AND parent_turn_id = ?
-                        AND payload_digest = ?
-                    """,
-                    (report_id, turn_kind, parent_turn_id, payload_digest),
-                ).fetchone()
+                winner = self._matching_turn(
+                    self._turn_rows_in_transaction(connection, report_id),
+                    turn_kind,
+                    parent_turn_id,
+                    payload_digest,
+                )
                 if winner is None:
                     raise RemoteStateConflict("remote turn could not be reserved")
                 connection.commit()
-                return winner[0]
+                return winner
             except Exception:
                 connection.rollback()
                 raise

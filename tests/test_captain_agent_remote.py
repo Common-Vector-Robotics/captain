@@ -281,19 +281,154 @@ def test_state_directory_and_database_are_owner_only(tmp_path):
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
-def test_state_initialization_remodes_existing_private_paths(tmp_path):
-    """A reused state location is tightened even if it was created too broadly."""
+def test_state_initialization_preserves_an_existing_custom_parent_mode(tmp_path):
+    """An explicit state path must not change a shared parent's access mode."""
 
     path = tmp_path / "private" / "remote.sqlite3"
-    path.parent.mkdir(mode=0o755)
+    path.parent.mkdir(mode=0o755, parents=True)
     path.touch(mode=0o644)
     path.parent.chmod(0o755)
     path.chmod(0o644)
 
+    RemoteClientState(path, env={"CAPTAIN_REMOTE_STATE_PATH": str(path)})
+
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o755
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_relative_state_path_preserves_the_current_directory_mode(monkeypatch, tmp_path):
+    """A relative override must not re-mode the working directory or its shared parent."""
+
+    shared_parent = tmp_path / "shared"
+    shared_parent.mkdir(mode=0o755)
+    shared_parent.chmod(0o755)
+    monkeypatch.chdir(shared_parent)
+
+    state = RemoteClientState(Path("remote.sqlite3"))
+    state.get_or_create_report_turn("report-1", "digest-1")
+
+    assert stat.S_IMODE(shared_parent.stat().st_mode) == 0o755
+    assert stat.S_IMODE((shared_parent / "remote.sqlite3").stat().st_mode) == 0o600
+
+
+def test_default_dedicated_parent_is_remoded_when_reopened(monkeypatch, tmp_path):
+    """The normal Captain state directory remains owner-only across process reopen."""
+
+    state_home = tmp_path / "state-home"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    monkeypatch.delenv("CAPTAIN_REMOTE_STATE_PATH", raising=False)
+    path = remote_state_path({"XDG_STATE_HOME": str(state_home)})
+    path.parent.mkdir(mode=0o755, parents=True)
+    path.parent.chmod(0o755)
+    path.touch(mode=0o644)
+    path.chmod(0o644)
+
+    RemoteClientState(path)
     RemoteClientState(path)
 
     assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_symlinked_state_parent_is_rejected_without_touching_its_target(tmp_path):
+    """A database under a symlinked parent cannot redirect local state elsewhere."""
+
+    target = tmp_path / "target"
+    target.mkdir(mode=0o755)
+    target.chmod(0o755)
+    parent_link = tmp_path / "state-link"
+    parent_link.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink"):
+        RemoteClientState(parent_link / "remote.sqlite3")
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o755
+
+
+def test_symlinked_state_database_is_rejected_without_touching_its_target(tmp_path):
+    """A database symlink cannot redirect the store or re-mode another file."""
+
+    parent = tmp_path / "state"
+    parent.mkdir()
+    target = tmp_path / "target.sqlite3"
+    target.touch(mode=0o644)
+    target.chmod(0o644)
+    database_link = parent / "remote.sqlite3"
+    database_link.symlink_to(target)
+
+    with pytest.raises(ValueError, match="symlink"):
+        RemoteClientState(database_link)
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
+
+
+@pytest.mark.parametrize("bad_turn_id", ["not-a-uuid", sqlite3.Binary(b"not-a-uuid")])
+def test_corrupt_initial_turn_id_fails_closed(tmp_path, bad_turn_id):
+    """A persisted initial row cannot return malformed or non-text turn IDs."""
+
+    path = tmp_path / "remote.sqlite3"
+    state = RemoteClientState(path)
+    state.get_or_create_report_turn("report-1", "digest-1")
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "UPDATE remote_turns SET turn_id = ? WHERE report_id = ?",
+            (bad_turn_id, "report-1"),
+        )
+
+    with pytest.raises(RemoteStateConflict):
+        state.get_or_create_report_turn("report-1", "digest-1")
+
+
+def test_corrupt_initial_parent_fails_closed_without_a_second_turn(tmp_path):
+    """An initial report row with a parent is corrupt, not a new report reservation."""
+
+    path = tmp_path / "remote.sqlite3"
+    state = RemoteClientState(path)
+    state.get_or_create_report_turn("report-1", "digest-1")
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "UPDATE remote_turns SET parent_turn_id = ? WHERE report_id = ?",
+            ("unexpected-parent", "report-1"),
+        )
+
+    with pytest.raises(RemoteStateConflict):
+        state.get_or_create_report_turn("report-1", "digest-1")
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM remote_turns WHERE report_id = ?", ("report-1",)
+        ).fetchone()[0] == 1
+
+
+@pytest.mark.parametrize(
+    "column,bad_value",
+    [
+        ("turn_id", "not-a-uuid"),
+        ("turn_id", sqlite3.Binary(b"not-a-uuid")),
+        ("payload_digest", sqlite3.Binary(b"reply-digest")),
+        ("parent_turn_id", sqlite3.Binary(b"parent-turn")),
+    ],
+)
+def test_corrupt_reply_row_fails_closed_instead_of_creating_around_it(
+    tmp_path, column, bad_value
+):
+    """A malformed reply row cannot be bypassed by inserting a second retry turn."""
+
+    path = tmp_path / "remote.sqlite3"
+    state = RemoteClientState(path)
+    state.replace_pending("report-1", "parent-turn", ["Question?"])
+    state.get_or_create_reply_turn("report-1", "parent-turn", "reply-digest")
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            f"UPDATE remote_turns SET {column} = ? WHERE turn_kind = 'reply'",
+            (bad_value,),
+        )
+
+    with pytest.raises(RemoteStateConflict):
+        state.get_or_create_reply_turn("report-1", "parent-turn", "reply-digest")
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM remote_turns WHERE turn_kind = 'reply'"
+        ).fetchone()[0] == 1
 
 
 def test_database_contains_only_allowed_remote_state_fields(tmp_path):
