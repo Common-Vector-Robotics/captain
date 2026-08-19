@@ -1,3 +1,5 @@
+"""Verify runtime-private paths stay out of the public repository."""
+
 import subprocess
 from pathlib import Path
 
@@ -8,6 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def is_gitignored(path: str) -> bool:
+    """Return whether Git ignores the path under the repository rules."""
+
     result = subprocess.run(
         ["git", "check-ignore", "--quiet", "--no-index", path],
         cwd=ROOT,
@@ -40,6 +44,11 @@ def is_gitignored(path: str) -> bool:
         "data/captain.sqlite-journal",
         "data/captain.sqlite-wal",
         "data/captain.sqlite-shm",
+        "agent-plugin/.venv/bin/python",
+        "agent-plugin/local.sqlite3",
+        "agent-plugin/local.sqlite3-wal",
+        "agent-plugin/local.sqlite3-shm",
+        "agent-plugin/local.sqlite3-journal",
         "logs/captain.log",
         "memory/daily/2026-08-13.md",
         "reports/daily-activity.md",

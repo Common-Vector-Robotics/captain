@@ -1,0 +1,43 @@
+#!/bin/sh
+set -eu
+
+plugin_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+
+run_python() {
+  # Run from the plugin root so relative package paths resolve consistently.
+  cd "$plugin_root"
+  exec "$1" -m captain_agent.server
+}
+
+# An explicit interpreter is the user's highest-priority override.
+if [ -n "${CAPTAIN_AGENT_PYTHON:-}" ]; then
+  run_python "$CAPTAIN_AGENT_PYTHON"
+fi
+
+# Prefer the plugin's isolated environment when one has been created.
+if [ -x "$plugin_root/.venv/bin/python" ]; then
+  run_python "$plugin_root/.venv/bin/python"
+fi
+
+# A system Python is safe only when it has the exact MCP v2 API we import.
+if command -v python3 >/dev/null 2>&1 && python3 -c '
+from importlib.metadata import version
+from mcp.server import MCPServer
+
+raise SystemExit(0 if version("mcp").split(".", 1)[0] == "2" else 1)
+' >/dev/null 2>&1; then
+  run_python "$(command -v python3)"
+fi
+
+# uv provides an isolated fallback without modifying system Python.
+if command -v uv >/dev/null 2>&1; then
+  cd "$plugin_root"
+  exec uv run --quiet --no-project \
+    --with-requirements "$plugin_root/requirements.txt" \
+    python -m captain_agent.server
+fi
+
+printf '%s\n' \
+  'Captain agent plugin needs uv or Python with agent-plugin/requirements.txt installed.' \
+  >&2
+exit 1

@@ -37,6 +37,14 @@ Captain is an openclaw-based project manager for technical teams. Captain automa
       Moves from <code>off</code> to <code>shadow</code> to <code>live</code> with visible action reporting.
     </td>
   </tr>
+  <tr>
+    <td colspan="2" valign="top">
+      🤖 <strong>Reports directly from your team's AI coding agents</strong><br>
+      Run <code>/captain</code> in Codex, OpenCode, or OpenClaw—or
+      <code>/captain:captain</code> in Claude Code—to send completed work and
+      verification directly to Captain.
+    </td>
+  </tr>
 </table>
 
 ## A day with Captain
@@ -90,6 +98,19 @@ flowchart TB
     class REPORT daily
     class MONITOR hourly
 ```
+
+## Report coding-agent work to Captain
+
+Captain provides two public packages for coding-agent reports:
+
+- The [coding-agent plugin](agent-plugin/README.md) supports Codex, Claude Code,
+  OpenCode, and OpenClaw while preserving the existing local OpenClaw path.
+- The [Captain Remote OpenClaw plugin](openclaw-plugin/README.md) provides the
+  remote team setup with a Captain-only HTTPS path and no SSH or Gateway token.
+
+The generic self-hosted remote adapter is separate from Intermode/CVR's
+internal AWS-backed Captain integration. It does not replace or modify that
+internal system.
 
 ## Install and set up
 

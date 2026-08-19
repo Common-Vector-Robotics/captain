@@ -1,17 +1,38 @@
+"""Scan shipped text for private deployment data and missing artifacts."""
+
 import json
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PLACEHOLDER_IDS = {"U0123456789", "C0123456789"}
-TEXT_SUFFIXES = {".md", ".json", ".py", ".yml", ".yaml", ".plist"}
+TEXT_SUFFIXES = {".md", ".json", ".py", ".sh", ".yml", ".yaml", ".plist"}
+LAUNCHER = ROOT / "agent-plugin/bin/captain-agent-mcp"
 
 
 def product_text_paths():
+    """Return the text files users receive in the public package."""
+
     package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
-    paths = {ROOT / name for name in package["files"]}
-    paths.update({ROOT / "README.md", ROOT / "BOOTSTRAP.md"})
-    return sorted(path for path in paths if path.is_file() and path.suffix in TEXT_SUFFIXES)
+    paths = []
+    for name in package["files"]:
+        path = ROOT / name
+        if path.is_dir():
+            # A package entry can name a directory, so inspect each shipped
+            # text file beneath it rather than treating the directory as text.
+            paths.extend(
+                child for child in path.rglob("*")
+                if child.is_file()
+                and (child.suffix in TEXT_SUFFIXES or child == LAUNCHER)
+            )
+        elif path.is_file() and path.suffix in TEXT_SUFFIXES:
+            paths.append(path)
+    paths.extend((ROOT / "README.md", ROOT / "BOOTSTRAP.md"))
+    return sorted(set(paths))
+
+
+def test_product_text_paths_include_extensionless_plugin_launcher():
+    assert LAUNCHER in product_text_paths()
 
 
 def test_product_files_contain_no_private_deployment_literals():
@@ -113,3 +134,14 @@ def test_readme_google_auth_is_least_privilege_and_fails_closed():
         assert f"`{scope}`" in normalized
     assert "GOG_KEYRING_BACKEND=file" in normalized
     assert "GOG_KEYRING_PASSWORD" in normalized
+
+
+def test_release_plan_contains_no_private_host_paths():
+    plan_root = ROOT / "docs/superpowers"
+    private_path_pattern = r"/" + r"Users/(?!example(?:/|\b))[^/\s]+/"
+    failures = [
+        str(path.relative_to(ROOT))
+        for path in plan_root.rglob("*.md")
+        if re.search(private_path_pattern, path.read_text(encoding="utf-8"))
+    ]
+    assert failures == []

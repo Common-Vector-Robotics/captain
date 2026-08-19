@@ -1,0 +1,43 @@
+{
+  "name": "@common-vector-robotics/captain-remote",
+  "version": "0.1.0",
+  "description": "Authenticated Captain-only report ingress for coding agents.",
+  "type": "module",
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "README.md",
+    "examples"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "test": "vitest"
+  },
+  "engines": {
+    "node": ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0"
+  },
+  "peerDependencies": {
+    "openclaw": "2026.7.2-beta.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "openclaw": "2026.7.2-beta.5",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "runtimeExtensions": [
+      "./dist/index.js"
+    ],
+    "install": {
+      "minHostVersion": ">=2026.7.2-beta.5"
+    },
+    "compat": {
+      "pluginApi": ">=2026.7.2-beta.5"
+    }
+  }
+}
