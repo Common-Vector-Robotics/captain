@@ -274,8 +274,9 @@ class RemoteClientState:
                 turn_id, created_at
             FROM remote_turns
             WHERE report_id = ?
+                OR (typeof(report_id) != 'text' AND CAST(report_id AS TEXT) = ?)
             """,
-            (report_id,),
+            (report_id, report_id),
         ).fetchall()
         validated_rows = []
         for row in rows:

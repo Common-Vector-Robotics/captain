@@ -379,6 +379,34 @@ def test_corrupt_initial_turn_id_fails_closed(tmp_path, bad_turn_id):
         state.get_or_create_report_turn("report-1", "digest-1")
 
 
+@pytest.mark.parametrize("turn_kind", ["report", "reply"])
+def test_blob_report_id_candidate_fails_closed_without_a_second_turn(tmp_path, turn_kind):
+    """A non-text report ID must not hide a corrupt initial or reply retry row."""
+
+    path = tmp_path / "remote.sqlite3"
+    state = RemoteClientState(path)
+    if turn_kind == "report":
+        state.get_or_create_report_turn("report-1", "digest-1")
+    else:
+        state.replace_pending("report-1", "parent-turn", ["Question?"])
+        state.get_or_create_reply_turn("report-1", "parent-turn", "reply-digest")
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "UPDATE remote_turns SET report_id = ? WHERE turn_kind = ?",
+            (sqlite3.Binary(b"report-1"), turn_kind),
+        )
+
+    with pytest.raises(RemoteStateConflict):
+        if turn_kind == "report":
+            state.get_or_create_report_turn("report-1", "digest-1")
+        else:
+            state.get_or_create_reply_turn("report-1", "parent-turn", "reply-digest")
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM remote_turns WHERE turn_kind = ?", (turn_kind,)
+        ).fetchone()[0] == 1
+
+
 def test_corrupt_initial_parent_fails_closed_without_a_second_turn(tmp_path):
     """An initial report row with a parent is corrupt, not a new report reservation."""
 
