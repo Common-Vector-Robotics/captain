@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import hashlib
 import json
 import os
 import sqlite3
-from collections.abc import Mapping
 from typing import Any
 
-from .client_state import RemoteClientState, RemoteStateConflict, remote_state_path
+from .client_state import (
+    RemoteClientState,
+    RemoteStateConflict,
+    remote_state_path,
+)
 from .remote import (
     RemoteCaptainClient,
     RemoteConfigurationError,
@@ -36,7 +40,9 @@ def _result(
 ) -> CaptainReportResult:
     """Build a fixed diagnostic without reflecting input or configuration."""
 
-    safe_report_id = report_id if isinstance(report_id, str) else "invalid-report"
+    safe_report_id = (
+        report_id if isinstance(report_id, str) else "invalid-report"
+    )
     return canonical_result(
         safe_report_id,
         status,
@@ -44,7 +50,9 @@ def _result(
     )
 
 
-def _report_digest(report: Mapping[str, Any], metadata: Mapping[str, Any]) -> str:
+def _report_digest(
+    report: Mapping[str, Any], metadata: Mapping[str, Any]
+) -> str:
     """Hash canonical report content without storing either input object."""
 
     canonical = json.dumps(
@@ -80,7 +88,8 @@ def _update_pending(
             report_id,
             "unknown_outcome",
             captain_feedback=(
-                "Captain completed remotely, but continuation state could not be saved."
+                "Captain completed remotely, but continuation state could "
+                "not be saved."
             ),
         )
     return result
@@ -94,7 +103,20 @@ def handle_captain_turn(
     env: Mapping[str, str] | None = None,
     cancel_pending: bool = False,
 ) -> CaptainReportResult:
-    """Send one report or one exact follow-up through the selected transport."""
+    """Send one report or one exact follow-up over the selected transport.
+
+    Args:
+        report_id: Caller-chosen report identifier.
+        report: Session report object for an initial report turn.
+        metadata: Optional background information for the report.
+        reply: User-authored answer to the pending Captain question.
+        env: Environment mapping override used by tests.
+        cancel_pending: Clear the local pending question context instead
+            of sending anything.
+
+    Returns:
+        The canonical Captain result for this turn.
+    """
 
     if not isinstance(cancel_pending, bool) or (
         cancel_pending and (report is not None or reply is not None)
@@ -112,7 +134,10 @@ def handle_captain_turn(
         return _result(
             report_id,
             "needs_configuration",
-            "Set both CAPTAIN_REMOTE_URL and CAPTAIN_MEMBER_TOKEN for remote mode.",
+            (
+                "Set both CAPTAIN_REMOTE_URL and CAPTAIN_MEMBER_TOKEN for "
+                "remote mode."
+            ),
         )
 
     if remote_config is None:
@@ -122,16 +147,24 @@ def handle_captain_turn(
                 "needs_configuration",
                 "Automatic Captain continuation requires remote mode.",
             )
-        # Preserve the established local function call when no injected env exists.
+        # Preserve the established local call when no injected env exists.
         if env is None:
             return handle_session_report(report_id, report, metadata)
-        return handle_session_report(report_id, report, metadata, env=environment)
+        return handle_session_report(
+            report_id, report, metadata, env=environment
+        )
 
-    if not isinstance(report_id, str) or REPORT_ID_PATTERN.fullmatch(report_id) is None:
+    if (
+        not isinstance(report_id, str)
+        or REPORT_ID_PATTERN.fullmatch(report_id) is None
+    ):
         return _result(
             report_id,
             "failed",
-            "report_id must contain 1-128 ASCII letters, numbers, '.', '_', or '-'.",
+            (
+                "report_id must contain 1-128 ASCII letters, numbers, "
+                "'.', '_', or '-'."
+            ),
         )
 
     remote_metadata: Mapping[str, Any] = {} if metadata is None else metadata
@@ -146,7 +179,9 @@ def handle_captain_turn(
             )
     else:
         try:
-            validation = validate_report_input(report_id, report, remote_metadata)
+            validation = validate_report_input(
+                report_id, report, remote_metadata
+            )
         except (TypeError, ValueError, RecursionError):
             return _result(
                 report_id,
@@ -180,7 +215,10 @@ def handle_captain_turn(
             return _result(
                 report_id,
                 "failed",
-                "The remote Captain request must be valid JSON up to 262,144 bytes.",
+                (
+                    "The remote Captain request must be valid JSON up to "
+                    "262,144 bytes."
+                ),
             )
 
     try:
@@ -244,11 +282,20 @@ def handle_captain_turn(
         try:
             digest = _report_digest(report, remote_metadata)
             turn_id = state.get_or_create_report_turn(report_id, digest)
-        except (OSError, TypeError, ValueError, sqlite3.Error, RemoteStateConflict):
+        except (
+            OSError,
+            TypeError,
+            ValueError,
+            sqlite3.Error,
+            RemoteStateConflict,
+        ):
             return _result(
                 report_id,
                 "failed",
-                "This report ID does not match its previously saved remote report.",
+                (
+                    "This report ID does not match its previously saved "
+                    "remote report."
+                ),
             )
         payload = {
             "turn_id": turn_id,

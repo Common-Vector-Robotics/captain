@@ -15,17 +15,17 @@ ClickUp work.
 
 from __future__ import annotations
 
-import json
-import os
-import re
-import sqlite3
-import subprocess
-import threading
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
+import os
 from pathlib import Path
+import re
+import sqlite3
+import subprocess
+import threading
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -116,7 +116,8 @@ def _redact_secrets(value: str) -> str:
 
     # Hide values assigned to common secret names such as ``api_key``.
     return re.sub(
-        r"(?i)\b(access[_-]?token|api[_-]?key|authorization|auth|password|secret|token)"
+        r"(?i)\b(access[_-]?token|api[_-]?key|authorization|auth"
+        r"|password|secret|token)"
         r"(\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)",
         r"\1\2[redacted]",
         text,
@@ -165,7 +166,19 @@ def canonical_result(
     questions: list[str] | None = None,
     warnings: list[str] | None = None,
 ) -> CaptainReportResult:
-    """Build the public result returned by every code path."""
+    """Build the public result returned by every code path.
+
+    Args:
+        report_id: Caller-chosen report identifier.
+        status: Proposed result status; unknown values are downgraded.
+        captain_feedback: Human-readable summary for the caller.
+        clickup_updates: ClickUp actions Captain performed, if any.
+        questions: Follow-up questions Captain asked, if any.
+        warnings: Warnings to include; the list is copied, not mutated.
+
+    Returns:
+        A CaptainReportResult with every public field populated.
+    """
 
     # Copy the warnings so this function never changes the caller's list.
     result_warnings = list(warnings or [])
@@ -278,20 +291,31 @@ def validate_report_input(
 ) -> CaptainReportResult | None:
     """Validate public arguments without raising user-facing exceptions.
 
-    Valid input returns ``None``. Invalid input returns the normal public result
-    type so the caller always receives the same set of fields.
+    Args:
+        report_id: Caller-chosen report identifier.
+        report: Session report object to validate.
+        metadata: Background information object to validate.
+
+    Returns:
+        None for valid input. Invalid input returns the normal public
+        result type so the caller always receives the same set of fields.
     """
 
     # Use a harmless ID in an error result when the supplied ID is not text.
-    result_report_id = report_id if isinstance(report_id, str) else "invalid-report"
+    result_report_id = (
+        report_id if isinstance(report_id, str) else "invalid-report"
+    )
 
     # The ID must be short and safe to use in a command and database lookup.
-    if not isinstance(report_id, str) or not REPORT_ID_PATTERN.fullmatch(report_id):
+    if not isinstance(report_id, str) or not REPORT_ID_PATTERN.fullmatch(
+        report_id
+    ):
         return canonical_result(
             result_report_id,
             "failed",
             captain_feedback=(
-                "report_id must contain 1-128 ASCII letters, numbers, '.', '_', or '-'."
+                "report_id must contain 1-128 ASCII letters, numbers, "
+                "'.', '_', or '-'."
             ),
         )
 
@@ -324,7 +348,9 @@ def validate_report_input(
     # Measure the exact number of bytes that the two dictionaries will use.
     payload_size = sum(
         len(
-            json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")
+            json.dumps(
+                value, ensure_ascii=False, sort_keys=True
+            ).encode("utf-8")
         )
         for value in (report, metadata)
     )
@@ -332,7 +358,9 @@ def validate_report_input(
         return canonical_result(
             report_id,
             "failed",
-            captain_feedback="report and metadata must be at most 1,000,000 bytes.",
+            captain_feedback=(
+                "report and metadata must be at most 1,000,000 bytes."
+            ),
         )
 
     # Captain needs at least one summary item to understand what changed.
@@ -358,6 +386,14 @@ def build_status_update_prompt(
 
     This helper removes reserved fields again because callers can use it
     directly without first calling ``validate_report_input``.
+
+    Args:
+        report_id: Caller-chosen report identifier.
+        report: Validated session report object.
+        metadata: Validated background information.
+
+    Returns:
+        The complete prompt text sent to Captain.
     """
 
     # Remove blocked fields, then format the report so Captain can read it.
@@ -376,7 +412,7 @@ def build_status_update_prompt(
         ensure_ascii=False,
     )
 
-    # Combine the instructions, report, and background information into one message.
+    # Combine the instructions, report, and background into one message.
     return f"""You are Captain preparing a user-operated `/captain` status update.
 
 Process this report with your normal PM capabilities. Use normal PM judgment to identify what changed, what is missing, who owns it, and what decision or action is needed. Audit every ClickUp write. Do not claim identity, authentication, hosted services, or actions that are not supported by the supplied evidence.
@@ -409,7 +445,11 @@ def _read_timeout_seconds(env: Mapping[str, str]) -> int:
     # Use the configured whole number, or the default when it is not a number.
     try:
         configured_timeout = int(
-            str(env.get("CAPTAIN_AGENT_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS))
+            str(
+                env.get(
+                    "CAPTAIN_AGENT_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS
+                )
+            )
         )
     except ValueError:
         return DEFAULT_TIMEOUT_SECONDS
@@ -422,7 +462,16 @@ def build_openclaw_command(
     report_id: str,
     env: Mapping[str, str],
 ) -> tuple[list[str], int]:
-    """Build the OpenClaw command and return its effective timeout."""
+    """Build the OpenClaw command and return its effective timeout.
+
+    Args:
+        report_id: Caller-chosen report identifier.
+        env: Environment mapping holding OpenClaw settings.
+
+    Returns:
+        A tuple (command, timeout_seconds), where command is the full
+        argument list and timeout_seconds is the effective timeout.
+    """
 
     # Read each setting, leaving it blank when the user did not set it.
     timeout_seconds = _read_timeout_seconds(env)
@@ -462,8 +511,20 @@ def run_openclaw_agent(
 ) -> subprocess.CompletedProcess[str]:
     """Run one OpenClaw turn without invoking a shell.
 
-    A start error means OpenClaw did not run. An error after the process starts
-    is uncertain because Captain may already have acted on the report.
+    A start error means OpenClaw did not run. An error after the process
+    starts is uncertain because Captain may already have acted on the
+    report.
+
+    Args:
+        command: Complete OpenClaw argument list.
+        prompt: Message text sent through standard input.
+        timeout_seconds: Effective OpenClaw timeout in seconds.
+
+    Returns:
+        The completed process with exit code and captured output.
+
+    Raises:
+        subprocess.TimeoutExpired: If OpenClaw exceeded the allowed time.
     """
 
     # Start OpenClaw and prepare to send input and collect its two outputs.
@@ -498,7 +559,7 @@ def run_openclaw_agent(
                 process.wait()
             raise
         except BaseException:
-            # Also stop OpenClaw if reading its output fails or the user interrupts.
+            # Also stop OpenClaw when reading fails or the user interrupts.
             process.kill()
             raise
 
@@ -530,7 +591,9 @@ def _find_json_object(value: str) -> Mapping[str, Any] | None:
         return parsed
 
     # Next, try JSON placed inside a Markdown code block.
-    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", value, re.IGNORECASE)
+    fence_match = re.search(
+        r"```(?:json)?\s*([\s\S]*?)\s*```", value, re.IGNORECASE
+    )
     if fence_match:
         try:
             parsed = json.loads(fence_match.group(1).strip())
@@ -566,7 +629,10 @@ def _find_assistant_text(response: Mapping[str, Any]) -> str | None:
     payloads = response_body.get("payloads")
     if isinstance(payloads, list):
         for payload in payloads:
-            if isinstance(payload, Mapping) and isinstance(payload.get("text"), str):
+            if (
+                isinstance(payload, Mapping)
+                and isinstance(payload.get("text"), str)
+            ):
                 return payload["text"]
 
     # Older response shapes may store the final message under ``meta``.
@@ -580,15 +646,21 @@ def _find_assistant_text(response: Mapping[str, Any]) -> str | None:
     for key in ("text", "reply", "output"):
         if isinstance(response_body.get(key), str):
             return response_body[key]
+
     # No assistant message was present in any supported location.
     return None
 
 
-def _find_captain_result(response: Mapping[str, Any]) -> Mapping[str, Any] | None:
+def _find_captain_result(
+    response: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
     """Return Captain's result object from direct JSON or response text."""
 
     # Use the response directly when it already has Captain's required fields.
-    if isinstance(response.get("status"), str) and "captain_feedback" in response:
+    if (
+        isinstance(response.get("status"), str)
+        and "captain_feedback" in response
+    ):
         return response
 
     # Otherwise, find the assistant's message and read the JSON inside it.
@@ -606,7 +678,9 @@ def _read_string_list(value: Any) -> list[str] | None:
         return []
 
     # Reject values that are not a list of text items.
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) for item in value
+    ):
         return None
 
     return value
@@ -633,7 +707,15 @@ def normalize_captain_agent_response(
     report_id: str,
     response: Mapping[str, Any],
 ) -> CaptainReportResult:
-    """Convert OpenClaw output into Captain's public result shape."""
+    """Convert OpenClaw output into Captain's public result shape.
+
+    Args:
+        report_id: Caller-chosen report identifier.
+        response: Parsed OpenClaw JSON response object.
+
+    Returns:
+        The canonical Captain result for this response.
+    """
 
     # Find Captain's result inside the different formats OpenClaw may return.
     captain_result = _find_captain_result(response)
@@ -649,7 +731,9 @@ def normalize_captain_agent_response(
     # Read each field that the public result requires.
     status = captain_result.get("status")
     feedback = captain_result.get("captain_feedback")
-    clickup_updates = _read_clickup_updates(captain_result.get("clickup_updates"))
+    clickup_updates = _read_clickup_updates(
+        captain_result.get("clickup_updates")
+    )
     questions = _read_string_list(captain_result.get("questions"))
     warnings = _read_string_list(captain_result.get("warnings"))
 
@@ -664,7 +748,9 @@ def normalize_captain_agent_response(
         return canonical_result(
             report_id,
             "unknown_outcome",
-            captain_feedback="OpenClaw returned malformed Captain completion evidence.",
+            captain_feedback=(
+                "OpenClaw returned malformed Captain completion evidence."
+            ),
         )
 
     # Build the standard set of fields used in every result.
@@ -718,6 +804,16 @@ def invoke_openclaw(
 
     A process-start failure is safe to retry. Any failure after launch is
     uncertain because Captain may already have acted on the report.
+
+    Args:
+        report_id: Caller-chosen report identifier.
+        report: Session report object.
+        metadata: Background information for the report.
+        env: Environment mapping holding OpenClaw settings.
+        runner: Callable used to execute the OpenClaw process.
+
+    Returns:
+        The canonical Captain result for this request.
     """
 
     # Stop before starting OpenClaw when the report is invalid.
@@ -744,8 +840,11 @@ def invoke_openclaw(
             warnings=[_redact_and_shorten_text(error)],
         )
     except Exception as error:
-        # Any other failure may have happened after Captain received the report.
-        return _build_unknown_outcome(report_id, "OpenClaw runner failed", error)
+        # Any other failure may have happened after Captain received the
+        # report.
+        return _build_unknown_outcome(
+            report_id, "OpenClaw runner failed", error
+        )
 
     # When OpenClaw reports failure, Captain may still have finished the work.
     if completed_process.returncode != 0:
@@ -775,7 +874,14 @@ def invoke_openclaw(
 
 # Remember which reports were already sent.
 def report_store_path(env: Mapping[str, str]) -> Path:
-    """Choose the SQLite path used to prevent duplicate report processing."""
+    """Choose the SQLite path used to prevent duplicate report processing.
+
+    Args:
+        env: Environment mapping consulted for path overrides.
+
+    Returns:
+        The SQLite database path for the report store.
+    """
 
     # Use the exact path supplied by the user when one is configured.
     override = str(env.get("CAPTAIN_AGENT_STATE_PATH", "")).strip()
@@ -837,7 +943,9 @@ def _choose_project_name(
         metadata.get("repo"),
     )
     for project_name in project_names:
-        cleaned_name = str(project_name).strip() if project_name is not None else ""
+        cleaned_name = (
+            str(project_name).strip() if project_name is not None else ""
+        )
         if cleaned_name:
             return cleaned_name
 
@@ -882,14 +990,16 @@ def _reserve_report_id(
                     (report_id,),
                 ).fetchone()
 
-                # Another request inside this program is sending this report now.
+                # Another request in this program is sending this report now.
                 if report_id in _ACTIVE_REPORT_IDS:
                     reservation = _ReportReservation(
                         should_send=False,
                         saved_result=canonical_result(
                             report_id,
                             "queued",
-                            captain_feedback="This report is already processing.",
+                            captain_feedback=(
+                                "This report is already processing."
+                            ),
                         ),
                     )
                 # No saved row means this is the first call for the report ID.
@@ -943,28 +1053,30 @@ def _reserve_report_id(
                             should_send=True,
                             saved_result=None,
                         )
-                    # Return finished or uncertain work without sending it again.
+                    # Return finished or uncertain work without resending.
                     elif (
                         stored_status in STATUSES_THAT_MUST_BE_REUSED
                         and stored_result_json
                     ):
                         reservation = _ReportReservation(
                             should_send=False,
-                            saved_result=CaptainReportResult.model_validate_json(
-                                stored_result_json
+                            saved_result=(
+                                CaptainReportResult.model_validate_json(
+                                    stored_result_json
+                                )
                             ),
                         )
                     else:
-                        # A leftover ``processing`` entry means the prior program
-                        # stopped before it could save Captain's result.
-                        # Captain may still have acted, so sending again could
-                        # duplicate ClickUp work.
+                        # A leftover ``processing`` entry means the prior
+                        # program stopped before it could save Captain's
+                        # result. Captain may still have acted, so sending
+                        # again could duplicate ClickUp work.
                         unknown_result = canonical_result(
                             report_id,
                             "unknown_outcome",
                             captain_feedback=(
-                                "A previous attempt may have completed; this report "
-                                "was not re-dispatched."
+                                "A previous attempt may have completed; "
+                                "this report was not re-dispatched."
                             ),
                         )
                         connection.execute(
@@ -985,10 +1097,11 @@ def _reserve_report_id(
                             saved_result=unknown_result,
                         )
 
-                # Save the decision before this function releases the database lock.
+                # Save the decision before this function releases the
+                # database lock.
                 connection.commit()
             except Exception:
-                # If saving fails, undo the database change and active-ID change.
+                # If saving fails, undo the database and active-ID changes.
                 connection.rollback()
                 if added_active_id:
                     _ACTIVE_REPORT_IDS.discard(report_id)
@@ -1030,11 +1143,22 @@ def handle_session_report(
 ) -> CaptainReportResult:
     """Run the complete reporting flow for one session report.
 
-    This is the function called when another coding agent submits a report. It
-    checks the report, sends it at most once, and remembers Captain's result.
+    This is the function called when another coding agent submits a
+    report. It checks the report, sends it at most once, and remembers
+    Captain's result.
+
+    Args:
+        report_id: Caller-chosen report identifier.
+        report: Session report object.
+        metadata: Background information for the report.
+        env: Environment mapping override used by tests.
+        runner: Callable used to execute the OpenClaw process.
+
+    Returns:
+        The canonical Captain result for this report.
     """
 
-    # Use test settings when supplied; otherwise use this program's real settings.
+    # Use test settings when supplied; otherwise this program's settings.
     environment = os.environ if env is None else env
 
     # Step 1: Check the report before creating files or starting OpenClaw.

@@ -1,6 +1,7 @@
-import { type AuditEventInput, type AuditSink } from "./audit.js";
-import { type CaptainResult, type TurnInput, type TurnState } from "./contracts.js";
-import { type IssuedToken } from "./security.js";
+import { type AuditEventInput, type AuditSink } from './audit.js';
+import { type CaptainResult, type TurnInput, type TurnState } from './contracts.js';
+import { type IssuedToken } from './security.js';
+/** Public identity fields of a stored Captain member. */
 export interface StoredMember {
     memberId: string;
     name: string;
@@ -9,15 +10,18 @@ export interface StoredMember {
     rotatedAt: string | null;
     revokedAt: string | null;
 }
+/** A stored member including its credential lookup ID and digest. */
 export interface StoredMemberAuth extends StoredMember {
     lookupId: string;
     digest: Buffer;
 }
+/** Composite identifier of one turn. */
 export interface TurnKey {
     memberId: string;
     reportId: string;
     turnId: string;
 }
+/** A stored report row with its server-owned session ID. */
 export interface StoredReport {
     memberId: string;
     reportId: string;
@@ -25,18 +29,23 @@ export interface StoredReport {
     createdAt: string;
     updatedAt: string;
 }
-export type TerminalTurnState = Exclude<TurnState, "queued" | "started">;
+/** A turn state that can no longer change. */
+export type TerminalTurnState = Exclude<TurnState, 'queued' | 'started'>;
+/** Maximum accepted length of a member display name. */
 export declare const MAX_MEMBER_NAME_CHARACTERS = 100;
+/** Construction options for the durable Captain remote store. */
 export interface CaptainRemoteStoreOptions {
     maxGlobalActiveTurns?: number;
     auditLog?: AuditSink;
 }
+/** A stable public error attached to a failed turn. */
 export interface StoredTurnError {
     code: string;
     message: string;
 }
+/** A fully materialized stored turn row. */
 export interface StoredTurn extends TurnKey {
-    kind: TurnInput["kind"];
+    kind: TurnInput['kind'];
     requestDigest: string;
     payload: TurnInput;
     state: TurnState;
@@ -47,20 +56,25 @@ export interface StoredTurn extends TurnKey {
     startedAt: string | null;
     finishedAt: string | null;
 }
+/** A claimed turn joined with its member and report rows. */
 export interface ClaimedTurn extends StoredTurn {
     member: StoredMember;
     report: StoredReport;
 }
+/** Input required to reserve a new turn idempotently. */
 export interface ReserveTurnInput extends TurnKey {
     requestDigest: string;
     payloadJson: string;
 }
-export type ReserveTurnResult = {
-    status: "created" | "existing";
+/** Outcome of a turn reservation, created or replayed. */
+export interface ReserveTurnResult {
+    status: 'created' | 'existing';
     report: StoredReport;
     turn: StoredTurn;
-};
+}
+/** Trims and validates a member display name. */
 export declare function normalizeMemberName(value: string): string;
+/** SQLite-backed durable store for members, reports, turns, and audits. */
 export declare class CaptainRemoteStore {
     private readonly databasePath;
     private database;

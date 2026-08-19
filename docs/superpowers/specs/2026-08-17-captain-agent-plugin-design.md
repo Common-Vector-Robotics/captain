@@ -1,4 +1,4 @@
-# Captain Agent Plugin Design
+# Captain agent plugin design
 
 **Date:** 2026-08-17
 
@@ -13,7 +13,7 @@ through a `/captain` skill.
 The plugin is a complete product by itself. It uses the Gateway selected by the
 user's OpenClaw CLI rather than implementing its own network transport.
 
-## Source and Delivery
+## Source and delivery
 
 All product work targets `Common-Vector-Robotics/captain`. The feature branch
 must start from a freshly fetched `origin/main`; private Captain repositories
@@ -25,7 +25,7 @@ The finished branch must be pushed and submitted as a pull request into
 creation, fetch `origin/main` again, incorporate any new upstream commits, and
 rerun the focused and full verification gates.
 
-## Product Boundary
+## Product boundary
 
 The user owns and operates every Captain component:
 
@@ -46,7 +46,7 @@ The coding agent, MCP server, and OpenClaw CLI run on the same machine. The
 configured Gateway and Captain agent may run there or on a remote host. ClickUp
 and the user's selected model provider remain user-configured dependencies.
 
-## User Experience
+## User experience
 
 1. The user installs and configures the public Captain Claw.
 2. The user installs the `agent-plugin/` bundle and its Python requirements.
@@ -67,7 +67,7 @@ The plugin never asks the user to map work to ClickUp manually. Captain retains
 that judgment and asks for clarification only when the evidence is genuinely
 ambiguous.
 
-## Repository Layout
+## Repository layout
 
 The feature stays isolated from Captain's daily-loop implementation:
 
@@ -90,15 +90,15 @@ tests/
 ```
 
 `server.py` registers the MCP tool and owns only protocol translation.
-`reporting.py` owns validation, local idempotency state, the OpenClaw subprocess,
-and response normalization. Keeping those responsibilities separate allows the
+`reporting.py` owns validation, local idempotency state, the OpenClaw
+subprocess, and response normalization. Keeping those responsibilities separate allows the
 reporting behavior to be tested without starting an MCP process.
 
 The root `package.json` includes `agent-plugin/` in the published package. The
 existing Claw manifest does not install or start the coding-agent plugin inside
 Captain's own workspace.
 
-## MCP Contract
+## MCP contract
 
 The server exposes one mutating tool:
 
@@ -145,7 +145,7 @@ Every tool result uses this structured shape:
 prove whether Captain finished. The skill must not describe that state as a
 failure or claim that ClickUp is unchanged.
 
-## OpenClaw Adapter
+## OpenClaw adapter
 
 The adapter invokes the supported CLI without a shell:
 
@@ -169,7 +169,7 @@ envelopes. Invalid or non-zero responses are bounded before being returned in a
 warning so large output and incidental sensitive content are not reflected back
 unlimited.
 
-## Idempotency and Local State
+## Idempotency and local state
 
 The MCP server stores report state in a small SQLite database at
 `$XDG_STATE_HOME/captain-agent/reports.sqlite3`, falling back to
@@ -194,10 +194,10 @@ The database stores the report identifier, timestamps, project label, status,
 and canonical result. It does not store access tokens or model credentials.
 Captain continues to audit actual ClickUp writes in its own workspace.
 
-## Security and Privacy
+## Security and privacy
 
-- Use MCP `stdio` only; do not implement Streamable HTTP, OAuth, or a bearer-token
-  endpoint.
+- Use MCP `stdio` only; do not implement Streamable HTTP, OAuth, or a
+  bearer-token endpoint.
 - Launch OpenClaw with an argument array and `shell=False`.
 - Accept at most 1 MiB of serialized report and metadata content.
 - Recursively reject reserved authentication, authorization, identity, and
@@ -211,7 +211,7 @@ Captain continues to audit actual ClickUp writes in its own workspace.
 - Create the SQLite state directory and database with user-only permissions
   where the operating system permits it.
 
-## Packaging and Installation
+## Packaging and installation
 
 The repository is a Codex marketplace whose `captain` entry points at the
 Codex-format bundle under `agent-plugin/`. The bundle uses a relative local MCP
@@ -262,7 +262,7 @@ Release verification includes the full Captain test suite plus an MCP Inspector
 smoke test against the packaged launcher. A live OpenClaw/ClickUp write is
 reported separately and is never implied by mocked tests.
 
-## Non-Goals
+## Non-goals
 
 - A plugin-owned network transport, hosting layer, OAuth flow, telemetry, or
   multi-user identity. Gateway connectivity remains OpenClaw's responsibility.
@@ -272,7 +272,7 @@ reported separately and is never implied by mocked tests.
   provider.
 - Supporting multiple Captain backends before a real user need exists.
 
-## Acceptance Criteria
+## Acceptance criteria
 
 The feature is complete when a clean installation can invoke `/captain`, call
 the one bundled MCP tool over `stdio`, receive Captain's canonical result, and

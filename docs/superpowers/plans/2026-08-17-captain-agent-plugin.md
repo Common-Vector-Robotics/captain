@@ -1,4 +1,4 @@
-# Captain Agent Plugin Implementation Plan
+# Captain agent plugin implementation plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-17-captain-agent-plugin-design.md`
 
-## Global Constraints
+## Global constraints
 
 - Repository and PR target: `git@github.com:Common-Vector-Robotics/captain.git`, base branch `main`.
 - Start from a freshly fetched `origin/main`; fetch and incorporate upstream again immediately before PR creation.
@@ -51,7 +51,7 @@
   `unknown_outcome`. All external status and process diagnostics are bounded
   and redacted.
 
-## File Map
+## File map
 
 - `.agents/plugins/marketplace.json`: makes the repository installable as a Codex marketplace.
 - `agent-plugin/.codex-plugin/plugin.json`: bundle identity, skill root, and MCP-server declaration.
@@ -72,7 +72,7 @@
 
 ---
 
-### Task 1: Define and Validate the Public Report Contract
+### Task 1: Define and validate the public report contract
 
 **Files:**
 - Create: `agent-plugin/requirements.txt`
@@ -328,7 +328,7 @@ git add agent-plugin/requirements.txt agent-plugin/captain_agent \
 git commit -m "feat: define Captain agent report contract"
 ```
 
-### Task 2: Invoke OpenClaw Safely and Normalize Its Result
+### Task 2: Invoke OpenClaw safely and normalize its result
 
 **Files:**
 - Modify: `agent-plugin/captain_agent/reporting.py`
@@ -556,7 +556,7 @@ git add agent-plugin/captain_agent/reporting.py \
 git commit -m "feat: forward Captain reports through OpenClaw"
 ```
 
-### Task 3: Add Local Idempotency and Safe Replay
+### Task 3: Add local idempotency and safe replay
 
 **Files:**
 - Modify: `agent-plugin/captain_agent/reporting.py`
@@ -765,7 +765,7 @@ git add agent-plugin/captain_agent/reporting.py \
 git commit -m "feat: make Captain report handoffs idempotent"
 ```
 
-### Task 4: Package the MCP Server as a Codex/OpenClaw Plugin
+### Task 4: Package the MCP server as a Codex/OpenClaw plugin
 
 **Files:**
 - Create: `.agents/plugins/marketplace.json`
@@ -1075,7 +1075,7 @@ git add .agents agent-plugin/.codex-plugin agent-plugin/.mcp.json \
 git commit -m "feat: package the Captain agent plugin"
 ```
 
-### Task 5: Add the `/captain` Skill and User Documentation
+### Task 5: Add the `/captain` skill and user documentation
 
 **Files:**
 - Create: `agent-plugin/skills/captain/SKILL.md`
@@ -1181,7 +1181,7 @@ git add agent-plugin/skills agent-plugin/README.md README.md \
 git commit -m "docs: add Captain reporting workflow"
 ```
 
-### Task 6: Verify the Release and Open the GitHub Pull Request
+### Task 6: Verify the release and open the GitHub pull request
 
 **Files:**
 - Modify if verification exposes defects: only files already in this plan.

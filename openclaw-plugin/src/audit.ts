@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID } from 'node:crypto';
 import {
   chmodSync,
   closeSync,
@@ -8,67 +8,69 @@ import {
   mkdirSync,
   openSync,
   writeSync,
-} from "node:fs";
-import { dirname } from "node:path";
+} from 'node:fs';
+import { dirname } from 'node:path';
 
-import type { TurnState } from "./contracts.js";
+import type { TurnState } from './contracts.js';
 
 const EVENT_NAMES = new Set([
-  "member_created",
-  "member_rotated",
-  "member_revoked",
-  "submit_authenticated",
-  "poll_authenticated",
-  "http_error",
-  "turn_queued",
-  "turn_started",
-  "turn_succeeded",
-  "turn_failed",
-  "turn_timed_out",
-  "turn_unknown_outcome",
-  "limit_summary",
+  'member_created',
+  'member_rotated',
+  'member_revoked',
+  'submit_authenticated',
+  'poll_authenticated',
+  'http_error',
+  'turn_queued',
+  'turn_started',
+  'turn_succeeded',
+  'turn_failed',
+  'turn_timed_out',
+  'turn_unknown_outcome',
+  'limit_summary',
 ]);
-const OPERATIONS = new Set(["member", "submit", "poll", "turn", "limit"]);
-const ROUTES = new Set(["local_cli", "submit", "poll", "worker", "auth", "ingress"]);
+const OPERATIONS = new Set(['member', 'submit', 'poll', 'turn', 'limit']);
+const ROUTES = new Set(['local_cli', 'submit', 'poll', 'worker', 'auth', 'ingress']);
 const STATES = new Set<TurnState>([
-  "queued",
-  "started",
-  "succeeded",
-  "failed",
-  "timed_out",
-  "unknown_outcome",
+  'queued',
+  'started',
+  'succeeded',
+  'failed',
+  'timed_out',
+  'unknown_outcome',
 ]);
 const STABLE_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const SAFE_IDENTIFIER = /^[A-Za-z0-9._-]{1,128}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const LIMIT_CODES = [
-  ["auth_failed", "AUTH_FAILED"],
-  ["auth_rate_limited", "AUTH_RATE_LIMITED"],
-  ["poll_rate_limited", "POLL_RATE_LIMITED"],
-  ["job_rate_limited", "JOB_RATE_LIMITED"],
+  ['auth_failed', 'AUTH_FAILED'],
+  ['auth_rate_limited', 'AUTH_RATE_LIMITED'],
+  ['poll_rate_limited', 'POLL_RATE_LIMITED'],
+  ['job_rate_limited', 'JOB_RATE_LIMITED'],
 ] as const;
 
 const AUDIT_KEYS = [
-  "event_id",
-  "timestamp",
-  "event",
-  "member_id",
-  "operation",
-  "route",
-  "report_id",
-  "turn_id",
-  "from_state",
-  "to_state",
-  "duration_ms",
-  "code",
-  "count",
+  'event_id',
+  'timestamp',
+  'event',
+  'member_id',
+  'operation',
+  'route',
+  'report_id',
+  'turn_id',
+  'from_state',
+  'to_state',
+  'duration_ms',
+  'code',
+  'count',
 ].sort();
 
+/** Construction options for an append-only audit log. */
 export interface AuditLogOptions {
   now?: () => string;
 }
 
+/** Caller-supplied fields for one audit event. */
 export interface AuditEventInput {
   event: string;
   memberId?: string;
@@ -83,6 +85,7 @@ export interface AuditEventInput {
   count?: number;
 }
 
+/** A fixed-shape audit record as persisted to the JSONL log. */
 export interface AuditEvent {
   event_id: string;
   timestamp: string;
@@ -99,6 +102,7 @@ export interface AuditEvent {
   count: number | null;
 }
 
+/** Destination for audit events, such as a JSONL file. */
 export interface AuditSink {
   initialize(): void;
   append(event: AuditEvent): void;
@@ -107,24 +111,24 @@ export interface AuditSink {
 
 function optionalIdentifier(
   value: string | undefined,
-  field: "member" | "report" | "turn",
+  field: 'member' | 'report' | 'turn',
 ): string | null {
   if (value === undefined) return null;
-  const pattern = field === "report" ? SAFE_IDENTIFIER : UUID;
+  const pattern = field === 'report' ? SAFE_IDENTIFIER : UUID;
   if (!pattern.test(value)) throw new TypeError(`Audit ${field} ID is invalid.`);
   return value;
 }
 
 function optionalState(value: TurnState | undefined): TurnState | null {
   if (value === undefined) return null;
-  if (!STATES.has(value)) throw new TypeError("Audit turn state is invalid.");
+  if (!STATES.has(value)) throw new TypeError('Audit turn state is invalid.');
   return value;
 }
 
 function optionalCount(value: number | undefined): number | null {
   if (value === undefined) return null;
   if (!Number.isSafeInteger(value) || value < 1) {
-    throw new TypeError("Audit count must be a positive safe integer.");
+    throw new TypeError('Audit count must be a positive safe integer.');
   }
   return value;
 }
@@ -132,36 +136,37 @@ function optionalCount(value: number | undefined): number | null {
 function optionalDuration(value: number | undefined): number | null {
   if (value === undefined) return null;
   if (!Number.isFinite(value) || value < 0) {
-    throw new TypeError("Audit duration must be finite and nonnegative.");
+    throw new TypeError('Audit duration must be finite and nonnegative.');
   }
   return Math.round(value);
 }
 
+/** Validates event fields and produces a complete audit record. */
 export function createAuditEvent(
   input: AuditEventInput,
   eventId: string = randomUUID(),
   timestamp: string = new Date().toISOString(),
 ): AuditEvent {
-  if (!UUID.test(eventId)) throw new TypeError("Audit event ID is invalid.");
-  if (typeof timestamp !== "string" || !Number.isFinite(Date.parse(timestamp))) {
-    throw new TypeError("Audit timestamp is invalid.");
+  if (!UUID.test(eventId)) throw new TypeError('Audit event ID is invalid.');
+  if (typeof timestamp !== 'string' || !Number.isFinite(Date.parse(timestamp))) {
+    throw new TypeError('Audit timestamp is invalid.');
   }
-  if (!EVENT_NAMES.has(input.event)) throw new TypeError("Audit event is invalid.");
-  if (!OPERATIONS.has(input.operation)) throw new TypeError("Audit operation is invalid.");
-  if (!ROUTES.has(input.route)) throw new TypeError("Audit route is invalid.");
+  if (!EVENT_NAMES.has(input.event)) throw new TypeError('Audit event is invalid.');
+  if (!OPERATIONS.has(input.operation)) throw new TypeError('Audit operation is invalid.');
+  if (!ROUTES.has(input.route)) throw new TypeError('Audit route is invalid.');
   if (input.code !== undefined && !STABLE_CODE.test(input.code)) {
-    throw new TypeError("Audit code is invalid.");
+    throw new TypeError('Audit code is invalid.');
   }
 
   return {
     event_id: eventId,
     timestamp,
     event: input.event,
-    member_id: optionalIdentifier(input.memberId, "member"),
+    member_id: optionalIdentifier(input.memberId, 'member'),
     operation: input.operation,
     route: input.route,
-    report_id: optionalIdentifier(input.reportId, "report"),
-    turn_id: optionalIdentifier(input.turnId, "turn"),
+    report_id: optionalIdentifier(input.reportId, 'report'),
+    turn_id: optionalIdentifier(input.turnId, 'turn'),
     from_state: optionalState(input.fromState),
     to_state: optionalState(input.toState),
     duration_ms: optionalDuration(input.durationMs),
@@ -170,14 +175,16 @@ export function createAuditEvent(
   };
 }
 
+/** Parses and revalidates a stored audit event line. */
 export function parseAuditEvent(serialized: string): AuditEvent {
+  // Safe: the shape and every field are revalidated before use below.
   const parsed = JSON.parse(serialized) as Record<string, unknown>;
   if (
     !parsed
-    || typeof parsed !== "object"
+    || typeof parsed !== 'object'
     || JSON.stringify(Object.keys(parsed).sort()) !== JSON.stringify(AUDIT_KEYS)
   ) {
-    throw new TypeError("Stored audit event shape is invalid.");
+    throw new TypeError('Stored audit event shape is invalid.');
   }
   return createAuditEvent({
     event: String(parsed.event),
@@ -186,6 +193,7 @@ export function parseAuditEvent(serialized: string): AuditEvent {
     route: String(parsed.route),
     reportId: parsed.report_id === null ? undefined : String(parsed.report_id),
     turnId: parsed.turn_id === null ? undefined : String(parsed.turn_id),
+    // Safe: createAuditEvent rejects any state outside the TurnState set.
     fromState: parsed.from_state === null ? undefined : parsed.from_state as TurnState,
     toState: parsed.to_state === null ? undefined : parsed.to_state as TurnState,
     durationMs: parsed.duration_ms === null ? undefined : Number(parsed.duration_ms),
@@ -194,6 +202,7 @@ export function parseAuditEvent(serialized: string): AuditEvent {
   }, String(parsed.event_id), String(parsed.timestamp));
 }
 
+/** Converts aggregated limit counts into audit event inputs. */
 export function limitSummaryAuditInputs(
   counts: Record<string, number>,
 ): AuditEventInput[] {
@@ -202,9 +211,9 @@ export function limitSummaryAuditInputs(
     const count = counts[kind];
     if (!Number.isSafeInteger(count) || count <= 0) continue;
     inputs.push({
-      event: "limit_summary",
-      operation: "limit",
-      route: kind.startsWith("auth_") ? "auth" : kind.startsWith("poll_") ? "poll" : "submit",
+      event: 'limit_summary',
+      operation: 'limit',
+      route: kind.startsWith('auth_') ? 'auth' : kind.startsWith('poll_') ? 'poll' : 'submit',
       code,
       count,
     });
@@ -212,12 +221,13 @@ export function limitSummaryAuditInputs(
   return inputs;
 }
 
+/** Durable append-only JSONL audit log with owner-only file modes. */
 export class AuditLog implements AuditSink {
   private descriptor: number | null = null;
   private readonly now: () => string;
 
   constructor(
-    public readonly path: string,
+    readonly path: string,
     options: AuditLogOptions = {},
   ) {
     this.now = options.now ?? (() => new Date().toISOString());
@@ -235,7 +245,7 @@ export class AuditLog implements AuditSink {
     );
     try {
       fchmodSync(descriptor, 0o600);
-    } catch (error) {
+    } catch (error: unknown) {
       closeSync(descriptor);
       throw error;
     }
@@ -243,12 +253,12 @@ export class AuditLog implements AuditSink {
   }
 
   append(event: AuditEvent): void {
-    if (this.descriptor === null) throw new Error("Captain audit log is not initialized.");
-    const line = Buffer.from(`${JSON.stringify(event)}\n`, "utf8");
+    if (this.descriptor === null) throw new Error('Captain audit log is not initialized.');
+    const line = Buffer.from(`${JSON.stringify(event)}\n`, 'utf8');
     let offset = 0;
     while (offset < line.length) {
       const written = writeSync(this.descriptor, line, offset, line.length - offset);
-      if (written < 1) throw new Error("Captain audit append did not complete.");
+      if (written < 1) throw new Error('Captain audit append did not complete.');
       offset += written;
     }
     fsyncSync(this.descriptor);
@@ -259,7 +269,9 @@ export class AuditLog implements AuditSink {
   }
 
   recordLimitSummary(counts: Record<string, number>): void {
-    for (const input of limitSummaryAuditInputs(counts)) this.record(input);
+    for (const input of limitSummaryAuditInputs(counts)) {
+      this.record(input);
+    }
   }
 
   close(): void {

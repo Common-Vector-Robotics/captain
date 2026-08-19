@@ -12,9 +12,9 @@ uses `/captain:captain` instead. The plugin then follows this path:
 Coding agent -> local plugin -> local OpenClaw or Captain HTTPS -> Captain
 ```
 
-1. Your coding agent summarizes the Git changes and checks it completed.
-2. The plugin receives that summary through MCP, the connection used by the
-   coding agent to call local tools.
+1. Your coding agent summarizes the Git changes and the checks it completed.
+2. The plugin receives that summary through MCP, the connection your coding
+   agent uses to call local tools.
 3. The plugin uses your local OpenClaw command-line program by default. When
    remote access is configured, it uses Captain's restricted HTTPS adapter.
 4. Captain uses the report to update ClickUp or ask for missing information.
@@ -116,14 +116,13 @@ Run the plugin with `/captain`.
 3. Run `/captain`, or `/captain:captain` in Claude Code.
 
 `CAPTAIN REPORT SENT` means Captain received the report. If you see
-`CAPTAIN REPORT NOT SENT`, follow the message's instructions and retry with the
-same report ID. Reusing the ID prevents the same report from being applied
-twice.
+`CAPTAIN REPORT NOT SENT`, follow the message's instructions and retry with
+the same report ID, which prevents the report from being applied twice.
 
 ## Connect to a remote Captain
 
-Remote mode lets this coding-agent plugin talk only to Captain. It does not require
-SSH, local OpenClaw, a Gateway token, or OpenClaw device approval.
+Remote mode lets this coding-agent plugin talk only to Captain. It does not
+require SSH, local OpenClaw, a Gateway token, or OpenClaw device approval.
 
 ### 1. Ask the operator for member access
 
@@ -134,22 +133,23 @@ keeps the Gateway on loopback, exposes only `/captain/v1/`, and creates your mem
 openclaw captain members add --name "Sam Lee" --email sam@example.com
 ```
 
-The operator delivers your revocable individual token once through the team's credential-sharing method.
+The operator delivers your revocable individual token once through the team's
+credential-sharing method.
 
 ### 2. Configure the coding agent
 
-Set both values in the coding platform's supported secret or environment configuration:
+Set both values in a secret or environment store the coding platform supports:
 
 ```text
 CAPTAIN_REMOTE_URL=https://captain.example.com
 CAPTAIN_MEMBER_TOKEN=<your individual member token>
 ```
 
-Keep the token out of URLs, arguments, source files, shell history, and logs. One
-missing value returns `needs_configuration`; neither value selects local mode.
+Keep the token out of URLs, arguments, source files, shell history, and logs.
+One missing value returns `needs_configuration`; neither selects local mode.
 
 Restart the coding agent, follow [Install](#install), and [verify the setup](#verify-the-setup).
-A clear later reply can be forwarded verbatim without running Captain again.
+You can forward a clear later reply verbatim without running Captain again.
 
 ### Remove or rotate a team member
 
@@ -204,8 +204,8 @@ Install the OpenClaw command-line program, then run:
 openclaw onboard --classic --mode remote
 ```
 
-Use `ws://127.0.0.1:18789` and the Gateway token, then run the two status checks
-above again.
+Use `ws://127.0.0.1:18789` and the Gateway token, then rerun the two status
+checks from step 1.
 
 ### 4. Approve the device if OpenClaw asks
 
@@ -223,8 +223,8 @@ openclaw devices rename --device <deviceId> --name "Member - Work laptop"
 openclaw devices revoke --device <deviceId> --role operator
 ```
 
-Remove the SSH key or account and rotate any shared Gateway token. Do not use a shared
-Gateway token for Captain-only access. Use the restricted HTTPS adapter above.
+Remove the SSH key or account and rotate any shared Gateway token. Use the
+restricted HTTPS adapter for Captain-only access, not a shared Gateway token.
 
 ## Advanced setup
 
@@ -248,8 +248,8 @@ the sender-side plugin. Edit Captain's existing entry in `agents.list`:
 }
 ```
 
-Do not create a second `captain` agent. An explicit `skills` list replaces the default list,
-so keep Captain's other required skills in it.
+Do not create a second `captain` agent. An explicit `skills` list replaces
+the default list, so keep Captain's other required skills in it.
 
 ### Configuration overrides
 
@@ -271,4 +271,4 @@ create duplicates. `CAPTAIN_AGENT_STATE_PATH` changes that path.
   configuration. Fix that configuration, then retry with the same report ID.
 - **`unknown_outcome`:** The plugin cannot prove whether Captain completed the
   report. Check ClickUp before trying anything else. Reusing the same report ID
-  will not send the report again.
+  does not send the report again.

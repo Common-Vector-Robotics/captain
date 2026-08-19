@@ -4,7 +4,7 @@
 
 Captain is an openclaw-based project manager for technical teams. Captain automatically manages Clickup tasks, checks in with team members over Slack to receive status updates, infers critical paths, and coordinates team members to remove blockers and prioritize important tasks. Captain also reads and infers tasks based on meeting transcripts sent to his configured email address.
 
-###### What Captain does
+## What Captain does
 
 <table>
   <tr>
@@ -108,9 +108,9 @@ Captain provides two public packages for coding-agent reports:
 - The [Captain Remote OpenClaw plugin](openclaw-plugin/README.md) provides the
   remote team setup with a Captain-only HTTPS path and no SSH or Gateway token.
 
-The generic self-hosted remote adapter is separate from Intermode/CVR's more
-advanced internal AWS-backed Captain integration. It does not replace or modify
-that internal system.
+The generic self-hosted remote adapter is separate from Intermode/CVR's
+internal AWS-backed Captain integration. It does not replace or modify that
+internal system.
 
 ## Install and set up
 

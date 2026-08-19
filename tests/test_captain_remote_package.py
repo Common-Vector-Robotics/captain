@@ -59,11 +59,16 @@ def test_nginx_replaces_forwarding_headers_and_logs_no_credentials():
     for header in ("Forwarded", "X-Forwarded-For", "X-Real-IP"):
         assert f'proxy_set_header {header} "";' in config
 
-    log_format = re.search(r"log_format\s+captain_remote\s+(.*?);", config, re.DOTALL)
+    log_format = re.search(
+        r"log_format\s+captain_remote\s+(.*?);", config, re.DOTALL
+    )
     assert log_format is not None
     assert "$http_authorization" not in log_format.group(1)
     assert re.search(r"\$request(?![A-Za-z0-9_])", log_format.group(1)) is None
-    assert "access_log /var/log/nginx/captain-remote-access.log captain_remote;" in config
+    assert (
+        "access_log /var/log/nginx/captain-remote-access.log captain_remote;"
+        in config
+    )
 
 
 def test_root_package_includes_the_native_remote_plugin():

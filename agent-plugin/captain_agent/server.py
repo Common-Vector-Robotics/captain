@@ -10,7 +10,8 @@ from .reporting import CaptainReportResult
 mcp = MCPServer(
     "Captain",
     instructions=(
-        "Report completed coding-agent work to the user's configured Captain agent."
+        "Report completed coding-agent work to the user's configured "
+        "Captain agent."
     ),
 )
 

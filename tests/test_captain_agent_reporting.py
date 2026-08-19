@@ -54,7 +54,10 @@ def test_canonical_result_has_the_public_shape():
 
 
 def test_validation_accepts_a_concise_report():
-    assert validate_report_input("report-1", VALID_REPORT, {"client": "codex"}) is None
+    assert (
+        validate_report_input("report-1", VALID_REPORT, {"client": "codex"})
+        is None
+    )
 
 
 def test_validation_rejects_unsafe_report_id():
@@ -82,7 +85,11 @@ def test_validation_accepts_report_at_exact_byte_limit():
     def payload_size(summary_length):
         report = {"summary": ["x" * summary_length]}
         return sum(
-            len(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+            len(
+                json.dumps(
+                    value, ensure_ascii=False, sort_keys=True
+                ).encode("utf-8")
+            )
             for value in (report, metadata)
         )
 
@@ -102,7 +109,10 @@ def test_validation_rejects_nested_reserved_auth_metadata():
     result = validate_report_input(
         "report-1",
         VALID_REPORT,
-        {"client": "codex", "context": {"authenticated_email": "user@example.com"}},
+        {
+            "client": "codex",
+            "context": {"authenticated_email": "user@example.com"},
+        },
     )
     assert result.status == "failed"
     assert "authentication" in result.captain_feedback
@@ -132,7 +142,10 @@ def test_validation_rejects_reserved_auth_metadata_nested_in_tuple():
     result = validate_report_input(
         "report-1",
         VALID_REPORT,
-        {"client": "codex", "nested": ({"authenticatedEmail": "user@example.com"},)},
+        {
+            "client": "codex",
+            "nested": ({"authenticatedEmail": "user@example.com"},),
+        },
     )
     assert result.status == "failed"
     assert "authentication" in result.captain_feedback
@@ -168,12 +181,17 @@ def test_validation_rejects_exact_auth_key_recursively_without_reflection(
 @pytest.mark.parametrize(
     "reserved_report",
     [
-        {**VALID_REPORT, "context": [{"identityClaims": {"subject": "private"}}]},
+        {
+            **VALID_REPORT,
+            "context": [{"identityClaims": {"subject": "private"}}],
+        },
         {**VALID_REPORT, "context": ({"authorization": "Bearer private"},)},
     ],
 )
 def test_validation_rejects_nested_reserved_claims_in_report(reserved_report):
-    result = validate_report_input("report-1", reserved_report, {"client": "codex"})
+    result = validate_report_input(
+        "report-1", reserved_report, {"client": "codex"}
+    )
 
     assert result.status == "failed"
     assert "report" in result.captain_feedback
@@ -224,7 +242,9 @@ def test_prompt_delimits_user_operated_report_without_identity_claims():
 
 
 def test_prompt_forbids_recursive_captain_reporting_calls():
-    prompt = build_status_update_prompt("report-1", VALID_REPORT, {"client": "codex"})
+    prompt = build_status_update_prompt(
+        "report-1", VALID_REPORT, {"client": "codex"}
+    )
 
     assert "Do not invoke `/captain`" in prompt
     assert "do not load or invoke the `captain` skill" in prompt
@@ -335,7 +355,9 @@ def test_timeout_after_dispatch_is_unknown():
     assert result.status == "unknown_outcome"
 
 
-def test_real_adapter_timeout_kills_and_reaps_before_returning_unknown(monkeypatch):
+def test_real_adapter_timeout_kills_and_reaps_before_returning_unknown(
+    monkeypatch,
+):
     process = None
 
     class TimeoutProcess:
@@ -435,7 +457,9 @@ def test_real_adapter_returns_captured_output_and_return_code_without_shell(
 
     monkeypatch.setattr(reporting.subprocess, "Popen", start_process)
 
-    completed = reporting.run_openclaw_agent(["openclaw", "agent"], "prompt", 45)
+    completed = reporting.run_openclaw_agent(
+        ["openclaw", "agent"], "prompt", 45
+    )
 
     assert completed.args == ["openclaw", "agent"]
     assert completed.returncode == 7
@@ -509,8 +533,12 @@ def test_arbitrary_runner_oserror_after_dispatch_is_unknown():
 @pytest.mark.parametrize(
     "completed",
     [
-        subprocess.CompletedProcess(["openclaw"], 1, stdout="", stderr="gateway stopped"),
-        subprocess.CompletedProcess(["openclaw"], 0, stdout="not-json", stderr=""),
+        subprocess.CompletedProcess(
+            ["openclaw"], 1, stdout="", stderr="gateway stopped"
+        ),
+        subprocess.CompletedProcess(
+            ["openclaw"], 0, stdout="not-json", stderr=""
+        ),
     ],
 )
 def test_unproven_completion_is_unknown_and_bounded(completed):
@@ -550,7 +578,9 @@ def test_first_report_reservation_makes_the_send_decision_explicit(tmp_path):
     path = tmp_path / "reports.sqlite3"
     reporting._initialize_store(path)
 
-    reservation = reporting._reserve_report_id(path, "report-1", VALID_REPORT, {})
+    reservation = reporting._reserve_report_id(
+        path, "report-1", VALID_REPORT, {}
+    )
 
     try:
         assert reservation.should_send is True
@@ -838,7 +868,11 @@ def test_retryable_stored_result_is_transactionally_reclaimed(
     assert result.status == "updated"
     assert len(observed_rows) == 1
     project, status, result_json, updated_at = observed_rows[0]
-    assert (project, status, result_json) == ("Current project", "processing", None)
+    assert (project, status, result_json) == (
+        "Current project",
+        "processing",
+        None,
+    )
     assert updated_at != "2026-08-17T00:00:00Z"
 
 
@@ -846,7 +880,9 @@ def test_retryable_stored_result_is_transactionally_reclaimed(
     "immutable_status",
     ["created", "updated", "partial", "unknown_outcome"],
 )
-def test_immutable_stored_result_replays_without_dispatch(tmp_path, immutable_status):
+def test_immutable_stored_result_replays_without_dispatch(
+    tmp_path, immutable_status
+):
     path = tmp_path / "reports.sqlite3"
     _seed_stored_result(path, "report-1", immutable_status)
 
@@ -893,7 +929,9 @@ def test_store_closes_every_connection(monkeypatch, tmp_path):
     monkeypatch.setattr(reporting.sqlite3, "connect", tracking_connect)
     path = tmp_path / "reports.sqlite3"
     reporting._initialize_store(path)
-    reservation = reporting._reserve_report_id(path, "report-1", VALID_REPORT, {})
+    reservation = reporting._reserve_report_id(
+        path, "report-1", VALID_REPORT, {}
+    )
     assert reservation.should_send is True
     assert reservation.saved_result is None
     reporting._save_report_result(

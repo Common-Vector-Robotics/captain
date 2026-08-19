@@ -1,7 +1,9 @@
-import type { TurnState } from "./contracts.js";
+import type { TurnState } from './contracts.js';
+/** Construction options for an append-only audit log. */
 export interface AuditLogOptions {
     now?: () => string;
 }
+/** Caller-supplied fields for one audit event. */
 export interface AuditEventInput {
     event: string;
     memberId?: string;
@@ -15,6 +17,7 @@ export interface AuditEventInput {
     code?: string;
     count?: number;
 }
+/** A fixed-shape audit record as persisted to the JSONL log. */
 export interface AuditEvent {
     event_id: string;
     timestamp: string;
@@ -30,14 +33,19 @@ export interface AuditEvent {
     code: string | null;
     count: number | null;
 }
+/** Destination for audit events, such as a JSONL file. */
 export interface AuditSink {
     initialize(): void;
     append(event: AuditEvent): void;
     close(): void;
 }
+/** Validates event fields and produces a complete audit record. */
 export declare function createAuditEvent(input: AuditEventInput, eventId?: string, timestamp?: string): AuditEvent;
+/** Parses and revalidates a stored audit event line. */
 export declare function parseAuditEvent(serialized: string): AuditEvent;
+/** Converts aggregated limit counts into audit event inputs. */
 export declare function limitSummaryAuditInputs(counts: Record<string, number>): AuditEventInput[];
+/** Durable append-only JSONL audit log with owner-only file modes. */
 export declare class AuditLog implements AuditSink {
     readonly path: string;
     private descriptor;

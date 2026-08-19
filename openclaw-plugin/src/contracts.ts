@@ -1,23 +1,26 @@
-import { createHash } from "node:crypto";
+import { createHash } from 'node:crypto';
 
+/** Lifecycle state of a submitted Captain turn. */
 export type TurnState =
-  | "queued"
-  | "started"
-  | "succeeded"
-  | "failed"
-  | "timed_out"
-  | "unknown_outcome";
+  | 'queued'
+  | 'started'
+  | 'succeeded'
+  | 'failed'
+  | 'timed_out'
+  | 'unknown_outcome';
 
+/** Outcome status reported by the Captain agent for a turn. */
 export type CaptainStatus =
-  | "created"
-  | "updated"
-  | "queued"
-  | "needs_clarification"
-  | "needs_configuration"
-  | "partial"
-  | "failed"
-  | "unknown_outcome";
+  | 'created'
+  | 'updated'
+  | 'queued'
+  | 'needs_clarification'
+  | 'needs_configuration'
+  | 'partial'
+  | 'failed'
+  | 'unknown_outcome';
 
+/** Optional repository context attached to a report. */
 export interface ReportContext {
   git_root?: string;
   cwd?: string;
@@ -28,11 +31,13 @@ export interface ReportContext {
   diff_stat?: string;
 }
 
+/** A verification command and its observed result. */
 export interface ReportVerification {
   command: string;
   result: string;
 }
 
+/** The structured body of an employee status report. */
 export interface ReportPayload {
   project?: string;
   context?: ReportContext;
@@ -45,20 +50,23 @@ export interface ReportPayload {
   next_steps?: string[];
 }
 
+/** A validated turn submission: either a report or a reply. */
 export type TurnInput =
   | {
       turn_id: string;
-      kind: "report";
+      kind: 'report';
       report: ReportPayload;
       metadata: Record<string, unknown>;
     }
-  | { turn_id: string; kind: "reply"; reply: string };
+  | { turn_id: string; kind: 'reply'; reply: string };
 
+/** A single ClickUp task update performed by Captain. */
 export interface ClickUpUpdate {
   action: string;
   task_id: string;
 }
 
+/** The canonical result object returned by the Captain agent. */
 export interface CaptainResult {
   report_id: string;
   status: CaptainStatus;
@@ -68,6 +76,7 @@ export interface CaptainResult {
   warnings: string[];
 }
 
+/** The public HTTP envelope describing a turn and its outcome. */
 export interface TurnEnvelope {
   report_id: string;
   turn_id: string;
@@ -76,14 +85,15 @@ export interface TurnEnvelope {
   error?: { code: string; message: string };
 }
 
+/** An error carrying a stable HTTP status and public error code. */
 export class HttpProblem extends Error {
   constructor(
-    public readonly status: number,
-    public readonly code: string,
+    readonly status: number,
+    readonly code: string,
     message: string,
   ) {
     super(message);
-    this.name = "HttpProblem";
+    this.name = 'HttpProblem';
   }
 }
 
@@ -92,76 +102,76 @@ const MAX_VALIDATION_NODES = 1_024;
 const MAX_CAPTAIN_RESULT_STRING_LENGTH = 4_096;
 const MAX_CAPTAIN_RESULT_ITEMS = 32;
 const CAPTAIN_STATUSES = new Set<CaptainStatus>([
-  "created",
-  "updated",
-  "queued",
-  "needs_clarification",
-  "needs_configuration",
-  "partial",
-  "failed",
-  "unknown_outcome",
+  'created',
+  'updated',
+  'queued',
+  'needs_clarification',
+  'needs_configuration',
+  'partial',
+  'failed',
+  'unknown_outcome',
 ]);
 const REPORT_KEYS = new Set([
-  "project",
-  "context",
-  "summary",
-  "changed_files",
-  "verification",
-  "decisions",
-  "blockers",
-  "risks",
-  "next_steps",
+  'project',
+  'context',
+  'summary',
+  'changed_files',
+  'verification',
+  'decisions',
+  'blockers',
+  'risks',
+  'next_steps',
 ]);
 const CONTEXT_KEYS = new Set([
-  "git_root",
-  "cwd",
-  "branch",
-  "upstream",
-  "status",
-  "recent_commits",
-  "diff_stat",
+  'git_root',
+  'cwd',
+  'branch',
+  'upstream',
+  'status',
+  'recent_commits',
+  'diff_stat',
 ]);
-const METADATA_KEYS = new Set(["client", "repository", "branch", "timestamp"]);
-const VERIFICATION_KEYS = new Set(["command", "result"]);
+const METADATA_KEYS = new Set(['client', 'repository', 'branch', 'timestamp']);
+const VERIFICATION_KEYS = new Set(['command', 'result']);
 const RESULT_KEYS = new Set([
-  "report_id",
-  "status",
-  "clickup_updates",
-  "captain_feedback",
-  "questions",
-  "warnings",
+  'report_id',
+  'status',
+  'clickup_updates',
+  'captain_feedback',
+  'questions',
+  'warnings',
 ]);
-const CLICKUP_UPDATE_KEYS = new Set(["action", "task_id"]);
+const CLICKUP_UPDATE_KEYS = new Set(['action', 'task_id']);
 const RESERVED_SEGMENTS = new Set([
-  "auth",
-  "authentication",
-  "authenticated",
-  "authorization",
-  "authorized",
-  "identity",
-  "claim",
-  "claims",
-  "token",
-  "agent",
-  "agents",
-  "session",
-  "sessions",
-  "model",
-  "models",
-  "workspace",
-  "workspaces",
-  "tool",
-  "tools",
-  "thinking",
-  "runtime",
+  'auth',
+  'authentication',
+  'authenticated',
+  'authorization',
+  'authorized',
+  'identity',
+  'claim',
+  'claims',
+  'token',
+  'agent',
+  'agents',
+  'session',
+  'sessions',
+  'model',
+  'models',
+  'workspace',
+  'workspaces',
+  'tool',
+  'tools',
+  'thinking',
+  'runtime',
 ]);
 
 function invalidRequest(message: string): never {
-  throw new HttpProblem(400, "INVALID_REQUEST", message);
+  throw new HttpProblem(400, 'INVALID_REQUEST', message);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function requireRecord(value: unknown, message: string): Record<string, unknown> {
@@ -172,14 +182,14 @@ function requireRecord(value: unknown, message: string): Record<string, unknown>
 }
 
 function requireString(value: unknown, message: string): string {
-  if (typeof value !== "string") {
+  if (typeof value !== 'string') {
     invalidRequest(message);
   }
   return value;
 }
 
 function requireStringArray(value: unknown, message: string): string[] {
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
     invalidRequest(message);
   }
   return [...value];
@@ -197,7 +207,7 @@ function assertExactKeys(
 
 function normalizeKey(key: string): string[] {
   return key
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter(Boolean);
@@ -211,21 +221,23 @@ function findReservedKey(value: unknown): string | undefined {
     const current = values.pop();
     visited += 1;
     if (visited > MAX_VALIDATION_NODES) {
-      invalidRequest("Request body is too complex.");
+      invalidRequest('Request body is too complex.');
     }
 
     if (Array.isArray(current)) {
       if (visited + current.length > MAX_VALIDATION_NODES) {
-        invalidRequest("Request body is too complex.");
+        invalidRequest('Request body is too complex.');
       }
-      for (const nested of current) values.push(nested);
+      for (const nested of current) {
+        values.push(nested);
+      }
       continue;
     }
     if (!isRecord(current)) continue;
 
     const keys = Object.keys(current);
     if (visited + keys.length > MAX_VALIDATION_NODES) {
-      invalidRequest("Request body is too complex.");
+      invalidRequest('Request body is too complex.');
     }
     for (const key of keys) {
       if (normalizeKey(key).some((segment) => RESERVED_SEGMENTS.has(segment))) {
@@ -239,22 +251,22 @@ function findReservedKey(value: unknown): string | undefined {
 
 function assertNoReservedKeys(value: unknown): void {
   if (findReservedKey(value)) {
-    invalidRequest("Request contains a reserved field.");
+    invalidRequest('Request contains a reserved field.');
   }
 }
 
 function parseContext(value: unknown): ReportContext {
-  const context = requireRecord(value, "report.context must be an object.");
-  assertExactKeys(context, CONTEXT_KEYS, "report.context contains an unknown field.");
+  const context = requireRecord(value, 'report.context must be an object.');
+  assertExactKeys(context, CONTEXT_KEYS, 'report.context contains an unknown field.');
 
   const parsed: ReportContext = {};
-  for (const key of ["git_root", "cwd", "branch", "upstream", "status", "diff_stat"] as const) {
+  for (const key of ['git_root', 'cwd', 'branch', 'upstream', 'status', 'diff_stat'] as const) {
     if (key in context) parsed[key] = requireString(context[key], `report.context.${key} must be a string.`);
   }
-  if ("recent_commits" in context) {
+  if ('recent_commits' in context) {
     parsed.recent_commits = requireStringArray(
       context.recent_commits,
-      "report.context.recent_commits must be a string array.",
+      'report.context.recent_commits must be a string array.',
     );
   }
   return parsed;
@@ -262,60 +274,61 @@ function parseContext(value: unknown): ReportContext {
 
 function parseVerification(value: unknown): ReportVerification[] {
   if (!Array.isArray(value)) {
-    invalidRequest("report.verification must be an array.");
+    invalidRequest('report.verification must be an array.');
   }
   return value.map((item) => {
-    const verification = requireRecord(item, "report.verification items must be objects.");
-    assertExactKeys(verification, VERIFICATION_KEYS, "report.verification contains an unknown field.");
+    const verification = requireRecord(item, 'report.verification items must be objects.');
+    assertExactKeys(verification, VERIFICATION_KEYS, 'report.verification contains an unknown field.');
     return {
-      command: requireString(verification.command, "report.verification.command must be a string."),
-      result: requireString(verification.result, "report.verification.result must be a string."),
+      command: requireString(verification.command, 'report.verification.command must be a string.'),
+      result: requireString(verification.result, 'report.verification.result must be a string.'),
     };
   });
 }
 
 function parseReport(value: unknown): ReportPayload {
-  const report = requireRecord(value, "report must be an object.");
-  assertExactKeys(report, REPORT_KEYS, "report contains an unknown field.");
+  const report = requireRecord(value, 'report must be an object.');
+  assertExactKeys(report, REPORT_KEYS, 'report contains an unknown field.');
 
-  const summary = requireStringArray(report.summary, "report.summary must be a string array.");
-  if (summary.length === 0 || summary.some((item) => item.trim() === "")) {
-    invalidRequest("report.summary must contain at least one nonempty string.");
+  const summary = requireStringArray(report.summary, 'report.summary must be a string array.');
+  if (summary.length === 0 || summary.some((item) => item.trim() === '')) {
+    invalidRequest('report.summary must contain at least one nonempty string.');
   }
 
   const parsed: ReportPayload = { summary };
-  if ("project" in report) parsed.project = requireString(report.project, "report.project must be a string.");
-  if ("context" in report) parsed.context = parseContext(report.context);
-  for (const key of ["changed_files", "decisions", "blockers", "risks", "next_steps"] as const) {
+  if ('project' in report) parsed.project = requireString(report.project, 'report.project must be a string.');
+  if ('context' in report) parsed.context = parseContext(report.context);
+  for (const key of ['changed_files', 'decisions', 'blockers', 'risks', 'next_steps'] as const) {
     if (key in report) parsed[key] = requireStringArray(report[key], `report.${key} must be a string array.`);
   }
-  if ("verification" in report) parsed.verification = parseVerification(report.verification);
+  if ('verification' in report) parsed.verification = parseVerification(report.verification);
   return parsed;
 }
 
 function parseMetadata(value: unknown): Record<string, unknown> {
-  const metadata = requireRecord(value, "metadata must be an object.");
-  assertExactKeys(metadata, METADATA_KEYS, "metadata contains an unknown field.");
+  const metadata = requireRecord(value, 'metadata must be an object.');
+  assertExactKeys(metadata, METADATA_KEYS, 'metadata contains an unknown field.');
 
   const parsed: Record<string, unknown> = {};
-  for (const key of ["client", "repository", "branch", "timestamp"] as const) {
+  for (const key of ['client', 'repository', 'branch', 'timestamp'] as const) {
     if (key in metadata) parsed[key] = requireString(metadata[key], `metadata.${key} must be a string.`);
   }
   return parsed;
 }
 
+/** Validates an untrusted request body into a strict turn input. */
 export function parseTurnInput(value: unknown): TurnInput {
-  const input = requireRecord(value, "Request body must be an object.");
+  const input = requireRecord(value, 'Request body must be an object.');
   assertNoReservedKeys(input);
 
-  const turnId = requireString(input.turn_id, "turn_id must be a UUID.");
+  const turnId = requireString(input.turn_id, 'turn_id must be a UUID.');
   if (!TURN_ID.test(turnId)) {
-    invalidRequest("turn_id must be a UUID.");
+    invalidRequest('turn_id must be a UUID.');
   }
 
-  const kind = requireString(input.kind, "kind must be report or reply.");
-  if (kind === "report") {
-    assertExactKeys(input, new Set(["turn_id", "kind", "report", "metadata"]), "Request contains an unknown field.");
+  const kind = requireString(input.kind, 'kind must be report or reply.');
+  if (kind === 'report') {
+    assertExactKeys(input, new Set(['turn_id', 'kind', 'report', 'metadata']), 'Request contains an unknown field.');
     return {
       turn_id: turnId,
       kind,
@@ -323,11 +336,11 @@ export function parseTurnInput(value: unknown): TurnInput {
       metadata: parseMetadata(input.metadata),
     };
   }
-  if (kind === "reply") {
-    assertExactKeys(input, new Set(["turn_id", "kind", "reply"]), "Request contains an unknown field.");
-    return { turn_id: turnId, kind, reply: requireString(input.reply, "reply must be a string.") };
+  if (kind === 'reply') {
+    assertExactKeys(input, new Set(['turn_id', 'kind', 'reply']), 'Request contains an unknown field.');
+    return { turn_id: turnId, kind, reply: requireString(input.reply, 'reply must be a string.') };
   }
-  return invalidRequest("kind must be report or reply.");
+  return invalidRequest('kind must be report or reply.');
 }
 
 type CanonicalValue =
@@ -339,8 +352,8 @@ type CanonicalValue =
   | { [key: string]: CanonicalValue };
 
 function canonicalValue(value: unknown): CanonicalValue {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
-  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (Array.isArray(value)) return value.map(canonicalValue);
   if (isRecord(value)) {
     return Object.fromEntries(
@@ -349,21 +362,24 @@ function canonicalValue(value: unknown): CanonicalValue {
         .map((key) => [key, canonicalValue(value[key])]),
     );
   }
-  throw new TypeError("Validated turn input must contain JSON values.");
+  throw new TypeError('Validated turn input must contain JSON values.');
 }
 
+/** Serializes a validated turn input with deterministically sorted keys. */
 export function canonicalizeTurnInput(input: TurnInput): string {
   return JSON.stringify(canonicalValue(input));
 }
 
+/** Computes the SHA-256 hex digest of the canonical turn input. */
 export function digestTurnInput(input: TurnInput): string {
-  return createHash("sha256")
-    .update(canonicalizeTurnInput(input), "utf8")
-    .digest("hex");
+  return createHash('sha256')
+    .update(canonicalizeTurnInput(input), 'utf8')
+    .digest('hex');
 }
 
 function isCaptainStatus(value: unknown): value is CaptainStatus {
-  return typeof value === "string" && CAPTAIN_STATUSES.has(value as CaptainStatus);
+  // Safe: Set.has only reads the value; membership proves the narrow type.
+  return typeof value === 'string' && CAPTAIN_STATUSES.has(value as CaptainStatus);
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -371,7 +387,7 @@ function isStringArray(value: unknown): value is string[] {
     Array.isArray(value)
     && value.length <= MAX_CAPTAIN_RESULT_ITEMS
     && value.every(
-      (item) => typeof item === "string" && item.length <= MAX_CAPTAIN_RESULT_STRING_LENGTH,
+      (item) => typeof item === 'string' && item.length <= MAX_CAPTAIN_RESULT_STRING_LENGTH,
     )
   );
 }
@@ -384,9 +400,9 @@ function parseClickUpUpdates(value: unknown): ClickUpUpdate[] | undefined {
       return undefined;
     }
     if (
-      typeof item.action !== "string"
+      typeof item.action !== 'string'
       || item.action.length > MAX_CAPTAIN_RESULT_STRING_LENGTH
-      || typeof item.task_id !== "string"
+      || typeof item.task_id !== 'string'
       || item.task_id.length > MAX_CAPTAIN_RESULT_STRING_LENGTH
     ) return undefined;
     updates.push({ action: item.action, task_id: item.task_id });
@@ -397,14 +413,15 @@ function parseClickUpUpdates(value: unknown): ClickUpUpdate[] | undefined {
 function malformedCaptainResult(reportId: string): CaptainResult {
   return {
     report_id: reportId,
-    status: "unknown_outcome",
+    status: 'unknown_outcome',
     clickup_updates: [],
-    captain_feedback: "Captain returned a malformed result.",
+    captain_feedback: 'Captain returned a malformed result.',
     questions: [],
-    warnings: ["Captain result was malformed."],
+    warnings: ['Captain result was malformed.'],
   };
 }
 
+/** Normalizes untrusted Captain output into a bounded canonical result. */
 export function normalizeCaptainResult(reportId: string, value: unknown): CaptainResult {
   if (!isRecord(value) || Object.keys(value).some((key) => !RESULT_KEYS.has(key))) {
     return malformedCaptainResult(reportId);
@@ -412,7 +429,7 @@ export function normalizeCaptainResult(reportId: string, value: unknown): Captai
   if (
     value.report_id !== reportId
     || !isCaptainStatus(value.status)
-    || typeof value.captain_feedback !== "string"
+    || typeof value.captain_feedback !== 'string'
     || value.captain_feedback.length > MAX_CAPTAIN_RESULT_STRING_LENGTH
     || !isStringArray(value.questions)
     || !isStringArray(value.warnings)

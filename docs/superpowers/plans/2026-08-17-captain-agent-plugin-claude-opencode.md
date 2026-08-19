@@ -1,4 +1,4 @@
-# Claude Code and OpenCode Support Implementation Plan
+# Claude Code and OpenCode support implementation plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-17-captain-agent-plugin-claude-opencode-design.md`
 
-## Global Constraints
+## Global constraints
 
 - Claude Code invokes the feature as `/captain:captain`.
 - OpenCode invokes the feature as `/captain`.
@@ -25,7 +25,7 @@
 - Do not mutate a live Claude Code or OpenCode installation during automated tests.
 - Keep all implementation changes uncommitted until the user explicitly authorizes the implementation commit.
 
-## File Map
+## File map
 
 - Create `.claude-plugin/marketplace.json`: repository-level Claude Code marketplace catalog.
 - Create `agent-plugin/captain_agent/opencode_install.py`: OpenCode preflight, conflict detection, skill copy, and CLI orchestration.
@@ -39,7 +39,7 @@
 
 ---
 
-### Task 1: Claude Code Packaging and Shared Host Detection
+### Task 1: Claude Code packaging and shared host detection
 
 **Files:**
 - Create: `.claude-plugin/marketplace.json`
@@ -173,7 +173,7 @@ Expected: all package tests pass.
 
 ---
 
-### Task 2: Conflict-Safe OpenCode Installer
+### Task 2: Conflict-safe OpenCode installer
 
 **Files:**
 - Create: `agent-plugin/captain_agent/opencode_install.py`
@@ -388,7 +388,7 @@ configuration directory during the test run.
 
 ---
 
-### Task 3: User Documentation and Public Package Contract
+### Task 3: User documentation and public package contract
 
 **Files:**
 - Modify: `agent-plugin/README.md`
@@ -476,7 +476,7 @@ Expected: all selected tests pass.
 
 ---
 
-### Task 4: Fresh Cross-Host Verification and Authorized Commit
+### Task 4: Fresh cross-host verification and authorized commit
 
 **Files:**
 - Verify all files listed in Tasks 1-3.

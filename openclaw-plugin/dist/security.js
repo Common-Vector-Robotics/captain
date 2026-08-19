@@ -1,11 +1,12 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { isIP, SocketAddress } from "node:net";
-import { HttpProblem } from "./contracts.js";
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { isIP, SocketAddress } from 'node:net';
+import { HttpProblem } from './contracts.js';
 const MAX_LIMITER_KEYS = 10_000;
 const DEFAULT_IDLE_TTL_MS = 15 * 60_000;
 const TOKEN_PATTERN = /^Bearer cap_v1_([A-Za-z0-9_-]{16})\.([A-Za-z0-9_-]{43})$/;
 const LOOKUP_ID_PATTERN = /^[A-Za-z0-9_-]{16}$/;
 const DUMMY_DIGEST = Buffer.alloc(32);
+/** Keyed token-bucket rate limiter with bounded key retention. */
 export class TokenBucketLimiter {
     entries = new Map();
     refillPerMs;
@@ -14,14 +15,14 @@ export class TokenBucketLimiter {
     maxKeys;
     constructor(options) {
         if (!Number.isFinite(options.ratePerMinute) || options.ratePerMinute <= 0) {
-            throw new TypeError("ratePerMinute must be positive.");
+            throw new TypeError('ratePerMinute must be positive.');
         }
         if (!Number.isSafeInteger(options.burst) || options.burst <= 0) {
-            throw new TypeError("burst must be a positive safe integer.");
+            throw new TypeError('burst must be a positive safe integer.');
         }
         const idleTtlMs = options.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
         if (!Number.isFinite(idleTtlMs) || idleTtlMs <= 0) {
-            throw new TypeError("idleTtlMs must be positive.");
+            throw new TypeError('idleTtlMs must be positive.');
         }
         const maxKeys = options.maxKeys ?? MAX_LIMITER_KEYS;
         if (!Number.isSafeInteger(maxKeys) || maxKeys <= 0 || maxKeys > MAX_LIMITER_KEYS) {
@@ -37,7 +38,7 @@ export class TokenBucketLimiter {
     }
     consume(key, nowMs = Date.now()) {
         if (!Number.isFinite(nowMs))
-            throw new TypeError("nowMs must be finite.");
+            throw new TypeError('nowMs must be finite.');
         let entry = this.entries.get(key);
         if (entry && nowMs - entry.lastSeenMs > this.idleTtlMs) {
             this.entries.delete(key);
@@ -95,8 +96,8 @@ function normalizeIp(address) {
     if (!parsed)
         return null;
     const normalized = parsed.address.toLowerCase();
-    const mappedPrefix = "::ffff:";
-    if (parsed.family === "ipv6" && normalized.startsWith(mappedPrefix)) {
+    const mappedPrefix = '::ffff:';
+    if (parsed.family === 'ipv6' && normalized.startsWith(mappedPrefix)) {
         const mappedAddress = normalized.slice(mappedPrefix.length);
         if (isIP(mappedAddress) === 4)
             return mappedAddress;
@@ -104,33 +105,34 @@ function normalizeIp(address) {
     return normalized;
 }
 function isLoopback(address) {
-    if (address === "::1")
+    if (address === '::1')
         return true;
     if (isIP(address) !== 4)
         return false;
-    const firstOctet = Number(address.split(".", 1)[0]);
+    const firstOctet = Number(address.split('.', 1)[0]);
     return firstOctet === 127;
 }
+/** Resolves the client source address, trusting one proxy hop from loopback. */
 export function resolveClientSource(req) {
     const peer = req.socket.remoteAddress
         ? normalizeIp(req.socket.remoteAddress)
         : null;
     if (!peer)
-        return "unknown";
+        return 'unknown';
     if (!isLoopback(peer))
         return peer;
-    const supplied = req.headers["x-captain-client-ip"];
-    if (typeof supplied !== "string")
-        return "unknown";
-    if (supplied.includes(","))
-        return "unknown";
-    return normalizeIp(supplied) ?? "unknown";
+    const supplied = req.headers['x-captain-client-ip'];
+    if (typeof supplied !== 'string')
+        return 'unknown';
+    if (supplied.includes(','))
+        return 'unknown';
+    return normalizeIp(supplied) ?? 'unknown';
 }
 const LIMIT_EVENT_KINDS = [
-    "auth_failed",
-    "auth_rate_limited",
-    "poll_rate_limited",
-    "job_rate_limited",
+    'auth_failed',
+    'auth_rate_limited',
+    'poll_rate_limited',
+    'job_rate_limited',
 ];
 function emptyLimitCounts() {
     return {
@@ -140,6 +142,7 @@ function emptyLimitCounts() {
         job_rate_limited: 0,
     };
 }
+/** Counts fixed rate-limit events and emits periodic summaries. */
 export class LimitEventAggregator {
     counts = emptyLimitCounts();
     emit;
@@ -147,7 +150,7 @@ export class LimitEventAggregator {
     constructor(options = {}) {
         const intervalMs = options.intervalMs ?? 60_000;
         if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
-            throw new TypeError("intervalMs must be positive.");
+            throw new TypeError('intervalMs must be positive.');
         }
         this.emit = options.emit;
         if (this.emit) {
@@ -161,6 +164,7 @@ export class LimitEventAggregator {
     }
     record(kind) {
         // Only fixed internal event names can become aggregation keys.
+        // Safe: includes() proves membership before the narrowed index access.
         if (LIMIT_EVENT_KINDS.includes(kind)) {
             this.counts[kind] += 1;
         }
@@ -175,14 +179,16 @@ export class LimitEventAggregator {
             clearInterval(this.timer);
     }
 }
+/** An authentication or rate-limit HTTP problem with optional retry hint. */
 export class SecurityProblem extends HttpProblem {
     retryAfterSeconds;
     constructor(status, code, message, retryAfterSeconds) {
         super(status, code, message);
         this.retryAfterSeconds = retryAfterSeconds;
-        this.name = "SecurityProblem";
+        this.name = 'SecurityProblem';
     }
 }
+/** Authenticates bearer tokens with uniform failures and abuse limits. */
 export class CaptainAuthenticator {
     store;
     sourceLimiter;
@@ -223,25 +229,25 @@ export class CaptainAuthenticator {
         const decisions = [this.sourceLimiter.consume(resolveClientSource(req), nowMs)];
         if (parsed)
             decisions.push(this.lookupLimiter.consume(parsed.lookupId, nowMs));
-        decisions.push(this.globalLimiter.consume("invalid-auth", nowMs));
-        this.events.record("auth_failed");
+        decisions.push(this.globalLimiter.consume('invalid-auth', nowMs));
+        this.events.record('auth_failed');
         const retryAfterSeconds = decisions.reduce((longest, decision) => {
             if (decision.allowed)
                 return longest;
             return Math.max(longest, decision.retryAfterSeconds ?? 1);
         }, 0);
         if (retryAfterSeconds > 0) {
-            this.events.record("auth_rate_limited");
-            throw new SecurityProblem(429, "RATE_LIMITED", "Too many authentication attempts.", retryAfterSeconds);
+            this.events.record('auth_rate_limited');
+            throw new SecurityProblem(429, 'RATE_LIMITED', 'Too many authentication attempts.', retryAfterSeconds);
         }
-        throw new SecurityProblem(401, "UNAUTHORIZED", "Authentication required.");
+        throw new SecurityProblem(401, 'UNAUTHORIZED', 'Authentication required.');
     }
 }
 function singleAuthorizationHeader(req) {
     if (Array.isArray(req.rawHeaders)) {
         const values = [];
         for (let index = 0; index + 1 < req.rawHeaders.length; index += 2) {
-            if (req.rawHeaders[index].toLowerCase() === "authorization") {
+            if (req.rawHeaders[index].toLowerCase() === 'authorization') {
                 values.push(req.rawHeaders[index + 1]);
             }
         }
@@ -251,7 +257,7 @@ function singleAuthorizationHeader(req) {
     return values?.length === 1 ? values[0] : undefined;
 }
 function parseBearerToken(header) {
-    if (typeof header !== "string")
+    if (typeof header !== 'string')
         return null;
     const match = TOKEN_PATTERN.exec(header);
     if (!match)
@@ -268,6 +274,7 @@ function publicMember(member) {
         revokedAt: member.revokedAt,
     };
 }
+/** Rate limits authenticated poll requests per member. */
 export class PollLimiter {
     limiter;
     now;
@@ -284,23 +291,25 @@ export class PollLimiter {
         const decision = this.limiter.consume(memberId, this.now());
         if (decision.allowed)
             return;
-        this.events.record("poll_rate_limited");
-        throw new SecurityProblem(429, "RATE_LIMITED", "Too many poll requests.", decision.retryAfterSeconds);
+        this.events.record('poll_rate_limited');
+        throw new SecurityProblem(429, 'RATE_LIMITED', 'Too many poll requests.', decision.retryAfterSeconds);
     }
 }
-export function issueMemberToken(lookupId = randomBytes(12).toString("base64url")) {
+/** Issues a new member bearer token, optionally reusing a lookup ID. */
+export function issueMemberToken(lookupId = randomBytes(12).toString('base64url')) {
     if (!LOOKUP_ID_PATTERN.test(lookupId)) {
-        throw new TypeError("Member token lookup ID is invalid.");
+        throw new TypeError('Member token lookup ID is invalid.');
     }
-    const secret = randomBytes(32).toString("base64url");
+    const secret = randomBytes(32).toString('base64url');
     return {
         token: `cap_v1_${lookupId}.${secret}`,
         lookupId,
         secret,
-        digest: createHash("sha256").update(secret, "utf8").digest(),
+        digest: createHash('sha256').update(secret, 'utf8').digest(),
     };
 }
+/** Verifies a token secret against its stored digest in constant time. */
 export function verifyMemberToken(secret, digest) {
-    const candidate = createHash("sha256").update(secret, "utf8").digest();
+    const candidate = createHash('sha256').update(secret, 'utf8').digest();
     return candidate.length === digest.length && timingSafeEqual(candidate, digest);
 }

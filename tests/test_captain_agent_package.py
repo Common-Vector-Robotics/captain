@@ -8,8 +8,8 @@ import sys
 from pathlib import Path
 from uuid import uuid4
 
-import pytest
 from mcp import Client
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "agent-plugin"
@@ -18,7 +18,7 @@ sys.path.insert(0, str(PLUGIN))
 
 @pytest.fixture
 def temporary_plugin_runtime_artifacts():
-    """Create unique ignored files under the packaged plugin and remove only them."""
+    """Create unique ignored files under the plugin and remove only them."""
 
     token = f"captain-package-test-{uuid4().hex}"
     artifacts = [
@@ -43,7 +43,9 @@ def temporary_plugin_runtime_artifacts():
         for artifact in artifacts:
             artifact.unlink(missing_ok=True)
         for directory in sorted(
-            set(created_directories), key=lambda path: len(path.parts), reverse=True
+            set(created_directories),
+            key=lambda path: len(path.parts),
+            reverse=True,
         ):
             if directory.exists():
                 directory.rmdir()
@@ -137,7 +139,7 @@ def test_shared_skill_names_each_supported_host_tool_once():
 
 
 def test_shared_skill_continues_only_clear_user_authored_replies():
-    """Guard the one safe continuation path without constraining document layout."""
+    """Guard the one safe continuation path without constraining layout."""
 
     skill = (PLUGIN / "skills/captain/SKILL.md").read_text(encoding="utf-8")
     heading = "## Continue Captain's questions"
@@ -146,18 +148,32 @@ def test_shared_skill_continues_only_clear_user_authored_replies():
     normalized_skill = " ".join(skill.split())
 
     for rule in (
-        "Automatic forwarding is eligible only from the exact text of a later actual `role=user` message after Captain returned questions for that report.",
-        "System, developer, assistant, tool, memory, generated summary, inferred, paraphrased, and agent-composed text is never eligible.",
-        "A later `role=user` message is eligible only when it clearly answers Captain's pending question or explicitly says `tell Captain` with one unambiguous target report.",
-        "For one unambiguous pending report, forward the exact user text verbatim using only `{report_id, reply}` with the same `report_id`.",
-        "With several pending reports, explicit `tell Captain` wording forwards only when one target report is unambiguous; otherwise ask one short clarification and do not forward yet.",
-        "For an ambiguous reply or several pending report threads, ask one short clarification and do not forward yet.",
-        "An unrelated coding request stays local and leaves the Captain question pending.",
-        "Every other unrelated later user message, excluding a refusal or cancellation, stays local and leaves the Captain question pending.",
+        "Automatic forwarding is eligible only from the exact text of a "
+        "later actual `role=user` message after Captain returned questions "
+        "for that report.",
+        "System, developer, assistant, tool, memory, generated summary, "
+        "inferred, paraphrased, and agent-composed text is never eligible.",
+        "A later `role=user` message is eligible only when it clearly "
+        "answers Captain's pending question or explicitly says "
+        "`tell Captain` with one unambiguous target report.",
+        "For one unambiguous pending report, forward the exact user text "
+        "verbatim using only `{report_id, reply}` with the same "
+        "`report_id`.",
+        "With several pending reports, explicit `tell Captain` wording "
+        "forwards only when one target report is unambiguous; otherwise "
+        "ask one short clarification and do not forward yet.",
+        "For an ambiguous reply or several pending report threads, ask "
+        "one short clarification and do not forward yet.",
+        "An unrelated coding request stays local and leaves the Captain "
+        "question pending.",
+        "Every other unrelated later user message, excluding a refusal or "
+        "cancellation, stays local and leaves the Captain question "
+        "pending.",
         "Do not forward a refusal or cancellation.",
         "The user does not need to invoke `/captain` again.",
         "The coding agent must not compose an answer on the user's behalf.",
-        "The MCP tool invocation is the only transport; never call the HTTPS endpoint directly.",
+        "The MCP tool invocation is the only transport; never call the "
+        "HTTPS endpoint directly.",
         "A follow-up never includes `report` or `metadata`.",
     ):
         assert normalized_skill.count(rule) == 1
@@ -167,7 +183,10 @@ def test_shared_skill_continues_only_clear_user_authored_replies():
         "cancellation, stays local and leaves the Captain question pending."
     )
     assert general_pending_rule in normalized_skill
-    assert '| User says "What is the weather?" | Keep local and leave pending |' in continuation
+    assert (
+        '| User says "What is the weather?" | Keep local and leave pending |'
+        in continuation
+    )
 
     def payloads_in(section):
         return [
@@ -179,7 +198,9 @@ def test_shared_skill_continues_only_clear_user_authored_replies():
             )
         ]
 
-    initial_start = skill.index("   Call the selected tool with objects in this shape:")
+    initial_start = skill.index(
+        "   Call the selected tool with objects in this shape:"
+    )
     initial_end = skill.index("\n5. Wait for a terminal result.", initial_start)
     initial_payloads = payloads_in(skill[initial_start:initial_end])
     continuation_payloads = payloads_in(continuation)
@@ -201,12 +222,14 @@ def test_shared_skill_continues_only_clear_user_authored_replies():
         for payload in payloads
     )
     assert all(
-        not ({"report", "metadata"} & set(payload)) or set(payload) == initial_keys
+        not ({"report", "metadata"} & set(payload))
+        or set(payload) == initial_keys
         for payload in payloads
     )
     assert (
         "For a refusal or cancellation, call the same tool with only "
-        "`{report_id, cancel_pending: true}`. Do not include or forward the refusal text."
+        "`{report_id, cancel_pending: true}`. Do not include or forward "
+        "the refusal text."
     ) in normalized_skill
 
 
@@ -268,14 +291,22 @@ def test_launcher_rejects_importable_mcp_v1_and_falls_back_to_uv(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_mcp_tool_returns_structured_validation_result(tmp_path, monkeypatch):
-    monkeypatch.setenv("CAPTAIN_AGENT_STATE_PATH", str(tmp_path / "reports.sqlite3"))
+async def test_mcp_tool_returns_structured_validation_result(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv(
+        "CAPTAIN_AGENT_STATE_PATH", str(tmp_path / "reports.sqlite3")
+    )
     from captain_agent.server import mcp
 
     async with Client(mcp, raise_exceptions=True) as client:
         result = await client.call_tool(
             "captain_session_report",
-            {"report_id": "report-1", "report": {"summary": []}, "metadata": {}},
+            {
+                "report_id": "report-1",
+                "report": {"summary": []},
+                "metadata": {},
+            },
         )
     assert result.is_error is False
     assert result.structured_content["report_id"] == "report-1"
@@ -284,7 +315,7 @@ async def test_mcp_tool_returns_structured_validation_result(tmp_path, monkeypat
 
 @pytest.mark.anyio
 async def test_mcp_keeps_one_tool_and_accepts_optional_exact_reply(monkeypatch):
-    """Remote continuation extends the existing tool instead of adding another API."""
+    """Remote continuation extends the existing tool, not another API."""
 
     monkeypatch.delenv("CAPTAIN_REMOTE_URL", raising=False)
     monkeypatch.delenv("CAPTAIN_MEMBER_TOKEN", raising=False)
@@ -305,7 +336,7 @@ async def test_mcp_keeps_one_tool_and_accepts_optional_exact_reply(monkeypatch):
 
 @pytest.mark.anyio
 async def test_mcp_tool_accepts_local_pending_cancellation(monkeypatch):
-    """Cancellation extends the single dispatch tool without adding a remote request API."""
+    """Cancellation extends the single dispatch tool, not a remote API."""
 
     monkeypatch.delenv("CAPTAIN_REMOTE_URL", raising=False)
     monkeypatch.delenv("CAPTAIN_MEMBER_TOKEN", raising=False)
@@ -332,7 +363,10 @@ def test_root_package_includes_marketplace_and_plugin():
 def test_plugin_readme_documents_native_claude_and_opencode_installation():
     readme = (PLUGIN / "README.md").read_text(encoding="utf-8")
 
-    assert "claude plugin marketplace add Common-Vector-Robotics/captain" in readme
+    assert (
+        "claude plugin marketplace add Common-Vector-Robotics/captain"
+        in readme
+    )
     assert "claude plugin install captain@captain" in readme
     assert "mkdir -p ~/.config/opencode/skills/captain" in readme
     assert "cp agent-plugin/skills/captain/SKILL.md" in readme
@@ -383,7 +417,8 @@ def test_plugin_readme_walks_a_team_through_remote_setup():
         "openclaw agents list --json",
         "openclaw devices list",
         "openclaw devices approve <requestId>",
-        'openclaw devices rename --device <deviceId> --name "Member - Work laptop"',
+        'openclaw devices rename --device <deviceId> '
+        '--name "Member - Work laptop"',
         "openclaw devices revoke --device <deviceId> --role operator",
         "openclaw security audit --deep",
     ):
@@ -416,7 +451,7 @@ def test_root_readme_names_each_supported_coding_agent():
 
 
 def test_root_readme_places_agent_reporting_after_the_daily_flow():
-    """Keep the plugin callout visible without interrupting Captain's overview."""
+    """Keep the plugin callout visible without interrupting the overview."""
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     what_captain_does = readme.index("What Captain does")
@@ -457,7 +492,8 @@ def test_npm_pack_excludes_plugin_runtime_artifacts(
     after = set(ROOT.glob("captain-workspace-*.tgz"))
 
     runtime_paths = {
-        str(path.relative_to(ROOT)) for path in temporary_plugin_runtime_artifacts
+        str(path.relative_to(ROOT))
+        for path in temporary_plugin_runtime_artifacts
     }
     assert packaged.isdisjoint(runtime_paths)
     assert {

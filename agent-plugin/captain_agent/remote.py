@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from email.utils import parsedate_to_datetime
 import hashlib
+from http.client import HTTPException
+from ipaddress import ip_address
 import json
 import math
 import re
 import time
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
-from email.utils import parsedate_to_datetime
-from http.client import HTTPException
-from ipaddress import ip_address
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -74,6 +74,8 @@ class _RejectRedirects(HTTPRedirectHandler):
     """Reject every redirect so urllib cannot forward the bearer credential."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """See base class; returning None refuses the redirect."""
+
         return None
 
 
@@ -150,7 +152,10 @@ def _validated_token(value: str) -> str:
         not token
         or not token.isascii()
         or len(token) > 8_192
-        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in token)
+        or any(
+            ord(character) < 0x20 or ord(character) == 0x7F
+            for character in token
+        )
     ):
         raise _configuration_error()
     return token
@@ -158,18 +163,34 @@ def _validated_token(value: str) -> str:
 
 @dataclass(frozen=True)
 class RemoteConfig:
-    """The complete remote origin and its private member credential."""
+    """The complete remote origin and its private member credential.
+
+    Attributes:
+        base_url: Normalized bare origin of the remote Captain service.
+        member_token: Private bearer credential; excluded from repr.
+    """
 
     base_url: str
     member_token: str = field(repr=False)
 
     def __post_init__(self) -> None:
+        """Normalize and validate both fields at the boundary."""
+
         object.__setattr__(self, "base_url", _validated_origin(self.base_url))
-        object.__setattr__(self, "member_token", _validated_token(self.member_token))
+        object.__setattr__(
+            self, "member_token", _validated_token(self.member_token)
+        )
 
 
 def remote_profile_id(config: RemoteConfig) -> str:
-    """Derive a stable non-secret namespace from one normalized remote credential."""
+    """Derive a stable non-secret namespace from one remote credential.
+
+    Args:
+        config: Validated remote origin and member credential.
+
+    Returns:
+        A lowercase SHA-256 hex digest that scopes local client state.
+    """
 
     member_token = MEMBER_TOKEN_PATTERN.fullmatch(config.member_token)
     credential_identity = (
@@ -188,7 +209,18 @@ def remote_profile_id(config: RemoteConfig) -> str:
 
 
 def read_remote_config(env: Mapping[str, str]) -> RemoteConfig | None:
-    """Select remote mode only when both required values are nonblank."""
+    """Select remote mode only when both required values are nonblank.
+
+    Args:
+        env: Environment mapping holding the remote settings.
+
+    Returns:
+        The validated remote configuration, or None for local mode.
+
+    Raises:
+        RemoteConfigurationError: If only one value is set or a value is
+            invalid.
+    """
 
     url = str(env.get("CAPTAIN_REMOTE_URL", "")).strip()
     token = str(env.get("CAPTAIN_MEMBER_TOKEN", "")).strip()
@@ -219,7 +251,10 @@ def _configuration_result(report_id: str) -> CaptainReportResult:
     return canonical_result(
         report_id,
         "needs_configuration",
-        captain_feedback="Captain remote authentication or configuration must be updated.",
+        captain_feedback=(
+            "Captain remote authentication or configuration must be "
+            "updated."
+        ),
     )
 
 
@@ -228,7 +263,8 @@ def _queued_result(report_id: str) -> CaptainReportResult:
         report_id,
         "queued",
         captain_feedback=(
-            "Captain is still processing this turn. Retry with the same report ID."
+            "Captain is still processing this turn. Retry with the same "
+            "report ID."
         ),
     )
 
@@ -254,7 +290,9 @@ def _valid_uuid4(value: Any) -> bool:
     return parsed.version == 4 and str(parsed) == value
 
 
-def _bounded_string(value: Any, *, limit: int = MAX_RESULT_STRING_CHARACTERS) -> bool:
+def _bounded_string(
+    value: Any, *, limit: int = MAX_RESULT_STRING_CHARACTERS
+) -> bool:
     return isinstance(value, str) and len(value) <= limit
 
 
@@ -277,7 +315,7 @@ def _string_list(
 
 
 def _captain_result(report_id: str, value: Any) -> CaptainReportResult | None:
-    """Read the strict, bounded result contract emitted by the remote service."""
+    """Read the strict, bounded result contract of the remote service."""
 
     if not isinstance(value, dict) or set(value) != {
         "report_id",
@@ -378,7 +416,11 @@ def _validated_envelope(
             raise _ResponseFailure
     if turn_status == "succeeded" and result is None:
         raise _ResponseFailure
-    if turn_status == "failed" and result is not None and result.status != "failed":
+    if (
+        turn_status == "failed"
+        and result is not None
+        and result.status != "failed"
+    ):
         raise _ResponseFailure
     if (
         turn_status == "unknown_outcome"
@@ -392,7 +434,18 @@ def _validated_envelope(
 
 
 def serialize_remote_payload(payload: Mapping[str, Any], turn_id: str) -> bytes:
-    """Serialize the exact request once after checking its strict union shape."""
+    """Serialize the exact request after checking its strict union shape.
+
+    Args:
+        payload: Complete report or reply payload mapping.
+        turn_id: Turn ID that the payload must carry.
+
+    Returns:
+        The canonical UTF-8 JSON request body.
+
+    Raises:
+        ValueError: If the payload shape, contents, or size is invalid.
+    """
 
     if not isinstance(payload, Mapping) or payload.get("turn_id") != turn_id:
         raise ValueError
@@ -421,7 +474,12 @@ def serialize_remote_payload(payload: Mapping[str, Any], turn_id: str) -> bytes:
 
 
 class RemoteCaptainClient:
-    """Submit one turn once, then poll its validated path to a bounded deadline."""
+    """Submit one turn once, then poll its validated path to a deadline.
+
+    Attributes:
+        terminal_response: Whether the last call ended with a validated
+            terminal remote envelope.
+    """
 
     def __init__(
         self,
@@ -431,6 +489,15 @@ class RemoteCaptainClient:
         wall_clock: Callable[[], float] = time.time,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
+        """Create a client for one validated remote configuration.
+
+        Args:
+            config: Remote origin and member credential.
+            clock: Monotonic clock used for deadlines.
+            wall_clock: Wall clock used for HTTP date handling.
+            sleep: Sleep function used between polls.
+        """
+
         self._config = RemoteConfig(config.base_url, config.member_token)
         self._clock = clock
         self._wall_clock = wall_clock
@@ -491,7 +558,12 @@ class RemoteCaptainClient:
                 raw.decode("utf-8"),
                 object_pairs_hook=unique_object,
             )
-        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError):
+        except (
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            RecursionError,
+            ValueError,
+        ):
             raise _ResponseFailure from None
 
     def _request_before_deadline(
@@ -514,6 +586,8 @@ class RemoteCaptainClient:
         )
 
     def _retry_after(self, headers: Any) -> float:
+        """Read one strict Retry-After header as a bounded delay."""
+
         values = headers.get_all("Retry-After") if headers is not None else None
         if not values or len(values) != 1:
             raise _ResponseFailure
@@ -558,7 +632,16 @@ class RemoteCaptainClient:
         turn_id: str,
         payload: Mapping[str, Any],
     ) -> CaptainReportResult:
-        """Submit one stable turn, retrying only explicit pre-acceptance 429s."""
+        """Submit one turn, retrying only explicit pre-acceptance 429s.
+
+        Args:
+            report_id: Caller-chosen report identifier.
+            turn_id: Stable UUIDv4 turn ID for this payload.
+            payload: Complete report or reply payload mapping.
+
+        Returns:
+            The canonical Captain result for this turn.
+        """
 
         self.terminal_response = False
         if (
@@ -566,7 +649,9 @@ class RemoteCaptainClient:
             or REPORT_ID_PATTERN.fullmatch(report_id) is None
             or not _valid_uuid4(turn_id)
         ):
-            return _failed_result(report_id if isinstance(report_id, str) else "invalid-report")
+            return _failed_result(
+                report_id if isinstance(report_id, str) else "invalid-report"
+            )
         try:
             body = serialize_remote_payload(payload, turn_id)
         except ValueError:
@@ -603,7 +688,9 @@ class RemoteCaptainClient:
                 return _unknown_result(report_id)
 
         try:
-            turn_status, result = _validated_envelope(response, report_id, turn_id)
+            turn_status, result = _validated_envelope(
+                response, report_id, turn_id
+            )
         except _ResponseFailure:
             return _unknown_result(report_id)
         if turn_status not in {"queued", "started"}:

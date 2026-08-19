@@ -1,22 +1,22 @@
-import { join } from "node:path";
+import { join } from 'node:path';
 
 import {
   definePluginEntry,
   type OpenClawPluginApi,
   type OpenClawPluginDefinition,
   type OpenClawPluginHttpRouteHandler,
-} from "openclaw/plugin-sdk/plugin-entry";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+} from 'openclaw/plugin-sdk/plugin-entry';
+import { resolveStateDir } from 'openclaw/plugin-sdk/state-paths';
 
-import { registerCaptainCli } from "./cli.js";
-import { createCaptainHttpHandler } from "./http.js";
-import { CaptainTurnWorker, type EmbeddedCaptainRuntime } from "./runtime.js";
+import { registerCaptainCli } from './cli.js';
+import { createCaptainHttpHandler } from './http.js';
+import { CaptainTurnWorker, type EmbeddedCaptainRuntime } from './runtime.js';
 import {
   CaptainAuthenticator,
   LimitEventAggregator,
   PollLimiter,
-} from "./security.js";
-import { CaptainRemoteStore } from "./store.js";
+} from './security.js';
+import { CaptainRemoteStore } from './store.js';
 
 interface CaptainRemoteConfig {
   databasePath: string;
@@ -55,7 +55,7 @@ const NUMERIC_CONFIG = {
   invalidAuthGlobalPerMinute: 100,
 } as const;
 
-const CONFIG_KEYS = new Set(["databasePath", ...Object.keys(NUMERIC_CONFIG)]);
+const CONFIG_KEYS = new Set(['databasePath', ...Object.keys(NUMERIC_CONFIG)]);
 
 function resolveConfig(pluginConfig: Record<string, unknown> | undefined): CaptainRemoteConfig {
   const supplied = pluginConfig ?? {};
@@ -64,39 +64,48 @@ function resolveConfig(pluginConfig: Record<string, unknown> | undefined): Capta
   }
 
   const configuredPath = supplied.databasePath;
-  if (configuredPath !== undefined && (
-    typeof configuredPath !== "string" || configuredPath.trim() === ""
-  )) {
-    throw new TypeError("databasePath must be a nonempty string.");
+  let databasePath: string | undefined;
+  if (configuredPath !== undefined) {
+    if (typeof configuredPath !== 'string' || configuredPath.trim() === '') {
+      throw new TypeError('databasePath must be a nonempty string.');
+    }
+    databasePath = configuredPath;
   }
 
-  const resolved = {
-    databasePath: configuredPath as string | undefined
-      ?? join(resolveStateDir(), "captain-remote", "captain-remote.sqlite3"),
-  } as CaptainRemoteConfig;
+  const resolved: CaptainRemoteConfig = {
+    databasePath: databasePath
+      ?? join(resolveStateDir(), 'captain-remote', 'captain-remote.sqlite3'),
+    ...NUMERIC_CONFIG,
+  };
   for (const [key, maximum] of Object.entries(NUMERIC_CONFIG)) {
     const value = supplied[key] ?? maximum;
-    if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > maximum) {
+    if (
+      typeof value !== 'number'
+      || !Number.isSafeInteger(value)
+      || value < 1
+      || value > maximum
+    ) {
       throw new TypeError(`${key} must be an integer between 1 and ${maximum}.`);
     }
-    resolved[key as keyof typeof NUMERIC_CONFIG] = value as never;
+    // Safe: the loop key set is exactly the keys of NUMERIC_CONFIG.
+    resolved[key as keyof typeof NUMERIC_CONFIG] = value;
   }
   return resolved;
 }
 
 function hasCaptainAgent(api: OpenClawPluginApi): boolean {
-  return api.config.agents?.list?.some((agent) => agent.id === "captain") === true;
+  return api.config.agents?.list?.some((agent) => agent.id === 'captain') === true;
 }
 
 function writeUnavailable(res: Parameters<OpenClawPluginHttpRouteHandler>[1]): true {
   res.statusCode = 503;
-  res.setHeader("Cache-Control", "no-store");
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.setHeader("Retry-After", "1");
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Retry-After', '1');
   res.end(JSON.stringify({
     error: {
-      code: "SERVICE_UNAVAILABLE",
-      message: "Captain remote service is unavailable.",
+      code: 'SERVICE_UNAVAILABLE',
+      message: 'Captain remote service is unavailable.',
     },
   }));
   return true;
@@ -114,7 +123,7 @@ function emitLimitCounts(
     // A fixed logger summary remains available if the audit device is unavailable.
   }
   try {
-    api.logger.warn(JSON.stringify({ event: "captain_remote_limits", ...counts }));
+    api.logger.warn(JSON.stringify({ event: 'captain_remote_limits', ...counts }));
   } catch {
     // Logging must not prevent service shutdown or resource cleanup.
   }
@@ -138,14 +147,14 @@ function registerRuntime(api: OpenClawPluginApi): void {
   const lifecycle: LifecycleHolder = {};
 
   api.registerHttpRoute({
-    path: "/captain/v1",
-    match: "prefix",
-    auth: "plugin",
+    path: '/captain/v1',
+    match: 'prefix',
+    auth: 'plugin',
     handler: (req, res) => lifecycle.handler?.(req, res) ?? writeUnavailable(res),
   });
 
   api.registerService({
-    id: "captain-remote",
+    id: 'captain-remote',
     async start() {
       if (lifecycle.resources) return;
       if (!hasCaptainAgent(api)) {
@@ -174,11 +183,11 @@ function registerRuntime(api: OpenClawPluginApi): void {
           burst: config.pollBurst,
         });
         const embeddedRuntime: EmbeddedCaptainRuntime = {
-          resolveWorkspace: () => api.runtime.agent.resolveAgentWorkspaceDir(api.config, "captain"),
+          resolveWorkspace: () => api.runtime.agent.resolveAgentWorkspaceDir(api.config, 'captain'),
           run: (params) => api.runtime.agent.runEmbeddedAgent({
             ...params,
             config: api.config,
-            sessionTarget: { agentId: "captain", sessionId: params.sessionId },
+            sessionTarget: { agentId: 'captain', sessionId: params.sessionId },
           }),
         };
         const worker = new CaptainTurnWorker({
@@ -200,7 +209,7 @@ function registerRuntime(api: OpenClawPluginApi): void {
         lifecycle.resources = resources;
         worker.start();
         lifecycle.handler = handler;
-      } catch (error) {
+      } catch (error: unknown) {
         lifecycle.handler = undefined;
         lifecycle.resources = undefined;
         await closeResources(api, resources);
@@ -222,14 +231,17 @@ function registerRuntime(api: OpenClawPluginApi): void {
   });
 }
 
+/** The Captain remote OpenClaw plugin entry. */
 const plugin: OpenClawPluginDefinition = definePluginEntry({
-  id: "captain-remote",
-  name: "Captain Remote",
-  description: "Authenticated Captain-only report ingress for coding agents.",
+  id: 'captain-remote',
+  name: 'Captain Remote',
+  description: 'Authenticated Captain-only report ingress for coding agents.',
   register(api) {
     registerRuntime(api);
     registerCaptainCli(api);
   },
 });
 
+// The OpenClaw plugin loader requires a default entry export; this is the
+// sanctioned exception to the named-exports-only rule.
 export default plugin;

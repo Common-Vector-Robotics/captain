@@ -1,4 +1,4 @@
-# Claude Code and OpenCode Support Design
+# Claude Code and OpenCode support design
 
 **Date:** 2026-08-17
 
@@ -19,7 +19,7 @@ database, OpenClaw CLI adapter, and configured local or remote Gateway. This
 change adds packaging and host detection only; it does not create another
 reporting implementation.
 
-## Design Choice
+## Design choice
 
 Claude Code receives a native marketplace definition because Claude Code can
 discover skills and start bundled MCP servers directly from a marketplace
@@ -31,7 +31,7 @@ plugin API because that API is currently beta and would require a second
 JavaScript tool adapter. Keeping OpenCode on its documented skill and MCP
 interfaces preserves one reporting runtime and one public tool contract.
 
-## Shared Reporting Workflow
+## Shared reporting workflow
 
 The existing `agent-plugin/skills/captain/SKILL.md` remains the canonical skill.
 It recognizes exactly these host-exposed tool names:
@@ -50,7 +50,7 @@ without making a tool call. This preserves the existing fail-closed behavior.
 The report schema, redaction rules, stable report identifier, terminal status
 handling, and rendered result remain unchanged.
 
-## Claude Code Package
+## Claude Code package
 
 Add `.claude-plugin/marketplace.json` with a `captain` plugin entry whose source
 is `./agent-plugin`. The entry uses `strict: false` and explicitly declares the
@@ -73,7 +73,7 @@ Installation uses Claude Code's native marketplace flow against this GitHub
 repository. The repository gains a Claude marketplace catalog alongside the
 existing Codex marketplace catalog, with `agent-plugin/` as the plugin source.
 
-## OpenCode Package
+## OpenCode package
 
 Add `agent-plugin/bin/install-opencode`, a readable Python entrypoint that
 performs a user-scoped installation:
@@ -103,7 +103,7 @@ OpenCode discovers the installed skill natively and presents it as `/captain`.
 Its MCP naming convention exposes the tool as
 `captain_captain_session_report`.
 
-## Repository Layout
+## Repository layout
 
 ```text
 agent-plugin/
@@ -123,7 +123,7 @@ tests/
 
 No host-specific copy of the reporting module is added.
 
-## Installation Documentation
+## Installation documentation
 
 The plugin README gains separate installation sections:
 
@@ -160,7 +160,7 @@ when its CLI is available, and OpenCode configuration inspection when its CLI
 is available. Unavailable host CLIs will be reported as unrun environment
 checks rather than claimed as passes.
 
-## Non-Goals
+## Non-goals
 
 - No hosted transport or Captain service.
 - No second JavaScript reporting adapter.

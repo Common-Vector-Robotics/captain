@@ -52,7 +52,7 @@ The runtime inspection must show plugin ID `captain-remote`, the
 service, and the `captain` CLI command. Stop if the plugin is not loaded or the
 host reports an incompatible plugin API.
 
-Remove the temporary package directory after the install is verified.
+Remove the temporary package directory after you verify the install.
 
 ## Keep the Gateway on loopback
 
@@ -64,8 +64,8 @@ openclaw gateway status --deep --require-rpc
 ```
 
 `gateway.bind` must be `loopback`. Do not continue if the Gateway listens on a
-LAN, tailnet, custom public address, or `0.0.0.0`. Port `18789` must be reachable
-only from the Captain host.
+LAN, tailnet, custom public address, or `0.0.0.0`. Port `18789` must be
+reachable only from the Captain host.
 
 The plugin does not use or distribute the Gateway authentication token. Member
 tokens authenticate only the Captain plugin route.
@@ -134,7 +134,7 @@ replies, and polls while retaining durable records for operator review.
 
 The database stores a token lookup ID and SHA-256 digest, not the raw token.
 The default database is in the OpenClaw state directory at
-`captain-remote/captain-remote.sqlite3`. An operator may set the plugin's
+`captain-remote/captain-remote.sqlite3`. An operator can set the plugin's
 `databasePath` to another owner-only location.
 
 ## Configure a coding-agent member
@@ -225,7 +225,8 @@ The SQLite database contains member identities, token digests, report ownership,
 server session IDs, and turn results. Treat it as private operational data.
 Before backup or restore, stop the Gateway so the plugin closes SQLite. Copy the
 entire `captain-remote` state directory, including any SQLite companion files,
-to an owner-restricted backup. Restart the Gateway and repeat runtime inspection.
+to an owner-restricted backup. Restart the Gateway and repeat the runtime
+inspection.
 
 For an upgrade, build or obtain a newly pinned package, inspect its contents,
 back up the database, install the exact artifact, restart, and run the boundary

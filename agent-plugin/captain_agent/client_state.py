@@ -1,16 +1,16 @@
-"""Keep the minimum durable state needed to retry remote Captain turns safely."""
+"""Keep the minimum durable state to retry remote Captain turns safely."""
 
 from __future__ import annotations
 
-import json
-import os
-import sqlite3
-import stat
 from collections.abc import Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
+import os
 from pathlib import Path
+import sqlite3
+import stat
 from uuid import UUID, uuid4
 
 
@@ -31,19 +31,27 @@ class RemoteStateConflict(Exception):
 
 @dataclass(frozen=True)
 class PendingCaptainQuestions:
-    """The exact Captain questions that a later user reply must answer."""
+    """The exact Captain questions that a later user reply must answer.
+
+    Attributes:
+        report_id: Caller-chosen identifier of the originating report.
+        parent_turn_id: Remote turn ID that produced these questions.
+        questions: Validated question strings awaiting a user reply.
+    """
 
     report_id: str
     parent_turn_id: str
     questions: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        """Reject invalid context and make question strings immutable at the boundary."""
+        """Validate fields and freeze question strings at the boundary."""
 
         object.__setattr__(
             self,
             "report_id",
-            _require_text(self.report_id, "report_id", MAX_REPORT_ID_CHARACTERS),
+            _require_text(
+                self.report_id, "report_id", MAX_REPORT_ID_CHARACTERS
+            ),
         )
         object.__setattr__(
             self,
@@ -52,11 +60,20 @@ class PendingCaptainQuestions:
                 self.parent_turn_id, "parent_turn_id", MAX_TURN_ID_CHARACTERS
             ),
         )
-        object.__setattr__(self, "questions", _validated_questions(self.questions))
+        object.__setattr__(
+            self, "questions", _validated_questions(self.questions)
+        )
 
 
 def remote_state_path(env: Mapping[str, str]) -> Path:
-    """Choose the privacy-limited SQLite path for remote client state."""
+    """Choose the privacy-limited SQLite path for remote client state.
+
+    Args:
+        env: Environment mapping consulted for path overrides.
+
+    Returns:
+        The SQLite database path for remote client state.
+    """
 
     override = str(env.get("CAPTAIN_REMOTE_STATE_PATH", ""))
     if override.strip():
@@ -81,7 +98,9 @@ def _require_text(value: object, name: str, limit: int) -> str:
     """Return one bounded nonblank text value without silently coercing it."""
 
     if not isinstance(value, str) or not value.strip() or len(value) > limit:
-        raise ValueError(f"{name} must be a nonblank string up to {limit} characters")
+        raise ValueError(
+            f"{name} must be a nonblank string up to {limit} characters"
+        )
     return value
 
 
@@ -104,7 +123,9 @@ def _validated_questions(questions: Sequence[str]) -> tuple[str, ...]:
     if not isinstance(questions, (list, tuple)):
         raise ValueError("questions must be a list or tuple of strings")
     if not questions or len(questions) > MAX_PENDING_QUESTIONS:
-        raise ValueError(f"questions must contain 1 to {MAX_PENDING_QUESTIONS} items")
+        raise ValueError(
+            f"questions must contain 1 to {MAX_PENDING_QUESTIONS} items"
+        )
 
     return tuple(
         _require_text(question, "question", MAX_QUESTION_CHARACTERS)
@@ -113,7 +134,12 @@ def _validated_questions(questions: Sequence[str]) -> tuple[str, ...]:
 
 
 class RemoteClientState:
-    """Store turn IDs and the one pending Captain question context per report."""
+    """Store turn IDs and one pending Captain question context per report.
+
+    Attributes:
+        path: Location of the SQLite database backing this store.
+        profile_id: SHA-256 namespace that scopes every stored row.
+    """
 
     def __init__(
         self,
@@ -122,13 +148,22 @@ class RemoteClientState:
         profile_id: str,
         env: Mapping[str, str] | None = None,
     ) -> None:
+        """Open or create the scoped store at the given path.
+
+        Args:
+            path: SQLite database location for this store.
+            profile_id: Non-legacy lowercase SHA-256 namespace.
+            env: Environment mapping used for path policy checks;
+                defaults to ``os.environ``.
+        """
+
         self.path = Path(path)
         self.profile_id = _require_profile_id(profile_id)
         self._env = os.environ if env is None else env
         self._initialize_store()
 
     def _connect(self) -> sqlite3.Connection:
-        """Open a short-lived connection that waits only briefly for another writer."""
+        """Open a short-lived connection that waits briefly for a writer."""
 
         self._assert_safe_store_path()
         return sqlite3.connect(
@@ -191,10 +226,16 @@ class RemoteClientState:
         """Quarantine v1 rows under an unreachable legacy namespace."""
 
         turn_columns = {
-            row[1] for row in connection.execute("PRAGMA table_info(remote_turns)")
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(remote_turns)"
+            )
         }
         pending_columns = {
-            row[1] for row in connection.execute("PRAGMA table_info(pending_questions)")
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(pending_questions)"
+            )
         }
         if not turn_columns and not pending_columns:
             return
@@ -202,12 +243,23 @@ class RemoteClientState:
         pending_is_scoped = "profile_id" in pending_columns
         if turn_is_scoped and pending_is_scoped:
             return
-        if turn_is_scoped != pending_is_scoped or not turn_columns or not pending_columns:
+        if (
+            turn_is_scoped != pending_is_scoped
+            or not turn_columns
+            or not pending_columns
+        ):
             raise RemoteStateConflict("remote state schema is partially scoped")
 
-        connection.execute("DROP INDEX IF EXISTS one_initial_remote_turn_per_report")
-        connection.execute("ALTER TABLE remote_turns RENAME TO remote_turns_unscoped_v1")
-        connection.execute("ALTER TABLE pending_questions RENAME TO pending_questions_unscoped_v1")
+        connection.execute(
+            "DROP INDEX IF EXISTS one_initial_remote_turn_per_report"
+        )
+        connection.execute(
+            "ALTER TABLE remote_turns RENAME TO remote_turns_unscoped_v1"
+        )
+        connection.execute(
+            "ALTER TABLE pending_questions"
+            " RENAME TO pending_questions_unscoped_v1"
+        )
         connection.execute(
             """
             CREATE TABLE remote_turns(
@@ -270,13 +322,13 @@ class RemoteClientState:
         connection.execute("DROP TABLE pending_questions_unscoped_v1")
 
     def _uses_normal_state_parent(self) -> bool:
-        """Return whether this path came from the current default state location."""
+        """Return whether this path is the current default state location."""
 
         override = str(self._env.get("CAPTAIN_REMOTE_STATE_PATH", "")).strip()
         return not override and self.path == remote_state_path(self._env)
 
     def _prepare_store_path(self) -> None:
-        """Create only missing Captain-owned paths and secure the database file."""
+        """Create missing Captain-owned paths and secure the database file."""
 
         try:
             parent_info = os.lstat(self.path.parent)
@@ -303,12 +355,12 @@ class RemoteClientState:
             self._secure_existing_database_file()
 
     def _no_follow_flags(self) -> int:
-        """Use the strongest no-follow flag available on this operating system."""
+        """Use the strongest no-follow flag available on this platform."""
 
         return getattr(os, "O_NOFOLLOW_ANY", getattr(os, "O_NOFOLLOW", 0))
 
     def _create_private_database_file(self) -> None:
-        """Create the SQLite file with private permissions before SQLite opens it."""
+        """Create the SQLite file privately before SQLite opens it."""
 
         flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | self._no_follow_flags()
         try:
@@ -324,7 +376,7 @@ class RemoteClientState:
             os.close(descriptor)
 
     def _secure_existing_database_file(self) -> None:
-        """Validate and re-mode an existing regular database without following links."""
+        """Re-mode an existing regular database without following links."""
 
         database_info = os.lstat(self.path)
         if stat.S_ISLNK(database_info.st_mode):
@@ -339,19 +391,28 @@ class RemoteClientState:
             os.close(descriptor)
 
     def _assert_safe_store_path(self) -> None:
-        """Reject a replaced symlink or non-regular database before SQLite opens it."""
+        """Reject a symlink or non-regular database before SQLite opens it."""
 
         parent_info = os.lstat(self.path.parent)
         database_info = os.lstat(self.path)
-        if stat.S_ISLNK(parent_info.st_mode) or stat.S_ISLNK(database_info.st_mode):
+        if (
+            stat.S_ISLNK(parent_info.st_mode)
+            or stat.S_ISLNK(database_info.st_mode)
+        ):
             raise ValueError("remote state path must not contain a symlink")
-        if not stat.S_ISDIR(parent_info.st_mode) or not stat.S_ISREG(database_info.st_mode):
-            raise ValueError("remote state path must use a directory and regular database")
+        if (
+            not stat.S_ISDIR(parent_info.st_mode)
+            or not stat.S_ISREG(database_info.st_mode)
+        ):
+            raise ValueError(
+                "remote state path must use a directory and regular "
+                "database"
+            )
 
     def _pending_in_transaction(
         self, connection: sqlite3.Connection, report_id: str
     ) -> PendingCaptainQuestions | None:
-        """Read one pending row, treating malformed local data as unusable state."""
+        """Read one pending row, treating malformed data as unusable."""
 
         row = connection.execute(
             """
@@ -397,7 +458,9 @@ class RemoteClientState:
         validated_rows = []
         for row in rows:
             if len(row) != 7:
-                raise RemoteStateConflict("remote turn row has an invalid shape")
+                raise RemoteStateConflict(
+                    "remote turn row has an invalid shape"
+                )
             (
                 stored_profile_id,
                 stored_report_id,
@@ -409,16 +472,22 @@ class RemoteClientState:
             ) = row
             try:
                 _require_profile_id(stored_profile_id)
-                _require_text(stored_report_id, "report_id", MAX_REPORT_ID_CHARACTERS)
+                _require_text(
+                    stored_report_id, "report_id", MAX_REPORT_ID_CHARACTERS
+                )
                 _require_text(turn_kind, "turn_kind", MAX_TURN_ID_CHARACTERS)
                 _require_text(digest, "payload_digest", MAX_DIGEST_CHARACTERS)
-                _require_text(created_at, "created_at", MAX_TIMESTAMP_CHARACTERS)
+                _require_text(
+                    created_at, "created_at", MAX_TIMESTAMP_CHARACTERS
+                )
                 if (
                     stored_profile_id != self.profile_id
                     or stored_report_id != report_id
                     or turn_kind not in {"report", "reply"}
                 ):
-                    raise ValueError("remote turn row has an unexpected report or kind")
+                    raise ValueError(
+                        "remote turn row has an unexpected report or kind"
+                    )
                 if turn_kind == "report":
                     if parent_turn_id != "":
                         raise ValueError("initial remote turn has a parent")
@@ -427,10 +496,15 @@ class RemoteClientState:
                         parent_turn_id, "parent_turn_id", MAX_TURN_ID_CHARACTERS
                     )
                 parsed_turn_id = UUID(turn_id)
-                if parsed_turn_id.version != 4 or str(parsed_turn_id) != turn_id:
+                if (
+                    parsed_turn_id.version != 4
+                    or str(parsed_turn_id) != turn_id
+                ):
                     raise ValueError("remote turn ID is not a canonical UUIDv4")
             except (TypeError, ValueError, AttributeError):
-                raise RemoteStateConflict("remote turn row is malformed") from None
+                raise RemoteStateConflict(
+                    "remote turn row is malformed"
+                ) from None
             validated_rows.append(row)
         return validated_rows
 
@@ -441,7 +515,7 @@ class RemoteClientState:
         parent_turn_id: str,
         payload_digest: str,
     ) -> str | None:
-        """Return the only validated row matching one exact retry relationship."""
+        """Return the only row matching one exact retry relationship."""
 
         matches = [
             row
@@ -451,7 +525,9 @@ class RemoteClientState:
             and row[4] == payload_digest
         ]
         if len(matches) > 1:
-            raise RemoteStateConflict("remote turn state contains duplicate retry rows")
+            raise RemoteStateConflict(
+                "remote turn state contains duplicate retry rows"
+            )
         return matches[0][5] if matches else None
 
     def _get_or_create_turn(
@@ -470,17 +546,27 @@ class RemoteClientState:
                 if turn_kind == "report":
                     prior_reports = [row for row in rows if row[2] == "report"]
                     if prior_reports:
-                        if len(prior_reports) != 1 or prior_reports[0][4] != payload_digest:
+                        if (
+                            len(prior_reports) != 1
+                            or prior_reports[0][4] != payload_digest
+                        ):
                             raise RemoteStateConflict(
-                                "report_id already has a different initial payload"
+                                "report_id already has a different "
+                                "initial payload"
                             )
                         connection.commit()
                         return prior_reports[0][5]
                 else:
-                    pending = self._pending_in_transaction(connection, report_id)
-                    if pending is None or pending.parent_turn_id != parent_turn_id:
+                    pending = self._pending_in_transaction(
+                        connection, report_id
+                    )
+                    if (
+                        pending is None
+                        or pending.parent_turn_id != parent_turn_id
+                    ):
                         raise RemoteStateConflict(
-                            "reply does not match the current pending Captain question"
+                            "reply does not match the current pending "
+                            "Captain question"
                         )
                     winner = self._matching_turn(
                         rows, turn_kind, parent_turn_id, payload_digest
@@ -515,17 +601,36 @@ class RemoteClientState:
                     payload_digest,
                 )
                 if winner is None:
-                    raise RemoteStateConflict("remote turn could not be reserved")
+                    raise RemoteStateConflict(
+                        "remote turn could not be reserved"
+                    )
                 connection.commit()
                 return winner
             except Exception:
                 connection.rollback()
                 raise
 
-    def get_or_create_report_turn(self, report_id: str, payload_digest: str) -> str:
-        """Return the one stable remote turn ID for an initial report payload."""
+    def get_or_create_report_turn(
+        self, report_id: str, payload_digest: str
+    ) -> str:
+        """Return the one stable remote turn ID for an initial report.
 
-        report_id = _require_text(report_id, "report_id", MAX_REPORT_ID_CHARACTERS)
+        Args:
+            report_id: Caller-chosen report identifier.
+            payload_digest: SHA-256 digest of the canonical payload.
+
+        Returns:
+            The stable UUIDv4 turn ID reserved for this payload.
+
+        Raises:
+            ValueError: If an argument is blank or too long.
+            RemoteStateConflict: If the report ID was already used with a
+                different payload.
+        """
+
+        report_id = _require_text(
+            report_id, "report_id", MAX_REPORT_ID_CHARACTERS
+        )
         payload_digest = _require_text(
             payload_digest, "payload_digest", MAX_DIGEST_CHARACTERS
         )
@@ -534,9 +639,25 @@ class RemoteClientState:
     def get_or_create_reply_turn(
         self, report_id: str, parent_turn_id: str, payload_digest: str
     ) -> str:
-        """Return a stable reply turn only for the current pending Captain question."""
+        """Return a stable reply turn for the pending Captain question.
 
-        report_id = _require_text(report_id, "report_id", MAX_REPORT_ID_CHARACTERS)
+        Args:
+            report_id: Caller-chosen report identifier.
+            parent_turn_id: Turn ID of the question being answered.
+            payload_digest: SHA-256 digest of the reply text.
+
+        Returns:
+            The stable UUIDv4 turn ID reserved for this reply.
+
+        Raises:
+            ValueError: If an argument is blank or too long.
+            RemoteStateConflict: If the reply does not match the current
+                pending question context.
+        """
+
+        report_id = _require_text(
+            report_id, "report_id", MAX_REPORT_ID_CHARACTERS
+        )
         parent_turn_id = _require_text(
             parent_turn_id, "parent_turn_id", MAX_TURN_ID_CHARACTERS
         )
@@ -548,23 +669,46 @@ class RemoteClientState:
         )
 
     def get_pending(self, report_id: str) -> PendingCaptainQuestions | None:
-        """Return the current unanswered Captain questions for one report, if valid."""
+        """Return the current unanswered Captain questions, if valid.
 
-        report_id = _require_text(report_id, "report_id", MAX_REPORT_ID_CHARACTERS)
+        Args:
+            report_id: Caller-chosen report identifier.
+
+        Returns:
+            The pending question context, or None when no valid pending
+            row exists for the report.
+        """
+
+        report_id = _require_text(
+            report_id, "report_id", MAX_REPORT_ID_CHARACTERS
+        )
         with closing(self._connect()) as connection:
             return self._pending_in_transaction(connection, report_id)
 
     def replace_pending(
         self, report_id: str, parent_turn_id: str, questions: Sequence[str]
     ) -> None:
-        """Atomically replace one report's unanswered Captain question context."""
+        """Atomically replace one report's pending question context.
 
-        report_id = _require_text(report_id, "report_id", MAX_REPORT_ID_CHARACTERS)
+        Args:
+            report_id: Caller-chosen report identifier.
+            parent_turn_id: Turn ID that produced the questions.
+            questions: Nonempty sequence of question strings.
+
+        Raises:
+            ValueError: If an argument is blank, too long, or malformed.
+        """
+
+        report_id = _require_text(
+            report_id, "report_id", MAX_REPORT_ID_CHARACTERS
+        )
         parent_turn_id = _require_text(
             parent_turn_id, "parent_turn_id", MAX_TURN_ID_CHARACTERS
         )
         validated_questions = _validated_questions(questions)
-        questions_json = json.dumps(list(validated_questions), ensure_ascii=False)
+        questions_json = json.dumps(
+            list(validated_questions), ensure_ascii=False
+        )
 
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -593,14 +737,21 @@ class RemoteClientState:
                 raise
 
     def clear_pending(self, report_id: str) -> None:
-        """Remove current question context for one report; repeated clearing is safe."""
+        """Remove one report's question context; repeat clears are safe.
 
-        report_id = _require_text(report_id, "report_id", MAX_REPORT_ID_CHARACTERS)
+        Args:
+            report_id: Caller-chosen report identifier.
+        """
+
+        report_id = _require_text(
+            report_id, "report_id", MAX_REPORT_ID_CHARACTERS
+        )
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
                 connection.execute(
-                    "DELETE FROM pending_questions WHERE profile_id = ? AND report_id = ?",
+                    "DELETE FROM pending_questions"
+                    " WHERE profile_id = ? AND report_id = ?",
                     (self.profile_id, report_id),
                 )
                 connection.commit()

@@ -1,21 +1,22 @@
-import { randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { AuditLog, createAuditEvent, limitSummaryAuditInputs, parseAuditEvent, } from "./audit.js";
-import { HttpProblem, } from "./contracts.js";
-import { issueMemberToken } from "./security.js";
+import { randomUUID } from 'node:crypto';
+import { chmodSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { AuditLog, createAuditEvent, limitSummaryAuditInputs, parseAuditEvent, } from './audit.js';
+import { HttpProblem, } from './contracts.js';
+import { issueMemberToken } from './security.js';
 const TERMINAL_TURN_STATES = new Set([
-    "succeeded",
-    "failed",
-    "timed_out",
-    "unknown_outcome",
+    'succeeded',
+    'failed',
+    'timed_out',
+    'unknown_outcome',
 ]);
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const SQLITE_BUSY_RETRY_MS = 10;
 const SQLITE_BUSY_WAIT = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 const DEFAULT_MAX_GLOBAL_ACTIVE_TURNS = 32;
 const MAX_GLOBAL_ACTIVE_TURNS = 32;
+/** Maximum accepted length of a member display name. */
 export const MAX_MEMBER_NAME_CHARACTERS = 100;
 const MEMBER_NAME_CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 function storedMember(row) {
@@ -44,9 +45,11 @@ function storedTurn(row) {
         turnId: row.turn_id,
         kind: row.kind,
         requestDigest: row.request_digest,
+        // Safe: payload_json is written only from a validated TurnInput.
         payload: JSON.parse(row.payload_json),
         state: row.state,
         runId: row.run_id,
+        // Safe: result_json is written only from a normalized CaptainResult.
         result: row.result_json ? JSON.parse(row.result_json) : null,
         error: row.error_code !== null && row.error_message !== null
             ? { code: row.error_code, message: row.error_message }
@@ -62,33 +65,34 @@ function required(value, field) {
         throw new TypeError(`${field} is required.`);
     return normalized;
 }
+/** Trims and validates a member display name. */
 export function normalizeMemberName(value) {
-    const normalized = required(value, "Member name");
+    const normalized = required(value, 'Member name');
     if (normalized.length > MAX_MEMBER_NAME_CHARACTERS
         || MEMBER_NAME_CONTROL.test(normalized)) {
-        throw new TypeError("Member name is invalid.");
+        throw new TypeError('Member name is invalid.');
     }
     return normalized;
 }
 function isLockedDatabase(error) {
     return error instanceof Error
-        && error.message === "database is locked"
-        && "code" in error
-        && error.code === "ERR_SQLITE_ERROR";
+        && error.message === 'database is locked'
+        && 'code' in error
+        && error.code === 'ERR_SQLITE_ERROR';
 }
 function enableWal(database) {
     const deadline = Date.now() + SQLITE_BUSY_TIMEOUT_MS;
     while (true) {
         try {
-            const journal = database.prepare("PRAGMA journal_mode = WAL").get();
-            if (journal.journal_mode !== "wal") {
-                throw new Error("Captain remote database requires WAL mode.");
+            const journal = database.prepare('PRAGMA journal_mode = WAL').get();
+            if (journal.journal_mode !== 'wal') {
+                throw new Error('Captain remote database requires WAL mode.');
             }
             return;
         }
         catch (error) {
             if (!isLockedDatabase(error) || Date.now() >= deadline) {
-                throw new Error("Captain remote database requires WAL mode.");
+                throw new Error('Captain remote database requires WAL mode.');
             }
             Atomics.wait(SQLITE_BUSY_WAIT, 0, 0, SQLITE_BUSY_RETRY_MS);
         }
@@ -101,6 +105,7 @@ function elapsedMilliseconds(start, finish) {
         return 0;
     return Math.max(0, finishMs - startMs);
 }
+/** SQLite-backed durable store for members, reports, turns, and audits. */
 export class CaptainRemoteStore {
     databasePath;
     database = null;
@@ -218,8 +223,9 @@ export class CaptainRemoteStore {
         if (events.length === 0)
             return;
         this.inImmediateTransaction(() => {
-            for (const event of events)
+            for (const event of events) {
                 this.enqueueAudit(event);
+            }
         });
         this.projectAuditBestEffort();
     }
@@ -228,7 +234,7 @@ export class CaptainRemoteStore {
     }
     createMemberWithId(memberId, name, email, issued) {
         const normalizedName = normalizeMemberName(name);
-        const normalizedEmail = required(email, "Member email");
+        const normalizedEmail = required(email, 'Member email');
         const createdAt = new Date().toISOString();
         const member = this.inImmediateTransaction(() => {
             this.getDatabase().prepare(`
@@ -238,10 +244,10 @@ export class CaptainRemoteStore {
       `).run(memberId, normalizedName, normalizedEmail, issued.lookupId, issued.digest, createdAt);
             const created = this.getMember(memberId);
             this.enqueueAudit({
-                event: "member_created",
+                event: 'member_created',
                 memberId: created.memberId,
-                operation: "member",
-                route: "local_cli",
+                operation: 'member',
+                route: 'local_cli',
             });
             return created;
         });
@@ -249,12 +255,14 @@ export class CaptainRemoteStore {
         return member;
     }
     listMembers() {
+        // Safe: the members table schema fixes the row shape.
         const rows = this.getDatabase().prepare(`
       SELECT * FROM members ORDER BY created_at, member_id
     `).all();
         return rows.map(storedMember);
     }
     findMemberForAuth(lookupId) {
+        // Safe: the members table schema fixes the row shape.
         const row = this.getDatabase().prepare(`
       SELECT * FROM members WHERE token_lookup_id = ?
     `).get(lookupId);
@@ -267,11 +275,12 @@ export class CaptainRemoteStore {
         };
     }
     prepareMemberRotation(memberId) {
+        // Safe: the selected column is declared TEXT NOT NULL.
         const row = this.getDatabase().prepare(`
       SELECT token_lookup_id FROM members WHERE member_id = ?
     `).get(memberId);
         if (!row)
-            throw new Error("Member not found.");
+            throw new Error('Member not found.');
         return issueMemberToken(row.token_lookup_id);
     }
     rotateMember(memberId, issued) {
@@ -283,13 +292,13 @@ export class CaptainRemoteStore {
         WHERE member_id = ? AND token_lookup_id = ?
       `).run(issued.digest, rotatedAt, memberId, issued.lookupId);
             if (result.changes !== 1)
-                throw new Error("Member not found.");
+                throw new Error('Member not found.');
             const rotated = this.getMember(memberId);
             this.enqueueAudit({
-                event: "member_rotated",
+                event: 'member_rotated',
                 memberId: rotated.memberId,
-                operation: "member",
-                route: "local_cli",
+                operation: 'member',
+                route: 'local_cli',
             });
             return rotated;
         });
@@ -302,13 +311,13 @@ export class CaptainRemoteStore {
         UPDATE members SET revoked_at = ? WHERE member_id = ?
       `).run(new Date().toISOString(), memberId);
             if (result.changes !== 1)
-                throw new Error("Member not found.");
+                throw new Error('Member not found.');
             const revoked = this.getMember(memberId);
             this.enqueueAudit({
-                event: "member_revoked",
+                event: 'member_revoked',
                 memberId: revoked.memberId,
-                operation: "member",
-                route: "local_cli",
+                operation: 'member',
+                route: 'local_cli',
             });
             return revoked;
         });
@@ -320,31 +329,31 @@ export class CaptainRemoteStore {
             const existing = this.selectTurn(input);
             if (existing) {
                 if (existing.requestDigest !== input.requestDigest) {
-                    throw new HttpProblem(409, "TURN_CONFLICT", "Turn ID already has different content.");
+                    throw new HttpProblem(409, 'TURN_CONFLICT', 'Turn ID already has different content.');
                 }
                 const reserved = {
-                    status: "existing",
+                    status: 'existing',
                     report: this.selectReport(input),
                     turn: existing,
                 };
                 this.enqueueAudit({
-                    event: "submit_authenticated",
+                    event: 'submit_authenticated',
                     memberId: input.memberId,
-                    operation: "submit",
-                    route: "submit",
+                    operation: 'submit',
+                    route: 'submit',
                     reportId: input.reportId,
                     turnId: input.turnId,
                     toState: existing.state,
-                    code: "EXISTING",
+                    code: 'EXISTING',
                 });
                 return reserved;
             }
             const memberActive = this.countMemberActive(input.memberId);
             if (memberActive >= 1) {
-                throw new HttpProblem(429, "MEMBER_ACTIVE_LIMIT", "Member already has active work.");
+                throw new HttpProblem(429, 'MEMBER_ACTIVE_LIMIT', 'Member already has active work.');
             }
             if (this.countGlobalActive() >= this.maxGlobalActiveTurns) {
-                throw new HttpProblem(429, "GLOBAL_ACTIVE_LIMIT", "Global active-turn limit reached.");
+                throw new HttpProblem(429, 'GLOBAL_ACTIVE_LIMIT', 'Global active-turn limit reached.');
             }
             const now = new Date().toISOString();
             this.getDatabase().prepare(`
@@ -353,6 +362,7 @@ export class CaptainRemoteStore {
         ) VALUES (?, ?, ?, ?, ?)
         ON CONFLICT (member_id, report_id) DO NOTHING
       `).run(input.memberId, input.reportId, randomUUID(), now, now);
+            // Safe: payloadJson is produced by canonicalizeTurnInput upstream.
             const payload = JSON.parse(input.payloadJson);
             this.getDatabase().prepare(`
         INSERT INTO turns (
@@ -363,27 +373,27 @@ export class CaptainRemoteStore {
             this.touchReport(input, now);
             const turn = this.selectTurn(input);
             if (!turn)
-                throw new Error("Reserved turn was not persisted.");
+                throw new Error('Reserved turn was not persisted.');
             this.enqueueAudit({
-                event: "turn_queued",
+                event: 'turn_queued',
                 memberId: input.memberId,
-                operation: "turn",
-                route: "submit",
+                operation: 'turn',
+                route: 'submit',
                 reportId: input.reportId,
                 turnId: input.turnId,
-                toState: "queued",
+                toState: 'queued',
             });
             this.enqueueAudit({
-                event: "submit_authenticated",
+                event: 'submit_authenticated',
                 memberId: input.memberId,
-                operation: "submit",
-                route: "submit",
+                operation: 'submit',
+                route: 'submit',
                 reportId: input.reportId,
                 turnId: input.turnId,
-                toState: "queued",
-                code: "CREATED",
+                toState: 'queued',
+                code: 'CREATED',
             });
-            return { status: "created", report: this.selectReport(input), turn };
+            return { status: 'created', report: this.selectReport(input), turn };
         });
         this.projectAuditBestEffort();
         return reserved;
@@ -393,14 +403,16 @@ export class CaptainRemoteStore {
     }
     claimNextTurn(maxRunning) {
         if (!Number.isSafeInteger(maxRunning) || maxRunning <= 0) {
-            throw new TypeError("maxRunning must be a positive safe integer.");
+            throw new TypeError('maxRunning must be a positive safe integer.');
         }
         const claimed = this.inImmediateTransaction(() => {
+            // Safe: COUNT(*) always yields one row with a numeric count.
             const running = this.getDatabase().prepare(`
         SELECT COUNT(*) AS count FROM turns WHERE state = 'started'
       `).get();
             if (running.count >= maxRunning)
                 return null;
+            // Safe: the turns table schema fixes the row shape.
             const row = this.getDatabase().prepare(`
         SELECT * FROM turns
         WHERE state = 'queued'
@@ -417,7 +429,7 @@ export class CaptainRemoteStore {
         WHERE member_id = ? AND report_id = ? AND turn_id = ? AND state = 'queued'
       `).run(runId, startedAt, row.member_id, row.report_id, row.turn_id);
             if (updated.changes !== 1)
-                throw new Error("Queued turn could not be claimed.");
+                throw new Error('Queued turn could not be claimed.');
             const key = {
                 memberId: row.member_id,
                 reportId: row.report_id,
@@ -425,21 +437,21 @@ export class CaptainRemoteStore {
             };
             const turn = this.selectTurn(key);
             if (!turn)
-                throw new Error("Claimed turn was not persisted.");
+                throw new Error('Claimed turn was not persisted.');
             const claimed = {
                 ...turn,
                 member: this.getMember(key.memberId),
                 report: this.selectReport(key),
             };
             this.enqueueAudit({
-                event: "turn_started",
+                event: 'turn_started',
                 memberId: claimed.memberId,
-                operation: "turn",
-                route: "worker",
+                operation: 'turn',
+                route: 'worker',
                 reportId: claimed.reportId,
                 turnId: claimed.turnId,
-                fromState: "queued",
-                toState: "started",
+                fromState: 'queued',
+                toState: 'started',
                 durationMs: elapsedMilliseconds(claimed.createdAt, claimed.startedAt),
             });
             return claimed;
@@ -449,10 +461,10 @@ export class CaptainRemoteStore {
     }
     finishTurn(key, state, result, error) {
         if (!TERMINAL_TURN_STATES.has(state)) {
-            throw new HttpProblem(400, "INVALID_TURN_STATE", "Turn state must be terminal.");
+            throw new HttpProblem(400, 'INVALID_TURN_STATE', 'Turn state must be terminal.');
         }
         const started = this.getTurn(key);
-        let finishedAt = "";
+        let finishedAt = '';
         this.inImmediateTransaction(() => {
             finishedAt = new Date().toISOString();
             const updated = this.getDatabase().prepare(`
@@ -461,17 +473,17 @@ export class CaptainRemoteStore {
         WHERE member_id = ? AND report_id = ? AND turn_id = ? AND state = 'started'
       `).run(state, result ? JSON.stringify(result) : null, error?.code ?? null, error?.message ?? null, finishedAt, key.memberId, key.reportId, key.turnId);
             if (updated.changes !== 1) {
-                throw new HttpProblem(409, "TURN_NOT_STARTED", "Turn is not in the started state.");
+                throw new HttpProblem(409, 'TURN_NOT_STARTED', 'Turn is not in the started state.');
             }
             this.touchReport(key, finishedAt);
             this.enqueueAudit({
                 event: `turn_${state}`,
                 memberId: key.memberId,
-                operation: "turn",
-                route: "worker",
+                operation: 'turn',
+                route: 'worker',
                 reportId: key.reportId,
                 turnId: key.turnId,
-                fromState: "started",
+                fromState: 'started',
                 toState: state,
                 durationMs: elapsedMilliseconds(started?.startedAt ?? null, finishedAt),
                 code: error?.code,
@@ -482,6 +494,7 @@ export class CaptainRemoteStore {
     recoverStartedTurns() {
         const finishedAt = new Date().toISOString();
         const recovered = this.inImmediateTransaction(() => {
+            // Safe: the selected columns match the turns table schema.
             const started = this.getDatabase().prepare(`
         SELECT member_id, report_id, turn_id, started_at
         FROM turns WHERE state = 'started'
@@ -497,16 +510,16 @@ export class CaptainRemoteStore {
       `).run(finishedAt);
             for (const turn of started) {
                 this.enqueueAudit({
-                    event: "turn_unknown_outcome",
+                    event: 'turn_unknown_outcome',
                     memberId: turn.member_id,
-                    operation: "turn",
-                    route: "worker",
+                    operation: 'turn',
+                    route: 'worker',
                     reportId: turn.report_id,
                     turnId: turn.turn_id,
-                    fromState: "started",
-                    toState: "unknown_outcome",
+                    fromState: 'started',
+                    toState: 'unknown_outcome',
                     durationMs: elapsedMilliseconds(turn.started_at, finishedAt),
-                    code: "RESTART_RECOVERY",
+                    code: 'RESTART_RECOVERY',
                 });
             }
             return Number(result.changes);
@@ -515,22 +528,25 @@ export class CaptainRemoteStore {
         return recovered;
     }
     getMember(memberId) {
+        // Safe: the members table schema fixes the row shape.
         const row = this.getDatabase().prepare(`
       SELECT * FROM members WHERE member_id = ?
     `).get(memberId);
         if (!row)
-            throw new Error("Member not found.");
+            throw new Error('Member not found.');
         return storedMember(row);
     }
     selectReport(key) {
+        // Safe: the reports table schema fixes the row shape.
         const row = this.getDatabase().prepare(`
       SELECT * FROM reports WHERE member_id = ? AND report_id = ?
     `).get(key.memberId, key.reportId);
         if (!row)
-            throw new Error("Report not found.");
+            throw new Error('Report not found.');
         return storedReport(row);
     }
     selectTurn(key) {
+        // Safe: the turns table schema fixes the row shape.
         const row = this.getDatabase().prepare(`
       SELECT * FROM turns
       WHERE member_id = ? AND report_id = ? AND turn_id = ?
@@ -538,6 +554,7 @@ export class CaptainRemoteStore {
         return row ? storedTurn(row) : null;
     }
     countMemberActive(memberId) {
+        // Safe: COUNT(*) always yields one row with a numeric count.
         const row = this.getDatabase().prepare(`
       SELECT COUNT(*) AS count FROM turns
       WHERE state IN ('queued', 'started') AND member_id = ?
@@ -545,6 +562,7 @@ export class CaptainRemoteStore {
         return row.count;
     }
     countGlobalActive() {
+        // Safe: COUNT(*) always yields one row with a numeric count.
         const row = this.getDatabase().prepare(`
       SELECT COUNT(*) AS count FROM turns WHERE state IN ('queued', 'started')
     `).get();
@@ -566,6 +584,7 @@ export class CaptainRemoteStore {
         try {
             this.audit.initialize();
             while (true) {
+                // Safe: the audit_outbox table schema fixes the row shape.
                 const pending = this.getDatabase().prepare(`
           SELECT sequence, event_json
           FROM audit_outbox
@@ -589,15 +608,15 @@ export class CaptainRemoteStore {
     }
     inImmediateTransaction(operation) {
         const database = this.getDatabase();
-        database.exec("BEGIN IMMEDIATE");
+        database.exec('BEGIN IMMEDIATE');
         try {
             const result = operation();
-            database.exec("COMMIT");
+            database.exec('COMMIT');
             return result;
         }
         catch (error) {
             try {
-                database.exec("ROLLBACK");
+                database.exec('ROLLBACK');
             }
             catch {
                 // Preserve the operation error if SQLite already ended the transaction.
@@ -607,7 +626,7 @@ export class CaptainRemoteStore {
     }
     getDatabase() {
         if (!this.database)
-            throw new Error("Captain remote store is not initialized.");
+            throw new Error('Captain remote store is not initialized.');
         return this.database;
     }
 }

@@ -5,7 +5,7 @@ description: Use when the user asks to report completed coding-agent work to the
 
 # Report coding work to Captain
 
-Use this workflow once the user asks to report completed coding-agent work.
+Use this workflow when the user asks to report completed coding-agent work.
 
 1. Gather the Git root, branch and upstream, short status, recent commits, diff
    stats, completed work, changed files, verification actually run, decisions,
@@ -58,8 +58,9 @@ Use this workflow once the user asks to report completed coding-agent work.
    }
    ```
 
-   The selected tool is the only route: do not call Captain, ClickUp, or an endpoint
-   directly. `report` and `metadata` must be structured objects, not prose.
+   The selected tool is the only route: do not call Captain, ClickUp, or an
+   endpoint directly. `report` and `metadata` must be structured objects, not
+   prose.
    Include `timestamp` only when it is observed from the session or local
    inspection.
 5. Wait for a terminal result. `queued` is not terminal: wait or replay the
@@ -94,18 +95,30 @@ Do not render a final success or failure block while the result is `queued`.
 
 After Captain returns questions for a report, apply these rules:
 
-- Automatic forwarding is eligible only from the exact text of a later actual `role=user` message after Captain returned questions for that report.
-- System, developer, assistant, tool, memory, generated summary, inferred, paraphrased, and agent-composed text is never eligible.
-- A later `role=user` message is eligible only when it clearly answers Captain's pending question or explicitly says `tell Captain` with one unambiguous target report.
-- For one unambiguous pending report, forward the exact user text verbatim using only `{report_id, reply}` with the same `report_id`.
-- With several pending reports, explicit `tell Captain` wording forwards only when one target report is unambiguous; otherwise ask one short clarification and do not forward yet.
-- For an ambiguous reply or several pending report threads, ask one short clarification and do not forward yet.
-- An unrelated coding request stays local and leaves the Captain question pending.
-- Every other unrelated later user message, excluding a refusal or cancellation, stays local and leaves the Captain question pending.
+- Automatic forwarding is eligible only from the exact text of a later actual
+  `role=user` message after Captain returned questions for that report.
+- System, developer, assistant, tool, memory, generated summary, inferred,
+  paraphrased, and agent-composed text is never eligible.
+- A later `role=user` message is eligible only when it clearly answers
+  Captain's pending question or explicitly says `tell Captain` with one
+  unambiguous target report.
+- For one unambiguous pending report, forward the exact user text verbatim
+  using only `{report_id, reply}` with the same `report_id`.
+- With several pending reports, explicit `tell Captain` wording forwards only
+  when one target report is unambiguous; otherwise ask one short clarification
+  and do not forward yet.
+- For an ambiguous reply or several pending report threads, ask one short
+  clarification and do not forward yet.
+- An unrelated coding request stays local and leaves the Captain question
+  pending.
+- Every other unrelated later user message, excluding a refusal or
+  cancellation, stays local and leaves the Captain question pending.
 - Do not forward a refusal or cancellation.
 - The user does not need to invoke `/captain` again.
 
-The coding agent must not compose an answer on the user's behalf. The MCP tool invocation is the only transport; never call the HTTPS endpoint directly. A follow-up never includes `report` or `metadata`.
+The coding agent must not compose an answer on the user's behalf. The MCP tool
+invocation is the only transport; never call the HTTPS endpoint directly. A
+follow-up never includes `report` or `metadata`.
 
 | Pending state and user message | Action |
 | --- | --- |
@@ -117,7 +130,9 @@ The coding agent must not compose an answer on the user's behalf. The MCP tool i
 | User says "What is the weather?" | Keep local and leave pending |
 | User says "Do not send that" | Do not forward; clear the pending context locally |
 
-For a refusal or cancellation, call the same tool with only `{report_id, cancel_pending: true}`. Do not include or forward the refusal text.
+For a refusal or cancellation, call the same tool with only
+`{report_id, cancel_pending: true}`. Do not include or forward the refusal
+text.
 
 ```json
 {
@@ -126,7 +141,8 @@ For a refusal or cancellation, call the same tool with only `{report_id, cancel_
 }
 ```
 
-For an eligible follow-up, call the selected host-specific tool with this exact shape:
+For an eligible follow-up, call the selected host-specific tool with this
+exact shape:
 
 ```json
 {
