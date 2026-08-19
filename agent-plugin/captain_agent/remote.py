@@ -14,6 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import (
     HTTPRedirectHandler,
+    ProxyHandler,
     Request,
     build_opener,
 )
@@ -48,6 +49,10 @@ class _NetworkFailure(Exception):
 
 class _ResponseFailure(Exception):
     """Mark a response that cannot be trusted or parsed safely."""
+
+
+class _DeadlineExpired(Exception):
+    """Prevent a new socket request after the overall deadline."""
 
 
 class _HttpStatus(Exception):
@@ -187,6 +192,17 @@ def _queued_result(report_id: str) -> CaptainReportResult:
         "queued",
         captain_feedback=(
             "Captain is still processing this turn. Retry with the same report ID."
+        ),
+    )
+
+
+def _busy_result(report_id: str) -> CaptainReportResult:
+    return canonical_result(
+        report_id,
+        "failed",
+        captain_feedback=(
+            "Captain did not accept the remote turn before the retry deadline. "
+            "Retry later with the same report ID."
         ),
     )
 
@@ -338,7 +354,7 @@ def _validated_envelope(
     return turn_status, result
 
 
-def _serialized_payload(payload: Mapping[str, Any], turn_id: str) -> bytes:
+def serialize_remote_payload(payload: Mapping[str, Any], turn_id: str) -> bytes:
     """Serialize the exact request once after checking its strict union shape."""
 
     if not isinstance(payload, Mapping) or payload.get("turn_id") != turn_id:
@@ -382,10 +398,18 @@ class RemoteCaptainClient:
         self._clock = clock
         self._wall_clock = wall_clock
         self._sleep = sleep
-        self._opener = build_opener(_RejectRedirects())
+        # Credentials are origin-only. Never inherit ambient proxy settings.
+        self._opener = build_opener(ProxyHandler({}), _RejectRedirects())
         self.terminal_response = False
 
-    def _request(self, method: str, url: str, body: bytes | None = None) -> Any:
+    def _request(
+        self,
+        method: str,
+        url: str,
+        body: bytes | None = None,
+        *,
+        timeout: float,
+    ) -> Any:
         request = Request(
             url,
             data=body,
@@ -396,7 +420,7 @@ class RemoteCaptainClient:
             method=method,
         )
         try:
-            with self._opener.open(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            with self._opener.open(request, timeout=timeout) as response:
                 declared_length = response.headers.get("Content-Length")
                 if declared_length is not None:
                     try:
@@ -433,6 +457,25 @@ class RemoteCaptainClient:
         except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError):
             raise _ResponseFailure from None
 
+    def _request_before_deadline(
+        self,
+        method: str,
+        url: str,
+        deadline: float,
+        body: bytes | None = None,
+    ) -> Any:
+        """Start one request only when positive overall time remains."""
+
+        remaining = deadline - self._clock()
+        if remaining <= 0:
+            raise _DeadlineExpired
+        return self._request(
+            method,
+            url,
+            body,
+            timeout=min(float(REQUEST_TIMEOUT_SECONDS), remaining),
+        )
+
     def _retry_after(self, headers: Any) -> float:
         values = headers.get_all("Retry-After") if headers is not None else None
         if not values or len(values) != 1:
@@ -466,7 +509,7 @@ class RemoteCaptainClient:
     ) -> CaptainReportResult:
         if error.status == 401:
             return _configuration_result(report_id)
-        if not submitted and error.status in {409, 413}:
+        if error.status in {409, 413}:
             return _failed_result(report_id)
         if not submitted and 400 <= error.status < 500 and error.status != 429:
             return _failed_result(report_id)
@@ -478,7 +521,7 @@ class RemoteCaptainClient:
         turn_id: str,
         payload: Mapping[str, Any],
     ) -> CaptainReportResult:
-        """POST exactly once and poll only the same validated report and turn."""
+        """Submit one stable turn, retrying only explicit pre-acceptance 429s."""
 
         self.terminal_response = False
         if (
@@ -488,27 +531,39 @@ class RemoteCaptainClient:
         ):
             return _failed_result(report_id if isinstance(report_id, str) else "invalid-report")
         try:
-            body = _serialized_payload(payload, turn_id)
+            body = serialize_remote_payload(payload, turn_id)
         except ValueError:
             return _failed_result(report_id)
 
         submit_path = f"/captain/v1/reports/{report_id}/turns"
         poll_path = f"{submit_path}/{turn_id}"
         deadline = self._clock() + POLL_DEADLINE_SECONDS
-        try:
-            response = self._request("POST", f"{self._config.base_url}{submit_path}", body)
-        except _HttpStatus as error:
-            if error.status == 429:
+        submit_url = f"{self._config.base_url}{submit_path}"
+        while True:
+            try:
+                response = self._request_before_deadline(
+                    "POST",
+                    submit_url,
+                    deadline,
+                    body,
+                )
+                break
+            except _DeadlineExpired:
+                return _busy_result(report_id)
+            except _HttpStatus as error:
+                if error.status != 429:
+                    return self._http_result(report_id, error, submitted=False)
                 try:
                     delay = self._retry_after(error.headers)
                 except _ResponseFailure:
-                    return _unknown_result(report_id)
+                    return _busy_result(report_id)
                 if self._clock() + delay >= deadline:
-                    return _queued_result(report_id)
-                return _queued_result(report_id)
-            return self._http_result(report_id, error, submitted=False)
-        except (_NetworkFailure, _ResponseFailure):
-            return _unknown_result(report_id)
+                    return _busy_result(report_id)
+                self._sleep(delay)
+                if self._clock() >= deadline:
+                    return _busy_result(report_id)
+            except (_NetworkFailure, _ResponseFailure):
+                return _unknown_result(report_id)
 
         try:
             turn_status, result = _validated_envelope(response, report_id, turn_id)
@@ -516,6 +571,8 @@ class RemoteCaptainClient:
             return _unknown_result(report_id)
         if turn_status not in {"queued", "started"}:
             return self._terminal_result(report_id, turn_status, result)
+        if self._clock() >= deadline:
+            return _queued_result(report_id)
 
         normal_delay = float(INITIAL_POLL_DELAY_SECONDS)
         delay = normal_delay
@@ -523,11 +580,16 @@ class RemoteCaptainClient:
             if self._clock() + delay >= deadline:
                 return _queued_result(report_id)
             self._sleep(delay)
+            if self._clock() >= deadline:
+                return _queued_result(report_id)
             try:
-                response = self._request(
+                response = self._request_before_deadline(
                     "GET",
                     f"{self._config.base_url}{poll_path}",
+                    deadline,
                 )
+            except _DeadlineExpired:
+                return _queued_result(report_id)
             except _HttpStatus as error:
                 if error.status == 429:
                     try:
@@ -549,6 +611,8 @@ class RemoteCaptainClient:
                 return _unknown_result(report_id)
             if turn_status not in {"queued", "started"}:
                 return self._terminal_result(report_id, turn_status, result)
+            if self._clock() >= deadline:
+                return _queued_result(report_id)
             normal_delay = min(normal_delay * 2, float(MAX_POLL_DELAY_SECONDS))
             delay = normal_delay
 

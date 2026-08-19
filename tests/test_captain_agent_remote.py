@@ -1,6 +1,7 @@
 """Exercise durable state, transport, and dispatch for remote Captain turns."""
 
 import hashlib
+import io
 import json
 import socket
 import sqlite3
@@ -9,8 +10,10 @@ import sys
 import threading
 from contextlib import contextmanager
 from dataclasses import FrozenInstanceError
+from email.message import Message
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.error import HTTPError
 from uuid import UUID
 
 import pytest
@@ -74,6 +77,56 @@ class FakeClock:
         self.now += seconds
 
 
+class AdvancingOpener:
+    """Record socket timeouts while simulating bounded in-flight time."""
+
+    def __init__(self, clock, responses):
+        self.clock = clock
+        self.responses = list(responses)
+        self.requests = []
+
+    def open(self, request, timeout):
+        advance, status, body, headers = self.responses.pop(0)
+        self.requests.append(
+            {
+                "method": request.get_method(),
+                "url": request.full_url,
+                "body": request.data,
+                "timeout": timeout,
+            }
+        )
+        self.clock.now += advance
+        message = Message()
+        for name, value in headers.items():
+            message.add_header(name, value)
+        if status >= 300:
+            raise HTTPError(
+                request.full_url,
+                status,
+                "scripted error",
+                message,
+                io.BytesIO(b""),
+            )
+
+        raw = json.dumps(body).encode("utf-8")
+        message["Content-Length"] = str(len(raw))
+
+        class Response:
+            def __init__(self):
+                self.headers = message
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, limit):
+                return raw[:limit]
+
+        return Response()
+
+
 @contextmanager
 def scripted_server(responses):
     """Serve scripted HTTP responses and record the real wire request boundary."""
@@ -90,6 +143,9 @@ def scripted_server(responses):
         def do_GET(self):
             self._handle()
 
+        def do_CONNECT(self):
+            self._handle()
+
         def _handle(self):
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length)
@@ -102,6 +158,8 @@ def scripted_server(responses):
                 }
             )
             response = script.pop(0)
+            if callable(response):
+                response = response(requests[-1])
             if response.get("disconnect"):
                 self.connection.shutdown(socket.SHUT_RDWR)
                 self.connection.close()
@@ -734,6 +792,46 @@ def test_submit_uses_exact_path_body_and_one_private_authorization_header():
     assert "member-token" not in request["path"]
 
 
+def test_remote_client_ignores_ambient_http_and_https_proxies(monkeypatch):
+    """Origin credentials must go directly to the configured target, never a proxy."""
+
+    turn_id = "b73db2fe-ec74-4f44-a74c-fbe44eb11e46"
+
+    def terminal_for_request(request):
+        submitted_turn = json.loads(request["body"])["turn_id"]
+        return {"body": envelope(submitted_turn)}
+
+    with scripted_server([terminal_for_request]) as (target_url, target_requests, _):
+        with scripted_server(
+            [terminal_for_request, {"status": 502, "body": "proxy"}]
+        ) as (proxy_url, proxy_requests, _proxy_script):
+            for name in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY"):
+                monkeypatch.setenv(name, proxy_url)
+            monkeypatch.setenv("no_proxy", "")
+            monkeypatch.setenv("NO_PROXY", "")
+
+            result = remote_client(target_url).submit_and_poll(
+                "report-1",
+                turn_id,
+                {"turn_id": turn_id, "kind": "reply", "reply": "Yes"},
+            )
+            https_result = remote_client(
+                target_url.replace("http://", "https://", 1)
+            ).submit_and_poll(
+                "report-1",
+                turn_id,
+                {"turn_id": turn_id, "kind": "reply", "reply": "Yes"},
+            )
+
+    assert result.status == "updated"
+    assert https_result.status == "unknown_outcome"
+    assert len(target_requests) == 1
+    assert target_requests[0]["headers"].get_all("Authorization") == [
+        "Bearer member-token"
+    ]
+    assert proxy_requests == []
+
+
 @pytest.mark.parametrize("report_id", ["report/1", "", "x" * 129])
 def test_invalid_report_id_is_rejected_before_network(report_id):
     """Untrusted report IDs must never become URL path segments."""
@@ -842,6 +940,146 @@ def test_poll_uses_initial_delay_bounded_backoff_and_retry_after():
     assert [request["method"] for request in requests] == ["POST", "GET", "GET", "GET", "GET", "GET"]
     expected_poll_path = f"/captain/v1/reports/report-1/turns/{turn_id}"
     assert {request["path"] for request in requests[1:]} == {expected_poll_path}
+
+
+@pytest.mark.parametrize("status", [409, 413])
+def test_poll_conflict_and_size_rejection_are_definitive_failed(status):
+    """A definitive poll rejection must not be upgraded to an ambiguous outcome."""
+
+    turn_id = "b73db2fe-ec74-4f44-a74c-fbe44eb11e46"
+    clock = FakeClock()
+    with scripted_server(
+        [
+            {"status": 202, "body": envelope(turn_id, "queued")},
+            {"status": status, "body": "remote-secret-body"},
+        ]
+    ) as (url, requests, _script):
+        client = remote_client(url, clock)
+        result = client.submit_and_poll(
+            "report-1",
+            turn_id,
+            {"turn_id": turn_id, "kind": "reply", "reply": "Yes"},
+        )
+
+    assert result.status == "failed"
+    assert "remote-secret-body" not in result.model_dump_json()
+    assert [request["method"] for request in requests] == ["POST", "GET"]
+    assert client.terminal_response is False
+
+
+def test_in_flight_poll_timeout_uses_only_remaining_deadline_budget():
+    """A poll socket timeout must shrink so no new request crosses the deadline."""
+
+    turn_id = "b73db2fe-ec74-4f44-a74c-fbe44eb11e46"
+    clock = FakeClock()
+    client = remote_client("http://127.0.0.1:1", clock)
+    opener = AdvancingOpener(
+        clock,
+        [
+            (320, 202, envelope(turn_id, "queued"), {}),
+            (8, 200, envelope(turn_id, "started"), {}),
+        ],
+    )
+    client._opener = opener
+
+    result = client.submit_and_poll(
+        "report-1",
+        turn_id,
+        {"turn_id": turn_id, "kind": "reply", "reply": "Yes"},
+    )
+
+    assert result.status == "queued"
+    assert [request["timeout"] for request in opener.requests] == [15, 8]
+    assert clock.now == 330
+    assert clock.sleeps == [2]
+
+
+def test_submit_429_waits_then_reposts_the_identical_stable_turn():
+    """An explicit not-accepted response may retry only the same idempotent POST."""
+
+    turn_id = "b73db2fe-ec74-4f44-a74c-fbe44eb11e46"
+    clock = FakeClock()
+    with scripted_server(
+        [
+            {"status": 429, "headers": {"Retry-After": "3"}},
+            {"body": envelope(turn_id)},
+        ]
+    ) as (url, requests, script):
+        result = remote_client(url, clock).submit_and_poll(
+            "report-1",
+            turn_id,
+            {"turn_id": turn_id, "kind": "reply", "reply": "Exact reply"},
+        )
+
+    assert result.status == "updated"
+    assert script == []
+    assert clock.sleeps == [3]
+    assert [request["method"] for request in requests] == ["POST", "POST"]
+    assert requests[0]["path"] == requests[1]["path"]
+    assert requests[0]["body"] == requests[1]["body"]
+
+
+def test_submit_429_deadline_expires_failed_without_sleep_or_repost():
+    """A turn never accepted before its deadline is a definitive busy failure."""
+
+    turn_id = "b73db2fe-ec74-4f44-a74c-fbe44eb11e46"
+    clock = FakeClock()
+    with scripted_server(
+        [{"status": 429, "headers": {"Retry-After": "330"}}]
+    ) as (url, requests, _script):
+        result = remote_client(url, clock).submit_and_poll(
+            "report-1",
+            turn_id,
+            {"turn_id": turn_id, "kind": "reply", "reply": "Yes"},
+        )
+
+    assert result.status == "failed"
+    assert len(requests) == 1
+    assert clock.sleeps == []
+    assert clock.now == 0
+
+
+def test_submit_429_with_malformed_retry_after_fails_without_repost():
+    """Malformed retry timing after explicit rejection must fail closed."""
+
+    turn_id = "b73db2fe-ec74-4f44-a74c-fbe44eb11e46"
+    clock = FakeClock()
+    with scripted_server(
+        [{"status": 429, "headers": {"Retry-After": "invalid"}}]
+    ) as (url, requests, _script):
+        result = remote_client(url, clock).submit_and_poll(
+            "report-1",
+            turn_id,
+            {"turn_id": turn_id, "kind": "reply", "reply": "Yes"},
+        )
+
+    assert result.status == "failed"
+    assert len(requests) == 1
+    assert clock.sleeps == []
+
+
+def test_submit_429_then_disconnect_never_retries_the_ambiguous_post():
+    """Only explicit rejection is retryable; a lost retry response remains ambiguous."""
+
+    turn_id = "b73db2fe-ec74-4f44-a74c-fbe44eb11e46"
+    clock = FakeClock()
+    with scripted_server(
+        [
+            {"status": 429, "headers": {"Retry-After": "1"}},
+            {"disconnect": True},
+            {"body": envelope(turn_id)},
+        ]
+    ) as (url, requests, script):
+        result = remote_client(url, clock).submit_and_poll(
+            "report-1",
+            turn_id,
+            {"turn_id": turn_id, "kind": "reply", "reply": "Yes"},
+        )
+
+    assert result.status == "unknown_outcome"
+    assert len(requests) == 2
+    assert len(script) == 1
+    assert clock.sleeps == [1]
 
 
 @pytest.mark.parametrize("retry_after", ["garbage", "-1", "1.5", "9" * 5_000])
@@ -1033,6 +1271,109 @@ def test_invalid_remote_report_does_not_create_continuation_state(tmp_path):
     )
     assert result.status == "needs_clarification"
     assert not state_path.exists()
+
+
+def test_oversized_remote_report_does_not_reserve_state_and_smaller_retry_proceeds(
+    tmp_path,
+):
+    """The exact wire-size check must precede stable turn reservation."""
+
+    state_path = tmp_path / "remote.sqlite3"
+
+    def terminal_for_request(request):
+        turn_id = json.loads(request["body"])["turn_id"]
+        return {"body": envelope(turn_id)}
+
+    with scripted_server([terminal_for_request]) as (url, requests, _script):
+        env = {
+            "CAPTAIN_REMOTE_URL": url,
+            "CAPTAIN_MEMBER_TOKEN": "member-token",
+            "CAPTAIN_REMOTE_STATE_PATH": str(state_path),
+        }
+        oversized = handle_captain_turn(
+            "report-1",
+            {"summary": ["x" * 300_000]},
+            {},
+            env=env,
+        )
+        assert oversized.status == "failed"
+        assert not state_path.exists()
+        assert requests == []
+
+        corrected = handle_captain_turn(
+            "report-1",
+            {"summary": ["Corrected smaller report."]},
+            {},
+            env=env,
+        )
+
+    assert corrected.status == "updated"
+    assert len(requests) == 1
+
+
+def test_oversized_remote_reply_preserves_pending_without_reserving_turn(tmp_path):
+    """An unsendable reply must not consume or conflict with pending context."""
+
+    state_path = tmp_path / "remote.sqlite3"
+    state = RemoteClientState(state_path)
+    state.replace_pending("report-1", "parent-turn", ["Ship Friday?"])
+    with scripted_server([]) as (url, requests, _script):
+        env = {
+            "CAPTAIN_REMOTE_URL": url,
+            "CAPTAIN_MEMBER_TOKEN": "member-token",
+            "CAPTAIN_REMOTE_STATE_PATH": str(state_path),
+        }
+        result = handle_captain_turn(
+            "report-1",
+            reply="x" * 300_000,
+            env=env,
+        )
+
+    assert result.status == "failed"
+    assert requests == []
+    assert RemoteClientState(state_path, env=env).get_pending("report-1").questions == (
+        "Ship Friday?",
+    )
+    with sqlite3.connect(state_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM remote_turns WHERE turn_kind = 'reply'"
+        ).fetchone()[0] == 0
+
+
+def test_submit_429_deadline_failure_preserves_pending_reply(tmp_path, monkeypatch):
+    """A never-accepted reply must leave its current parent available for retry."""
+
+    state_path = tmp_path / "remote.sqlite3"
+    state = RemoteClientState(state_path)
+    state.replace_pending("report-1", "parent-turn", ["Ship Friday?"])
+    clock = FakeClock()
+    original_init = RemoteCaptainClient.__init__
+
+    def initialize(client, config):
+        original_init(
+            client,
+            config,
+            clock=clock.monotonic,
+            wall_clock=clock.time,
+            sleep=clock.sleep,
+        )
+
+    monkeypatch.setattr(RemoteCaptainClient, "__init__", initialize)
+    with scripted_server(
+        [{"status": 429, "headers": {"Retry-After": "330"}}]
+    ) as (url, requests, _script):
+        env = {
+            "CAPTAIN_REMOTE_URL": url,
+            "CAPTAIN_MEMBER_TOKEN": "member-token",
+            "CAPTAIN_REMOTE_STATE_PATH": str(state_path),
+        }
+        result = handle_captain_turn("report-1", reply="Yes", env=env)
+
+    assert result.status == "failed"
+    assert len(requests) == 1
+    assert RemoteClientState(state_path, env=env).get_pending("report-1").questions == (
+        "Ship Friday?",
+    )
 
 
 def test_remote_report_uses_stable_turn_after_lost_submit_response(tmp_path):

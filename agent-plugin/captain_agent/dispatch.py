@@ -14,6 +14,7 @@ from .remote import (
     RemoteCaptainClient,
     RemoteConfigurationError,
     read_remote_config,
+    serialize_remote_payload,
 )
 from .reporting import (
     REPORT_ID_PATTERN,
@@ -22,6 +23,9 @@ from .reporting import (
     handle_session_report,
     validate_report_input,
 )
+
+
+PREFLIGHT_TURN_ID = "00000000-0000-4000-8000-000000000000"
 
 
 def _result(
@@ -145,6 +149,30 @@ def handle_captain_turn(
             )
         if validation is not None:
             return validation
+
+    preflight_payload: Mapping[str, Any]
+    if reply is not None:
+        preflight_payload = {
+            "turn_id": PREFLIGHT_TURN_ID,
+            "kind": "reply",
+            "reply": reply,
+        }
+    else:
+        assert report is not None
+        preflight_payload = {
+            "turn_id": PREFLIGHT_TURN_ID,
+            "kind": "report",
+            "report": report,
+            "metadata": remote_metadata,
+        }
+    try:
+        serialize_remote_payload(preflight_payload, PREFLIGHT_TURN_ID)
+    except ValueError:
+        return _result(
+            report_id,
+            "failed",
+            "The remote Captain request must be valid JSON up to 262,144 bytes.",
+        )
 
     try:
         state = RemoteClientState(remote_state_path(environment), env=environment)
