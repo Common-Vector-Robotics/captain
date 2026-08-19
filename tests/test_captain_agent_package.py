@@ -207,6 +207,27 @@ async def test_mcp_tool_returns_structured_validation_result(tmp_path, monkeypat
     assert result.structured_content["status"] == "needs_clarification"
 
 
+@pytest.mark.anyio
+async def test_mcp_keeps_one_tool_and_accepts_optional_exact_reply(monkeypatch):
+    """Remote continuation extends the existing tool instead of adding another API."""
+
+    monkeypatch.delenv("CAPTAIN_REMOTE_URL", raising=False)
+    monkeypatch.delenv("CAPTAIN_MEMBER_TOKEN", raising=False)
+    from captain_agent.server import mcp
+
+    async with Client(mcp, raise_exceptions=True) as client:
+        tools = await client.list_tools()
+        result = await client.call_tool(
+            "captain_session_report",
+            {"report_id": "report-1", "reply": "Yes, Friday is correct."},
+        )
+
+    assert [tool.name for tool in tools.tools] == ["captain_session_report"]
+    assert result.is_error is False
+    assert result.structured_content["report_id"] == "report-1"
+    assert result.structured_content["status"] == "needs_configuration"
+
+
 def test_root_package_includes_marketplace_and_plugin():
     package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
     assert ".agents/plugins/marketplace.json" in package["files"]
@@ -350,6 +371,8 @@ def test_npm_pack_excludes_plugin_runtime_artifacts(
         "agent-plugin/.codex-plugin/plugin.json",
         "agent-plugin/.mcp.json",
         "agent-plugin/bin/captain-agent-mcp",
+        "agent-plugin/captain_agent/dispatch.py",
+        "agent-plugin/captain_agent/remote.py",
         "agent-plugin/captain_agent/server.py",
         "agent-plugin/requirements.txt",
     }.issubset(packaged)

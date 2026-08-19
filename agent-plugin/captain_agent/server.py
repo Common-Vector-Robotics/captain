@@ -4,7 +4,8 @@ from typing import Any
 
 from mcp.server import MCPServer
 
-from .reporting import CaptainReportResult, handle_session_report
+from .dispatch import handle_captain_turn
+from .reporting import CaptainReportResult
 
 mcp = MCPServer(
     "Captain",
@@ -17,12 +18,13 @@ mcp = MCPServer(
 @mcp.tool()
 def captain_session_report(
     report_id: str,
-    report: dict[str, Any],
-    metadata: dict[str, Any],
+    report: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    reply: str | None = None,
 ) -> CaptainReportResult:
-    """Send one idempotent, redacted session report to Captain."""
+    """Send a report or an exact user-authored follow-up to Captain."""
 
-    return handle_session_report(report_id, report, metadata)
+    return handle_captain_turn(report_id, report, metadata, reply)
 
 
 def main() -> None:
