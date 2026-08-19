@@ -1,8 +1,7 @@
 # Captain coding-agent plugin
 
-This plugin lets a coding agent report completed work to an existing
-[Captain](../README.md) installation. It supports Codex, Claude Code, OpenCode,
-and OpenClaw.
+This plugin reports coding-agent work to an existing [Captain](../README.md)
+installation. It supports Codex, Claude Code, OpenCode, and OpenClaw.
 
 ## What this plugin does
 
@@ -10,33 +9,34 @@ After you finish a coding task, run `/captain` in your coding agent. Claude Code
 uses `/captain:captain` instead. The plugin then follows this path:
 
 ```text
-Coding agent -> local plugin -> OpenClaw Gateway -> Captain -> ClickUp
+Coding agent -> local plugin -> local OpenClaw or Captain HTTPS -> Captain
 ```
 
 1. Your coding agent summarizes the Git changes and checks it completed.
 2. The plugin receives that summary through MCP, the connection used by the
    coding agent to call local tools.
-3. The plugin asks your local OpenClaw command-line program to run Captain.
+3. The plugin uses your local OpenClaw command-line program by default. When
+   remote access is configured, it uses Captain's restricted HTTPS adapter.
 4. Captain uses the report to update ClickUp or ask for missing information.
 
-The plugin and OpenClaw command-line program run on your computer. The OpenClaw
-Gateway, Captain, and ClickUp connection may run on the same computer or on a
-remote computer.
+The plugin runs on your computer. Local mode also requires the OpenClaw
+command-line program and a reachable Gateway. Remote mode requires only the
+Captain HTTPS URL and your individual member token.
 
 ## Before you install
 
 You need:
 
-- A working Captain installation. If you do not have one, first
-  [install Captain](../README.md#install-and-set-up).
-- The [OpenClaw command-line program](https://docs.openclaw.ai/install) on the
-  same computer as your coding agent.
-- Your local OpenClaw configuration connected to a Gateway that contains an
-  agent whose ID is `captain`.
+- Access to a working Captain installation. For local mode, first
+  [install Captain](../README.md#install-and-set-up). For remote mode, ask the
+  Captain operator for the HTTPS URL and your individual member token.
+- For local mode, the [OpenClaw command-line program](https://docs.openclaw.ai/install)
+  on the same computer as your coding agent, connected to a Gateway that
+  contains an agent whose ID is `captain`.
 - [`uv`](https://docs.astral.sh/uv/), which starts the plugin's Python code and
   installs its small Python dependency when needed.
 
-Check the OpenClaw connection before installing the plugin:
+For local mode, check the OpenClaw connection before installing the plugin:
 
 ```bash
 openclaw status --deep
@@ -122,78 +122,94 @@ twice.
 
 ## Connect to a remote Captain
 
-Skip this section when OpenClaw and Captain run on your computer.
+Remote mode lets this coding-agent plugin talk only to Captain. It does not require
+SSH, local OpenClaw, a Gateway token, or OpenClaw device approval.
 
-A remote Gateway is a shared trust boundary. OpenClaw does not create
-Captain-specific user accounts. People who use the same Gateway may be able to
-use the same sessions, tools, credentials, and files. Use separate Gateways for
-people who should not share those resources.
+### 1. Ask the operator for member access
+
+The operator installs the [Captain Remote OpenClaw plugin](../openclaw-plugin/README.md),
+keeps the Gateway on loopback, exposes only `/captain/v1/`, and creates your member:
+
+```bash
+openclaw captain members add --name "Sam Lee" --email sam@example.com
+```
+
+The operator delivers your revocable individual token once through the team's credential-sharing method.
+
+### 2. Configure the coding agent
+
+Set both values in the coding platform's supported secret or environment configuration:
+
+```text
+CAPTAIN_REMOTE_URL=https://captain.example.com
+CAPTAIN_MEMBER_TOKEN=<your individual member token>
+```
+
+Keep the token out of URLs, arguments, source files, shell history, and logs. One
+missing value returns `needs_configuration`; neither value selects local mode.
+
+Restart the coding agent, follow [Install](#install), and [verify the setup](#verify-the-setup).
+A clear later reply can be forwarded verbatim without running Captain again.
+
+### Remove or rotate a team member
+
+```bash
+openclaw captain members revoke <member-id>
+openclaw captain members rotate <member-id>
+```
+
+Revocation immediately denies reports, replies, and polls. Rotation prints one
+replacement and invalidates the old token.
+
+## Advanced legacy: full Gateway access over SSH
+
+This is not the normal Captain-only setup. Full Gateway access is a shared trust boundary
+that may reach sessions, tools, credentials, and files. OpenClaw does not create
+Captain-specific user accounts. Use separate Gateways for people who should not share.
 
 ### 1. Prepare the Captain computer
 
-On an always-on computer, [install Captain](../README.md#install-and-set-up),
-then run:
+Verify the full-access Gateway on its host:
 
 ```bash
 openclaw gateway status
+openclaw status --deep
 openclaw agents list --json
 openclaw security audit --deep
 openclaw gateway auth-token --show
 ```
 
-The agent list must contain `captain`. If no Gateway token exists, create one:
+If the full Gateway has no authentication token, create one and restart it:
 
 ```bash
 openclaw doctor --generate-gateway-token
 openclaw gateway restart
 ```
 
-Give the token to the team member through your team's credential-sharing
-method. The shared Gateway credential authorizes the connection.
+The shared Gateway credential is only for a member approved for broader access.
 
 ### 2. Give the team member SSH access
 
-Give each member their own SSH account or public key. Have the member confirm
-access, then open a tunnel and leave that terminal running:
+Create a dedicated SSH account or public key. The member keeps this tunnel open:
 
 ```bash
-ssh user@gateway-host
 ssh -N -L 18789:127.0.0.1:18789 user@gateway-host
 ```
 
-The tunnel makes the remote Gateway appear at `127.0.0.1:18789` on the member's
-computer.
-
 ### 3. Connect the team member's computer
 
-Install the [OpenClaw command-line program](https://docs.openclaw.ai/install)
-on the team member's computer. With the SSH tunnel running, start remote setup:
+Install the OpenClaw command-line program, then run:
 
 ```bash
 openclaw onboard --classic --mode remote
 ```
 
-Enter these values when asked:
-
-- **Gateway URL:** `ws://127.0.0.1:18789`
-- **Authentication:** token
-- **Token:** the token from the Captain computer
-
-If the wizard asks where to save the token, choose SecretRef, OpenClaw's
-protected token storage. Then check the connection:
-
-```bash
-openclaw status --deep
-openclaw agents list --json
-```
-
-After both checks pass, follow [Install](#install) and
-[Verify the setup](#verify-the-setup).
+Use `ws://127.0.0.1:18789` and the Gateway token, then run the two status checks
+above again.
 
 ### 4. Approve the device if OpenClaw asks
 
-If the member sees `PAIRING_REQUIRED`, run these commands on the Captain
-computer after matching the request to the correct person:
+For `PAIRING_REQUIRED`, the operator verifies the request and runs:
 
 ```bash
 openclaw devices list
@@ -201,23 +217,14 @@ openclaw devices approve <requestId>
 openclaw devices rename --device <deviceId> --name "Member - Work laptop"
 ```
 
-Captain reports require `operator.write`. Do not approve broader permissions
-unless the member needs them.
-
 ### Remove a team member
 
-1. Remove the person's SSH key, account, or Tailscale access.
-2. On the Captain computer, revoke the device and replace the shared token:
+```bash
+openclaw devices revoke --device <deviceId> --role operator
+```
 
-   ```bash
-   openclaw devices list
-   openclaw devices revoke --device <deviceId> --role operator
-   openclaw configure --section gateway
-   openclaw gateway restart
-   openclaw security audit --deep
-   ```
-
-3. Give the new token to the remaining members.
+Remove the SSH key or account and rotate any shared Gateway token. Do not use a shared
+Gateway token for Captain-only access. Use the restricted HTTPS adapter above.
 
 ## Advanced setup
 
@@ -241,8 +248,8 @@ the sender-side plugin. Edit Captain's existing entry in `agents.list`:
 }
 ```
 
-Do not create a second `captain` agent. An explicit `skills` list replaces the
-default list, so keep Captain's other required skills in it.
+Do not create a second `captain` agent. An explicit `skills` list replaces the default list,
+so keep Captain's other required skills in it.
 
 ### Configuration overrides
 
