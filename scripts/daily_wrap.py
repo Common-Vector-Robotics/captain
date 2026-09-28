@@ -20,10 +20,13 @@ import captain_telemetry
 ROOT = Path(__file__).resolve().parents[1] # Root of the Captain repository
 sys.path.insert(0, str(Path(__file__).resolve().parent)) # Add scripts/ to sys.path for local imports
 from captain_db import DB as DEFAULT_DB, AUDIT as DEFAULT_AUDIT  # noqa: E402
-from daily_context import is_open, due_local_date, slim  # noqa: E402
+from daily_context import is_open, is_owner_check_exempt, due_local_date, slim  # noqa: E402
+import clickup_workspace  # noqa: E402
 
-# Status constants
-NON_PROGRESS = {"to do", "backlog", "not started", "intake", "open"}
+
+def is_not_started(task):
+    """Return whether an open task has not started (backlog, ready, intake, ...)."""
+    return clickup_workspace.is_not_started(task, clickup_workspace.reader_config())
 
 
 # ------- Internal helpers -------
@@ -153,6 +156,11 @@ def _milestone_risk(eod_tasks, critical_paths_path, today):
             if task is None or not is_open(task):
                 continue
 
+            # Milestones are never owner gaps and never "not started" (their
+            # dependencies carry that risk); Inbox items are unassigned by design.
+            exempt = is_owner_check_exempt(task)
+            milestone = clickup_workspace.is_milestone(task, clickup_workspace.reader_config())
+
             slim_task = slim(task)
             due = due_local_date(task)
 
@@ -162,7 +170,8 @@ def _milestone_risk(eod_tasks, critical_paths_path, today):
             elif (
                 due is not None
                 and due <= today + timedelta(days=5)
-                and slim_task["status"] in NON_PROGRESS
+                and not milestone
+                and is_not_started(task)
             ):
                 reasons.append(
                     "%s due %s but status '%s'"
@@ -171,6 +180,7 @@ def _milestone_risk(eod_tasks, critical_paths_path, today):
 
             if (
                 not slim_task["assignees"]
+                and not exempt
                 and due is not None
                 and due <= today + timedelta(days=7)
             ):

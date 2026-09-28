@@ -72,9 +72,11 @@ Hard rules:
    <evidence>` via `--execute comment-task --task-id <id> --text "Cleared: <evidence>"`
    (live audience writes it for real; shadow previews it) — status advancement stays with
    the owner/check-in flow. Task creation from this cron is limited to the ClickUp-home
-   step below (giving an unlinked blocker a task to live on) — it never creates a separate
-   "blocker" task when an original task already exists, under the ownership
-   contract in `TOOLS.md`.
+   step below (giving an unlinked blocker a task to live on, always in the Inbox) — it
+   never creates a separate "blocker" task when an original task already exists, under
+   the ownership contract in `TOOLS.md`. Never open or chase a blocker against a
+   Milestone task (its dependencies carry the risk; humans add them) or against an Inbox
+   task for being unassigned — Inbox items are unassigned until a human files them.
    Every `clickup_write.py` invocation prints `{ok, succeeded, failed}` and exits 0 even when
    `failed` is non-empty — always inspect `failed` in the printed JSON, never rely on exit
    code. Treat any operation in `failed` as not done: do not advance that blocker's ledger
@@ -141,15 +143,19 @@ Workflow:
         --clickup-task-id <matched task id>` (local state, both audiences), then continue
         into CLEAR CHECK below using that task.
       - No confident match: create a task that represents the actual work the blocker is
-        about — not a "blocker ticket" — via `scripts/clickup_write.py --execute
-        create-task --list-id <most relevant list> --name "<the work item itself, not
-        'Blocker: ...'>"` (live audience executes for real; shadow emits `SHADOW (would
-        write): <would-be task> create-task in list <list id>` instead of executing). If
-        the blocker's `owner` is a known ClickUp member, add their numeric
-        `--assignee <id>` to that command; otherwise pass `--owner "<name>"` so ownership
-        lands on the Owners custom-labels field rather than only in the task name/prose
-        (under the ownership rule in `TOOLS.md` — this applies in this cron's own scope, not just
-        the check-in flow). No due date known → the `due_date_followup_required` rule
+        about — not a "blocker ticket" — in the Inbox, the only list Captain may create in
+        (see "ClickUp workspace structure" in `TOOLS.md`): `scripts/clickup_write.py
+        --execute create-task --list-id 1400460000001206 --name "<the work item itself, not
+        'Blocker: ...'>" --description "<Inbox description>"` (live audience executes for
+        real; shadow emits `SHADOW (would write): <would-be task> create-task in Inbox`
+        instead of executing). The description follows the Inbox template in `TOOLS.md`:
+        first line `Done when: <observable condition>`, then `Proposed folder:
+        <Space>/<Folder>` (name two folders when unsure — `Proposed folder: A or B`),
+        `Proposed owner:`, and the evidence. Humans move the task out of the Inbox. If the
+        blocker's `owner` is in the identity map (the private workspace config at `$CAPTAIN_CLICKUP_WORKSPACE_CONFIG`), add
+        exactly one `--assignee <name or id>`; otherwise leave it unassigned and name the
+        folder owner as `Proposed owner:`. Never guess a person the writer refuses. No due
+        date known → the `due_date_followup_required` rule
         applies (ask the owner through the approved messaging lane, subject to the
         one-ping-per-owner-per-day discipline in Hard rule 2). In `live` audience, once
         the create succeeds, link it back: `python3 scripts/blocker_ledger.py update --id
@@ -206,10 +212,7 @@ Workflow:
    same content as one `SHADOW (would post to <program_channel>): ...` message sent only
    to `shadow_recipient`): `Captain blocker chase — <date>`; counts
    (open/chasing/escalated/cleared-today); per-blocker one-liners with age and last action;
-   any `needs Blocked status added` lists; any `needs Owners label added` lists (from a
-   create-task result whose `needs_owner_label` marker is set — the Owners field exists on
-   that list but not yet this owner's label, and the public ClickUp API cannot add one; a
-   human adds the label option in ClickUp settings); a `Needs task match:` section listing any
+   any `needs Blocked status added` lists; a `Needs task match:` section listing any
    blocker ids recorded in state `needs_task_match` this run (too ambiguous to match or
    create a ClickUp task for — a human must identify the task); a gaps line when
    `board_fetch_failed` was recorded this run; a `Failed:` section listing any ClickUp

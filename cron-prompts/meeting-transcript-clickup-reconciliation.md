@@ -83,7 +83,7 @@ is `partial: true` and is checked again on every run while its meeting date rema
 inside `lookback_days`. Once it ages out, set `partial_expired: true` and stop retrying.
 
 Generate a stable proposal id from the document id, normalized action, matched ClickUp
-task id (or destination list id for a new task), and operation type. Before any write,
+task id (or `inbox` plus the proposed folder for a new task), and operation type. Before any write,
 check both candidate proposal history and `data/audit-log.jsonl`; never repeat a
 successful operation.
 
@@ -180,19 +180,28 @@ attribution: {
 ```
 
 `ask_ref` and `acceptance_ref` contain a timestamp or short paraphrase, never a raw
-transcript block. Hold the proposal if the task match, destination list, owner, status,
-or acceptance remains genuinely uncertain. State exactly what evidence is missing.
+transcript block. Hold the proposal if the task match, owner, status, or acceptance
+remains genuinely uncertain. An uncertain destination folder never holds a new task: it
+goes to the Inbox with `Proposed folder: A or B`. State exactly what evidence is missing.
 Never create or assign work to a room/device label, a summary-only name, or the person
 addressed by an unaccepted request.
 
 ## ClickUp reconciliation
 
 1. Fetch a fresh board snapshot with `scripts/fetch_clickup_tasks.py`. Use configured
-   ClickUp list/space filters when present.
+   the `CAPTAIN_CLICKUP_LIST_IDS` filter when present.
 2. Extract explicit commitments, accepted actions, status changes, blockers,
    dependencies, due dates, and definitions of done from the two-source analysis.
 3. Match each item against current tasks. Prefer updating an existing task over creating
-   a duplicate. Hold the item if more than one task or destination list is plausible.
+   a duplicate. Hold the item if more than one existing task is plausible. Every new task
+   is created in the Inbox (`create-task --list-id 1400460000001206`), the only list
+   Captain may create in; humans move it to its folder. Its description follows the Inbox
+   template in `TOOLS.md`: first line `Done when: <observable condition>`, then
+   `Proposed folder: <Space>/<Folder>` (or `A or B` when unsure), `Proposed owner:`, and
+   the evidence. The writer refuses a create without `Done when:`. Set at most one
+   `assignee`, and only for a person in the identity map (the private workspace config at `$CAPTAIN_CLICKUP_WORKSPACE_CONFIG`);
+   an ownership change on an existing task replaces its assignee. Tags other than `safety`
+   and `customer-visible` are dropped. Never create Milestone tasks or custom fields.
 4. Infer a due date or definition of done only when meeting context makes it concrete.
    Do not expand scope beyond the meeting evidence.
 5. A real blocker updates the original task to `Blocked` and adds a concise explanatory

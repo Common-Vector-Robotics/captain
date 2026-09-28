@@ -1,0 +1,203 @@
+{
+  "_comment": "Schema example for the private workspace config. Copy it outside the repo, replace the placeholder people, ids, and folder owners with real ones, and set CAPTAIN_CLICKUP_WORKSPACE_CONFIG to its path. The ClickUp writer refuses to run without that file. Space and list ids below are the 2026-09-27 workspace and are not personal. CAPTAIN_INBOX_LIST_ID overrides inbox_list_id; CAPTAIN_ARCHIVED_LIST_IDS adds to archived_list_ids and never removes from it.",
+  "team_id": "90132441412",
+  "reset_date": "2026-09-27",
+  "inbox_list_id": "1400460000001206",
+  "inbox_label": "OPS/Inbox",
+  "archived_list_ids": [
+    "901326347060",
+    "901327700142",
+    "901324583541",
+    "901326084934",
+    "901326085162",
+    "901326085192",
+    "901326085207",
+    "901326085239",
+    "901327546010"
+  ],
+  "spaces": [
+    {
+      "id": "901313870897",
+      "name": "GL-1",
+      "kind": "product"
+    },
+    {
+      "id": "901313552943",
+      "name": "Ghostrunner",
+      "kind": "product"
+    },
+    {
+      "id": "901313619708",
+      "name": "OPS",
+      "kind": "ops"
+    }
+  ],
+  "product_folders": [
+    "Structures",
+    "Chassis",
+    "Power",
+    "Battery",
+    "Harness",
+    "Sensors & Compute",
+    "Safety",
+    "Autonomy",
+    "Firmware",
+    "HMI",
+    "Integration",
+    "Projects"
+  ],
+  "folders_only_in": {
+    "HMI": [
+      "GL-1"
+    ]
+  },
+  "folder_owners": {
+    "Structures": "10000001",
+    "Chassis": "10000001",
+    "HMI": "10000001",
+    "Power": "10000002",
+    "Harness": "10000002",
+    "Sensors & Compute": "10000002",
+    "Battery": "10000003",
+    "Safety": "10000004",
+    "Autonomy": "10000004",
+    "Firmware": "10000004",
+    "Integration": "10000005"
+  },
+  "statuses": {
+    "product": [
+      {
+        "status": "backlog",
+        "type": "open"
+      },
+      {
+        "status": "ready",
+        "type": "custom"
+      },
+      {
+        "status": "in progress",
+        "type": "custom"
+      },
+      {
+        "status": "blocked",
+        "type": "custom"
+      },
+      {
+        "status": "in review",
+        "type": "custom"
+      },
+      {
+        "status": "cancelled",
+        "type": "done"
+      },
+      {
+        "status": "done",
+        "type": "closed"
+      }
+    ],
+    "ops": [
+      {
+        "status": "intake"
+      },
+      {
+        "status": "planning"
+      },
+      {
+        "status": "in progress"
+      },
+      {
+        "status": "blocked"
+      },
+      {
+        "status": "in review"
+      },
+      {
+        "status": "complete"
+      },
+      {
+        "status": "cancelled"
+      }
+    ]
+  },
+  "not_started_statuses": [
+    "backlog",
+    "ready",
+    "intake",
+    "planning"
+  ],
+  "closed_status_names_fallback": [
+    "done",
+    "complete",
+    "completed",
+    "closed",
+    "cancelled",
+    "canceled",
+    "rejected",
+    "passed",
+    "hired"
+  ],
+  "allowed_tags": [
+    "safety",
+    "customer-visible"
+  ],
+  "milestone_custom_item_ids": [
+    1
+  ],
+  "milestone_task_ids": [],
+  "members": [
+    {
+      "clickup_id": "10000001",
+      "name": "Person A",
+      "aliases": [
+        "person-a",
+        "pa"
+      ],
+      "assignable": true
+    },
+    {
+      "clickup_id": "10000002",
+      "name": "Person B",
+      "aliases": [
+        "person-b",
+        "pb"
+      ],
+      "assignable": true
+    },
+    {
+      "clickup_id": "10000003",
+      "name": "Person C",
+      "aliases": [
+        "person-c"
+      ],
+      "assignable": true
+    },
+    {
+      "clickup_id": "10000004",
+      "name": "Person D",
+      "aliases": [
+        "person-d",
+        "pd"
+      ],
+      "assignable": true
+    },
+    {
+      "clickup_id": "10000005",
+      "name": "Person E",
+      "aliases": [
+        "person-e"
+      ],
+      "assignable": true
+    },
+    {
+      "clickup_id": "10000099",
+      "name": "Agent Service",
+      "aliases": [
+        "agent-service"
+      ],
+      "assignable": false
+    }
+  ],
+  "departed_names": [
+    "departed-person"
+  ]
+}

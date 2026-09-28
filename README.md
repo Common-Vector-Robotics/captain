@@ -235,6 +235,16 @@ chmod 600 .secrets/clickup.env
 Replace `YOUR_CLICKUP_API_KEY` and `YOUR_CLICKUP_TEAM_ID` with your ClickUp
 credentials before you continue.
 
+Captain's ClickUp write rules (Inbox-only creation, archived-list blocklist, identity
+map, folder owners, statuses, and allowed tags) live in a private workspace config file
+kept outside this repository. Copy `data/clickup-workspace.example.json`, replace its
+placeholder people, ids, and folder owners with real ones, and export
+`CAPTAIN_CLICKUP_WORKSPACE_CONFIG=<path to that file>` in the process environment. The
+ClickUp writer refuses to run, even for a dry run, when that variable is unset or the file
+is missing. `CLICKUP_TEAM_ID` must match its `team_id`. To point creation at a different
+Inbox, export `CAPTAIN_INBOX_LIST_ID`. `.secrets/clickup.env` carries neither variable.
+See "ClickUp workspace structure" in `TOOLS.md`.
+
 Verify the credentials with a read-only board fetch:
 
 ```bash

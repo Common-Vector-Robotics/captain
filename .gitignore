@@ -21,6 +21,7 @@ data/captain-modes.json
 data/captain-modes.tmp
 data/critical-path-overrides.json
 data/meeting-ingestion.json
+data/clickup-workspace.json
 
 # Secrets
 .secrets/

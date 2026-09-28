@@ -194,16 +194,19 @@ Workflow:
         message's thread as the incident thread; record its ts in state (`incident_thread_ts`)
         — in `live` audience use the real thread ts, in `shadow` audience record the literal
         string `shadow-placeholder`.
-     c. File the urgent task directly (live audience only — shadow audience emits
-        `SHADOW (would write): <would-be task> create-task in list <list id>` to
-        `shadow_recipient` instead of executing):
-        `scripts/clickup_write.py --execute create-task --list-id <most relevant list>
-        --name "INCIDENT: <summary>" --priority 1` with a description containing the Slack
-        permalink. If step (a) resolved a specific owner (an eng lead or the affected
-        task/project's assignee), add them too: a numeric `--assignee <id>` when they are a
-        known ClickUp member, otherwise `--owner "<name>"` so ownership lands on the Owners
-        custom-labels field rather than only in the description, under the ownership
-        rule in `TOOLS.md`. No due date known → the `due_date_followup_required` rule applies (ask
+     c. File the urgent task directly in the Inbox, the only list Captain may create in
+        (live audience only — shadow audience emits `SHADOW (would write): <would-be task>
+        create-task in Inbox` to `shadow_recipient` instead of executing):
+        `scripts/clickup_write.py --execute create-task --list-id 1400460000001206
+        --name "INCIDENT: <summary>" --priority 1 --tag safety --description "<Inbox
+        description>"`. The description follows the Inbox template in `TOOLS.md`: first
+        line `Done when: <observable condition>`, then `Proposed folder: <Space>/<Folder>`
+        (the affected subsystem folder), `Proposed owner:`, and the Slack permalink. If
+        step (a) resolved a specific owner who is in the identity map
+        (the private workspace config at `$CAPTAIN_CLICKUP_WORKSPACE_CONFIG`), add exactly one `--assignee <name or id>`;
+        otherwise leave it unassigned and name the folder owner as `Proposed owner:`. Never
+        guess a person the writer refuses. No due date known → the
+        `due_date_followup_required` rule applies (ask
         the owner). This is the sole exception to Hard rule 1's read-only stance — the
         safety gate exists to eliminate latency, and deferring to the next write-capable
         cron would leave a genuine incident unticketed for up to ~16 hours. Audited
@@ -213,10 +216,7 @@ Workflow:
         record `{clickup_write_failed: "<summary>"}` in state and, in `live` audience,
         immediately escalate to every configured administrator that the incident ClickUp
         task failed to file and needs manual creation. A failed safety-task write must
-        escalate, never vanish silently. If the write instead succeeds but the result
-        carries `needs_owner_label` (Owners field exists on that list but not yet this
-        owner's label — the public API cannot add one), the task is still ticketed; note
-        the gap in the incident thread so a human can add the label option.
+        escalate, never vanish silently.
      d. `python3 scripts/blocker_ledger.py add --text "<summary>" --source
         "slack:<channel_id>" --source-ref "<message_ts>" --clickup-task-id <the id from
         step c's create-task result, live audience only — omit it in shadow, since no task
@@ -237,10 +237,11 @@ Workflow:
       `paths[].task_ids` as the current critical-path set; if the file does not exist,
       record `critical_paths_file_missing: true` in state and fall through to the next
       criterion instead of stalling this step.
-   b. In a testing-like status (e.g. "In Test", "QA", "Testing").
+   b. In status `in review` (the product spaces have no separate test status). Skip
+      Milestone tasks and Inbox tasks; they are not bench work.
    c. Discussed in the last standup summary in memory.
    Each candidate must have a resolvable owner (memory, `message(action=member-info)`, or
-   ClickUp assignee/Owners field) — if an owner cannot be resolved for a candidate, skip that
+   the task's single ClickUp assignee) — if an owner cannot be resolved for a candidate, skip that
    candidate and record `{task_id: "owner_unresolvable"}` in state, then move to the next
    candidate rather than sending an unaddressed question. Compose one plain question per
    selected task, e.g. `Quick check on <task name> — how did today's run actually go?

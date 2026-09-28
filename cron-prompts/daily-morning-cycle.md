@@ -116,17 +116,17 @@ Workflow:
    b. Open the incident thread: post the same summary to `program_channel` and use that
       message's thread as the incident thread — record its ts in state and post follow-ups
       there.
-   c. File the urgent task directly: `scripts/clickup_write.py --execute create-task
-      --list-id <most relevant list> --name "INCIDENT: <summary>" --priority 1` with a
-      description containing the Slack permalink. If step (a) resolved a specific owner
-      (an eng lead or the affected task/project's assignee), add them too: a numeric
-      `--assignee <id>` when they are a known ClickUp member, otherwise `--owner "<name>"`
-      so ownership lands on the Owners custom-labels field rather than only in the
-      description, under the ownership rule in `TOOLS.md`. No due date known → the
-      `due_date_followup_required` rule applies (ask the owner). Audited automatically. If
-      the result carries `needs_owner_label` (Owners field exists on that list but not yet
-      this owner's label — the public API cannot add one), the task is still created; note
-      the gap in the incident thread so a human can add the label option.
+   c. File the urgent task directly in the Inbox (the only list Captain may create in —
+      see "ClickUp workspace structure" in `TOOLS.md`): `scripts/clickup_write.py --execute
+      create-task --list-id 1400460000001206 --name "INCIDENT: <summary>" --priority 1
+      --tag safety --description "<Inbox description>"`, where the description follows the
+      Inbox template in `TOOLS.md`: first line `Done when: <observable condition>`, then
+      `Proposed folder: <Space>/<Folder>` (the affected subsystem folder), `Proposed owner:`,
+      and the Slack permalink. If step (a) resolved a specific owner who is in the identity
+      map (the private workspace config at `$CAPTAIN_CLICKUP_WORKSPACE_CONFIG`), add exactly one `--assignee <name or id>`;
+      otherwise leave it unassigned and name the folder owner as `Proposed owner:`. Never
+      guess a person the writer refuses. No due date known → the
+      `due_date_followup_required` rule applies (ask the owner). Audited automatically.
    d. `scripts/blocker_ledger.py add --text <summary> --source slack:<channel_id>
       --source-ref <message_ts> --clickup-task-id <the id from step c's create-task result>`
       so this blocker already has its ClickUp home instead of waiting on the 15:15 chase to

@@ -34,6 +34,8 @@ workspace:
       path: data/critical-path-overrides.example.json
     - source: data/meeting-ingestion.example.json
       path: data/meeting-ingestion.example.json
+    - source: data/clickup-workspace.example.json
+      path: data/clickup-workspace.example.json
     - source: cron-prompts/daily-morning-cycle.md
       path: cron-prompts/daily-morning-cycle.md
     - source: cron-prompts/daily-blocker-chase.md
@@ -64,6 +66,8 @@ workspace:
       path: scripts/clickup_credentials.py
     - source: scripts/clickup_write.py
       path: scripts/clickup_write.py
+    - source: scripts/clickup_workspace.py
+      path: scripts/clickup_workspace.py
     - source: scripts/critical_paths.py
       path: scripts/critical_paths.py
     - source: scripts/captain_activity.py
@@ -158,6 +162,11 @@ Execution is real only when it has an owner, a due date, a definition of done, a
 ## Guardrails
 
 - Preserve task knowledge in ClickUp. Apply only clear, in-scope, audited writes.
+- ClickUp workspace rules (`TOOLS.md`; private config at `$CAPTAIN_CLICKUP_WORKSPACE_CONFIG`): spaces GL-1,
+  Ghostrunner, and OPS; one list per subsystem folder. Create tasks only in the OPS
+  Inbox, with `Done when:` first and a `Proposed folder:` line. One native assignee per
+  task, replaced on reassignment. No custom fields. Tags only `safety` and
+  `customer-visible`. Never create Milestone tasks; never write archived lists.
 - Treat unclear task, owner, or status evidence as an ambiguity to report, not a
   reason to guess.
 - Log every ClickUp write and authorized outbound page with evidence.

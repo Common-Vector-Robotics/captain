@@ -58,15 +58,22 @@ Hard rules:
 1. ClickUp writes in this cron are autonomous and audited: in `live` audience, apply
    evidence-backed status updates from today's check-in/bench replies via
    `scripts/clickup_write.py --execute update-task --task-id <id> --status <status>`, create
-   tasks from confirmed action items via `scripts/clickup_write.py --execute create-task
-   --list-id <id> --name "<name>"` (the `due_date_followup_required` rule applies to any
-   task created without a due date), and set Blocked status + comment per the Blocked-task
-   rule via `--execute update-task --task-id <id> --status Blocked` followed by `--execute
-   comment-task --task-id <id> --text "Blocked: <what/since when/what's needed>"`. Every
-   task created here has an owner: prefer a numeric `--assignee <id>` when the owner is a
-   known ClickUp member, otherwise pass `--owner "<name>"` so ownership lands on the Owners
-   custom-labels field rather than only in the task name/description, under the
-   ownership rule in `TOOLS.md`. In `shadow` audience none of these execute — each becomes a `SHADOW (would
+   tasks from confirmed action items in the Inbox — the only list Captain may create in
+   (see "ClickUp workspace structure" in `TOOLS.md`) — via `scripts/clickup_write.py
+   --execute create-task --list-id 1400460000001206 --name "<name>" --description "<Inbox
+   description>"` (the `due_date_followup_required` rule applies to any task created
+   without a due date), and set Blocked status + comment per the Blocked-task rule via
+   `--execute update-task --task-id <id> --status Blocked` followed by `--execute
+   comment-task --task-id <id> --text "Blocked: <what/since when/what's needed>"`. The
+   Inbox description follows the template in `TOOLS.md`: first line `Done when:
+   <observable condition>`, then `Proposed folder: <Space>/<Folder>`, `Proposed owner:`,
+   and the evidence; the writer refuses a create without `Done when:`. When the owner is in
+   the identity map (the private workspace config at `$CAPTAIN_CLICKUP_WORKSPACE_CONFIG`), add exactly one `--assignee <name or
+   id>`; otherwise leave the task unassigned and name the folder owner as `Proposed owner:`.
+   An ownership change on an existing task is `update-task --task-id <id> --assignee <name
+   or id>`, which replaces the current assignee. Never guess a person the writer refuses.
+   Never create Milestone tasks; humans own them and their dependencies. In `shadow`
+   audience none of these execute — each becomes a `SHADOW (would
    write): <task id> <operation>` line to `shadow_recipient` instead. If the result carries
    `needs_blocked_status`, the status
    was left unchanged (this list has no `Blocked` status yet) — this is the sanctioned V1
@@ -74,12 +81,7 @@ Hard rules:
    exposes `list_id` only; show the id when no human-readable name is at hand) in the wrap's
    `needs Blocked status added` line (live: in the `program_channel` post; shadow: in the
    `shadow_recipient` preview) the same way `daily-blocker-chase.md` does, and record it in
-   state under `needs_blocked_status`. If a create-task result instead carries
-   `needs_owner_label` (the Owners field exists on that list but this owner has no label
-   option there yet, and the public ClickUp API cannot add one), the task itself is still
-   created — do not treat this as a failure — but flag it the same way as
-   `needs Blocked status added`: a `needs Owners label added` line in the wrap naming the
-   list id and owner, and record it in state under `needs_owner_label`.
+   state under `needs_blocked_status`.
    Hold only ambiguous owner/task matches as digest questions (live: in the
    `program_channel` post; shadow: in the `shadow_recipient` preview) rather than
    guessing. Replans NEVER mutate the board in either audience — Captain drafts options,
@@ -117,9 +119,7 @@ State file: `data/daily-eod-wrap-state.json`
 board_fetch_failed, critical_paths_file_missing, critical_paths_refresh_failed,
 program_channel_unresolved, clickup_write_failed: [{task_id or name, error}],
 needs_blocked_status: [list ids] (the tooling exposes `list_id` only, not a list name; the
-digest may show the id when no human-readable name is at hand), needs_owner_label: [{list_id,
-owner}] (from a create-task result's `needs_owner_label` marker — the Owners field exists on
-that list but not yet this owner's label), last_wrap_ts, replan_triggered: bool,
+digest may show the id when no human-readable name is at hand), last_wrap_ts, replan_triggered: bool,
 shadow_recipient_unresolved, runs[] — see step 9)
 
 Workflow:
@@ -215,8 +215,7 @@ Workflow:
    latency, not retroactively by this one); mutation counts from `wrap["mutations"]`;
    material bench/channel findings from today's memory notes; the `Replan options` section
    from step 5 when triggered; any `Failed:` section per Hard rule 1; any
-   `needs Blocked status added` line listing list ids flagged per Hard rule 1; any
-   `needs Owners label added` line listing list id + owner pairs flagged per Hard rule 1;
+   `needs Blocked status added` line listing list ids flagged per Hard rule 1;
    `Tomorrow's top 3:` list.
 7. Persist the risk register and local memory write-back in both `live` and
    `shadow` because these are local state, not external effects. When the private
