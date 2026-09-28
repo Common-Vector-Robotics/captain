@@ -194,12 +194,14 @@ Workflow:
         message's thread as the incident thread; record its ts in state (`incident_thread_ts`)
         — in `live` audience use the real thread ts, in `shadow` audience record the literal
         string `shadow-placeholder`.
-     c. File the urgent task directly in the Inbox, the only list Captain may create in
-        (live audience only — shadow audience emits `SHADOW (would write): <would-be task>
-        create-task in Inbox` to `shadow_recipient` instead of executing):
-        `scripts/clickup_write.py --execute create-task --list-id 1400460000001206
-        --name "INCIDENT: <summary>" --priority 1 --tag safety --description "<Inbox
-        description>"`. The description follows the Inbox template in `TOOLS.md`: first
+     c. File the urgent task (live audience only — shadow audience emits `SHADOW (would
+        write): <would-be task> create-task in <Inbox or Space/Folder> (<route_rule>)` to
+        `shadow_recipient` instead of executing): `scripts/clickup_write.py --execute
+        create-task --route-from "<the evidence text>" --name "INCIDENT: <summary>"
+        --priority 1 --tag safety --description "<Inbox description>"`. The writer files it
+        straight into the subsystem folder's list only when the product and folder are
+        certain, otherwise into the Inbox; say in the Slack summary which `route_rule`
+        fired. The description follows the Inbox template in `TOOLS.md`: first
         line `Done when: <observable condition>`, then `Proposed folder: <Space>/<Folder>`
         (the affected subsystem folder), `Proposed owner:`, and the Slack permalink. If
         step (a) resolved a specific owner who is in the identity map

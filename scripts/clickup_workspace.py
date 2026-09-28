@@ -2,10 +2,11 @@
 """Read Captain's ClickUp workspace structure and apply its write rules.
 
 The structure lives in a private config file named by
-``CAPTAIN_CLICKUP_WORKSPACE_CONFIG``: the Inbox list that is the only place
-Captain may create tasks, the archived lists Captain must never write, the
-status sets, the allowed tags, the folder owners, and the identity map used to
-turn a person's name into exactly one ClickUp assignee. The public repo ships
+``CAPTAIN_CLICKUP_WORKSPACE_CONFIG``: the Inbox list, the subsystem folder
+lists (``lists``) Captain may file into directly when the destination is
+certain, the folder keyword table, the archived lists Captain must never
+write, the status sets, the allowed tags, the folder owners, and the identity
+map used to turn a person's name into exactly one ClickUp assignee. The public repo ships
 only the schema, ``data/clickup-workspace.example.json``, with placeholder
 people; real names and user ids never belong in the repo.
 
@@ -37,6 +38,7 @@ ARCHIVED_ENV = "CAPTAIN_ARCHIVED_LIST_IDS"
 # Every created task description must start with this line.
 DONE_WHEN_PREFIX = "done when:"
 PROPOSED_FOLDER_PREFIX = "proposed folder:"
+FILED_DIRECTLY_PREFIX = "filed directly:"
 
 # ClickUp status types that mean the work is finished.
 FINISHED_TYPES = {"done", "closed"}
@@ -122,6 +124,203 @@ def optional_inbox_list_id(config):
         return None
 
 
+# Direct filing: subsystem folder lists and the certainty rule
+
+# A product is known only when the text names it, or names a project that
+# belongs to exactly one product.
+SPACE_PATTERNS = (
+    ("GL-1", r"gl-?1"),
+    ("Ghostrunner", r"ghost ?runner"),
+    ("GL-1", r"afs"),
+    ("Ghostrunner", r"newlab"),
+)
+
+# Words that name a subsystem folder outright.
+FOLDER_NAME_PATTERNS = (
+    ("Structures", r"structures"),
+    ("Chassis", r"chassis"),
+    ("Power", r"power"),
+    ("Battery", r"battery"),
+    ("Harness", r"harness"),
+    ("Sensors & Compute", r"sensors (?:&|and) compute|sensors|compute"),
+    ("Safety", r"safety"),
+    ("Autonomy", r"autonomy"),
+    ("Firmware", r"firmware"),
+    ("HMI", r"hmi"),
+    ("Integration", r"integration"),
+)
+
+# Folders Captain never files into, even when a list id is configured.
+NEVER_DIRECT_FOLDERS = {"projects"}
+
+ROUTE_NAMED = "named-folder"
+ROUTE_KEYWORD_OWNER = "keyword-owner"
+ROUTE_INBOX = "inbox"
+
+
+def _word(pattern):
+    return re.compile(r"(?<![a-z0-9])(?:{})(?![a-z0-9])".format(pattern))
+
+
+def _hits(text, patterns):
+    """Return the distinct names whose pattern occurs in ``text``, in table order."""
+    found = []
+    for name, pattern in patterns:
+        if name not in found and _word(pattern).search(text):
+            found.append(name)
+    return found
+
+
+def product_space_names(config):
+    """Return the names of the product spaces (never OPS)."""
+    names = [
+        str(space.get("name")) for space in config.get("spaces") or []
+        if isinstance(space, dict) and space.get("kind") == "product" and space.get("name")
+    ]
+    return names or ["GL-1", "Ghostrunner"]
+
+
+def folder_in_space(folder, space, config):
+    """Return whether ``folder`` exists in ``space`` (``folders_only_in`` limits some)."""
+    only_in = (config.get("folders_only_in") or {}).get(folder)
+    return not only_in or space in only_in
+
+
+def direct_lists(config):
+    """Return ``{list_id: (space, folder)}`` for every subsystem list Captain may file into.
+
+    Only product spaces count; OPS lists, the Projects folders, and archived
+    lists are never direct destinations.
+    """
+    products = set(product_space_names(config))
+    archived = archived_list_ids(config)
+    result = {}
+    for space, folders in (config.get("lists") or {}).items():
+        if space not in products or not isinstance(folders, dict):
+            continue
+        for folder, list_id in folders.items():
+            list_id = str(list_id or "").strip()
+            if (
+                list_id
+                and list_id not in archived
+                and folder.casefold() not in NEVER_DIRECT_FOLDERS
+                and folder_in_space(folder, space, config)
+            ):
+                result[list_id] = (space, folder)
+    return result
+
+
+def direct_list_id(space, folder, config):
+    """Return the configured list id for ``space``/``folder``, or ``None``."""
+    for list_id, location in direct_lists(config).items():
+        if location == (space, folder):
+            return list_id
+    return None
+
+
+def route_details(text, assignee_id, config):
+    """Apply the certainty rule and explain it; ``route_destination`` wraps this.
+
+    The result maps ``list_id``, ``rule``, ``reason``, ``space``, ``folder``
+    (both ``None`` for the Inbox), and ``proposal``: a ``Space/Folder`` guess
+    (``A or B`` when several) for an Inbox task's ``Proposed folder:`` line, or
+    ``None`` when the text points at no folder.
+    """
+    lowered = str(text or "").casefold()
+    products = product_space_names(config)
+    spaces = [name for name in _hits(lowered, SPACE_PATTERNS) if name in products]
+    named = _hits(lowered, FOLDER_NAME_PATTERNS)
+    keyword_table = [
+        (folder, "|".join(re.escape(str(word).casefold()) for word in words if str(word).strip()))
+        for folder, words in (config.get("folder_keywords") or {}).items()
+        if any(str(word).strip() for word in words or [])
+    ]
+    keyword_hits = [] if named else _hits(lowered, keyword_table)
+
+    def inbox(reason):
+        candidates = named or keyword_hits
+        pairs = [
+            "{}/{}".format(space, folder)
+            for space in (spaces if len(spaces) == 1 else products)
+            for folder in candidates
+            if folder_in_space(folder, space, config)
+        ]
+        return {
+            "list_id": inbox_list_id(config),
+            "rule": ROUTE_INBOX,
+            "reason": reason,
+            "space": None,
+            "folder": None,
+            "proposal": " or ".join(pairs) or None,
+        }
+
+    # 1. The product.
+    if not spaces:
+        return inbox("space unknown: the text names no product (GL-1, Ghostrunner, AFS, Newlab)")
+    if len(spaces) > 1:
+        return inbox("space unknown: the text names several products ({})".format(", ".join(spaces)))
+    space = spaces[0]
+
+    # 2. The folder: named outright, or one keyword hit that the assignee owns.
+    if len(named) > 1:
+        return inbox("folder unknown: the text names several folders ({})".format(", ".join(named)))
+    if named:
+        folder, rule = named[0], ROUTE_NAMED
+        why = "the text names {} and {}".format(space, folder)
+    elif not keyword_hits:
+        return inbox("folder unknown: the text names no folder and no folder keyword matches")
+    elif len(keyword_hits) > 1:
+        return inbox("folder unknown: keywords match several folders ({})".format(
+            ", ".join(keyword_hits)))
+    else:
+        folder, rule = keyword_hits[0], ROUTE_KEYWORD_OWNER
+        owner = str((config.get("folder_owners") or {}).get(folder) or "")
+        if assignee_id is None or not owner or str(assignee_id) != owner:
+            return inbox("folder unknown: keywords point at {} but the assignee is not its "
+                         "owner".format(folder))
+        why = "the text names {}; keywords point only at {} and the assignee owns it".format(
+            space, folder)
+
+    if not folder_in_space(folder, space, config):
+        return inbox("folder unknown: {} exists only in {}, not {}".format(
+            folder, ", ".join((config.get("folders_only_in") or {}).get(folder) or []), space))
+
+    # 3. Certain: both known, so file into that folder's list.
+    list_id = direct_list_id(space, folder, config)
+    if not list_id:
+        return inbox("no list configured for {}/{} in the workspace config".format(space, folder))
+    return {
+        "list_id": list_id,
+        "rule": rule,
+        "reason": why,
+        "space": space,
+        "folder": folder,
+        "proposal": "{}/{}".format(space, folder),
+    }
+
+
+def route_destination(text, assignee_id, config):
+    """Return ``(list_id, rule, reason)`` for a new task described by ``text``.
+
+    The destination is a subsystem folder's list only when it is certain:
+
+    1. The space is known only if the text names the product (``GL-1``/``GL1``,
+       ``Ghostrunner``/``ghost runner``) or a project that implies one
+       (``AFS`` means GL-1, ``Newlab`` means Ghostrunner).
+    2. The folder is known only if the text names exactly one subsystem
+       folder (rule ``named-folder``), or names none while the config's
+       ``folder_keywords`` match exactly one folder and ``assignee_id`` is
+       that folder's owner in ``folder_owners`` (rule ``keyword-owner``).
+       HMI exists only in GL-1.
+    3. Anything less is the Inbox (rule ``inbox``).
+
+    Example input: ``("check the DCDC grounding on GL-1", <Power owner id>, config)``
+    Example output: ``("<GL-1 Power list id>", "keyword-owner", "...")``
+    """
+    route = route_details(text, assignee_id, config)
+    return route["list_id"], route["rule"], route["reason"]
+
+
 # Task descriptions and tags
 
 
@@ -129,20 +328,38 @@ def _lines(description):
     return [line.strip() for line in (description or "").splitlines() if line.strip()]
 
 
-def description_problems(description):
+def description_problems(description, filed_in=None):
     """Return the reasons a create-task description is not acceptable.
 
     The first non-blank line must start with ``Done when:`` and carry a
-    condition; some line must start with ``Proposed folder:`` and name one.
+    condition. An Inbox task (``filed_in`` is ``None``) needs a
+    ``Proposed folder:`` line that names one and no ``Filed directly:`` line.
+    A task filed straight into a subsystem list (``filed_in`` is its
+    ``(space, folder)``) needs a ``Filed directly: <Space>/<Folder>`` line that
+    names that list.
     """
     lines = _lines(description)
     problems = []
     first = lines[0] if lines else ""
     if not first.casefold().startswith(DONE_WHEN_PREFIX) or not first[len(DONE_WHEN_PREFIX):].strip():
         problems.append("description must begin with a 'Done when: <condition>' line")
-    folder_lines = [line for line in lines if line.casefold().startswith(PROPOSED_FOLDER_PREFIX)]
-    if not any(line[len(PROPOSED_FOLDER_PREFIX):].strip() for line in folder_lines):
-        problems.append("description must include a 'Proposed folder: <Space>/<Folder>' line")
+    filed_lines = [line for line in lines if line.casefold().startswith(FILED_DIRECTLY_PREFIX)]
+    if filed_in is None:
+        folder_lines = [line for line in lines if line.casefold().startswith(PROPOSED_FOLDER_PREFIX)]
+        if not any(line[len(PROPOSED_FOLDER_PREFIX):].strip() for line in folder_lines):
+            problems.append("description must include a 'Proposed folder: <Space>/<Folder>' line")
+        if filed_lines:
+            problems.append("an Inbox task must not carry a 'Filed directly:' line")
+        return problems
+    expected = "{}/{}".format(*filed_in).casefold()
+    if not any(
+        line[len(FILED_DIRECTLY_PREFIX):].strip().casefold().startswith(expected)
+        for line in filed_lines
+    ):
+        problems.append(
+            "a task filed directly into {}/{} must carry a 'Filed directly: {}/{} (<rule>)' "
+            "line".format(filed_in[0], filed_in[1], filed_in[0], filed_in[1])
+        )
     return problems
 
 

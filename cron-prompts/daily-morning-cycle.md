@@ -116,10 +116,12 @@ Workflow:
    b. Open the incident thread: post the same summary to `program_channel` and use that
       message's thread as the incident thread — record its ts in state and post follow-ups
       there.
-   c. File the urgent task directly in the Inbox (the only list Captain may create in —
-      see "ClickUp workspace structure" in `TOOLS.md`): `scripts/clickup_write.py --execute
-      create-task --list-id 1400460000001206 --name "INCIDENT: <summary>" --priority 1
-      --tag safety --description "<Inbox description>"`, where the description follows the
+   c. File the urgent task with `scripts/clickup_write.py --execute create-task
+      --route-from "<the evidence text>" --name "INCIDENT: <summary>" --priority 1 --tag
+      safety --description "<Inbox description>"`. The writer files it straight into the
+      subsystem folder's list only when the product and folder are certain, otherwise into
+      the Inbox (see "ClickUp workspace structure" in `TOOLS.md`); say in the Slack summary
+      which `route_rule` fired. The description follows the
       Inbox template in `TOOLS.md`: first line `Done when: <observable condition>`, then
       `Proposed folder: <Space>/<Folder>` (the affected subsystem folder), `Proposed owner:`,
       and the Slack permalink. If step (a) resolved a specific owner who is in the identity

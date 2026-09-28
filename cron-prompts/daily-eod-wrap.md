@@ -58,11 +58,13 @@ Hard rules:
 1. ClickUp writes in this cron are autonomous and audited: in `live` audience, apply
    evidence-backed status updates from today's check-in/bench replies via
    `scripts/clickup_write.py --execute update-task --task-id <id> --status <status>`, create
-   tasks from confirmed action items in the Inbox — the only list Captain may create in
-   (see "ClickUp workspace structure" in `TOOLS.md`) — via `scripts/clickup_write.py
-   --execute create-task --list-id 1400460000001206 --name "<name>" --description "<Inbox
-   description>"` (the `due_date_followup_required` rule applies to any task created
-   without a due date), and set Blocked status + comment per the Blocked-task rule via
+   tasks from confirmed action items via `scripts/clickup_write.py --execute create-task
+   --route-from "<the evidence text>" --name "<name>" --description "<Inbox description>"`
+   — the writer files straight into the subsystem folder's list only when the product and
+   folder are certain, otherwise into the Inbox (see "ClickUp workspace structure" in
+   `TOOLS.md`), and the EOD summary says which `route_rule` fired for each (the
+   `due_date_followup_required` rule applies to any task created without a due date), and
+   set Blocked status + comment per the Blocked-task rule via
    `--execute update-task --task-id <id> --status Blocked` followed by `--execute
    comment-task --task-id <id> --text "Blocked: <what/since when/what's needed>"`. The
    Inbox description follows the template in `TOOLS.md`: first line `Done when:

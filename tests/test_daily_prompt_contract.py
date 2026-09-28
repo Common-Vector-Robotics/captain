@@ -34,7 +34,7 @@ def test_blocker_prompt_retains_same_cycle_contract():
         "scripts/blocker_ledger.py list",
         "scripts/fetch_clickup_tasks.py",
         "scripts/clickup_write.py --execute update-task",
-        "create-task --list-id 1400460000001206",
+        'create-task --route-from "<the evidence text>"',
         "pings_sent[owner_slack_id]",
         "Same-cycle check",
         "needs_task_match",
@@ -115,7 +115,7 @@ ALL_PROMPTS = (
 INBOX = "1400460000001206"
 
 
-def test_prompts_create_only_in_the_inbox_and_never_write_owner_fields():
+def test_prompts_route_creates_and_never_write_owner_fields():
     import re
 
     for name in ALL_PROMPTS:
@@ -129,7 +129,10 @@ def test_prompts_create_only_in_the_inbox_and_never_write_owner_fields():
             list_ids = re.findall(r"--list-id (\S+)", match.group(0))
             assert all(list_id == INBOX for list_id in list_ids), (name, list_ids)
         if "create-task" in prompt:
-            assert INBOX in prompt, name
+            # Creates are routed: a subsystem list only when certain, else the Inbox.
+            assert '--route-from "<the evidence text>"' in prompt, name
+            assert "route_rule" in prompt, name
+            assert "Inbox" in prompt, name
             assert "Done when:" in prompt, name
             assert "Proposed folder:" in prompt, name
 

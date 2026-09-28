@@ -9,10 +9,14 @@ credential loader, and leave audit records for every supported mutation.
 Workspace rules (the private config at ``CAPTAIN_CLICKUP_WORKSPACE_CONFIG``, read by
 ``clickup_workspace``; the writer refuses to run without it):
 
-- Tasks are created only in the configured Inbox list. Archived lists are
-  never written, not even by an update or comment.
-- A created task's description starts with ``Done when:`` and names a
-  ``Proposed folder:``.
+- Tasks are created in the configured Inbox list, or directly in one of the
+  subsystem folder lists in the config's ``lists`` map when the destination
+  is certain (``--route-from`` applies ``clickup_workspace.route_destination``).
+  Projects, OPS, and archived lists are never create targets; archived lists
+  are never written, not even by an update or comment.
+- A created task's description starts with ``Done when:``. An Inbox task names
+  a ``Proposed folder:``; a direct filing carries a ``Filed directly:
+  <Space>/<Folder> (<rule>)`` line.
 - Ownership is exactly one native ClickUp assignee. An update replaces the
   current assignee instead of adding another. Custom fields are never
   created or written.
@@ -22,6 +26,9 @@ Workspace rules (the private config at ``CAPTAIN_CLICKUP_WORKSPACE_CONFIG``, rea
 Examples:
     python3 scripts/clickup_write.py create-task --name "Inspect rover" \
         --description $'Done when: rover inspected\nProposed folder: GL-1/Chassis'
+    python3 scripts/clickup_write.py create-task --name "Fix DCDC grounding" \
+        --assignee person-b --route-from "check the DCDC grounding on GL-1" \
+        --description $'Done when: grounding fixed\nProposed folder: GL-1/Power'
     python3 scripts/clickup_write.py --execute comment-task --task-id abc --text "Bench test passed"
 
 This module also exposes the validation and execution helpers used by tests
@@ -308,6 +315,90 @@ def refuse_archived(list_id, config, what):
         )
 
 
+def _replace_marker_line(description, prefix, line):
+    """Drop every ``prefix`` line and, if ``line`` is given, put it second.
+
+    The ``Done when:`` line stays first. ``prefix`` compares case-insensitively.
+    """
+    lines = [
+        item for item in (description or "").splitlines()
+        if not item.strip().casefold().startswith(prefix)
+    ]
+    if line:
+        first = next((index for index, item in enumerate(lines) if item.strip()), len(lines))
+        lines.insert(first + 1, line)
+    return "\n".join(lines)
+
+
+def create_destination(operation, assignee_id, config):
+    """Choose and check a create-task destination list.
+
+    Without ``route_from`` the list is ``list_id`` (default: the Inbox); a
+    subsystem list is accepted only with a matching ``Filed directly:`` line.
+    With ``route_from`` the certainty rule chooses, and the description gets
+    the ``Filed directly: <Space>/<Folder> (<rule>)`` line (direct) or keeps
+    or gains a ``Proposed folder:`` line (Inbox). Everything else (Projects,
+    OPS, archived, unknown lists) is refused.
+    """
+    inbox = clickup_workspace.inbox_list_id(config)
+    direct = clickup_workspace.direct_lists(config)
+    requested = str(operation.get("list_id") or "").strip()
+    refuse_archived(requested, config, "create-task")
+    if requested and requested != inbox and requested not in direct:
+        raise ValueError(
+            "refused: create-task may only target the Inbox list {} or a subsystem folder "
+            "list from the workspace config's lists map (got {}); put the destination in a "
+            "'Proposed folder:' line instead".format(inbox, requested)
+        )
+
+    description = operation.get("description")
+    route_from = operation.get("route_from")
+    if route_from is None or not str(route_from).strip():
+        list_id = requested or inbox
+        if list_id == inbox:
+            return {"list_id": list_id, "filed_in": None, "description": description,
+                    "rule": clickup_workspace.ROUTE_INBOX,
+                    "reason": "no route_from given; the Inbox is the default"}
+        space, folder = direct[list_id]
+        return {"list_id": list_id, "filed_in": (space, folder), "description": description,
+                "rule": "explicit-list",
+                "reason": "list_id {} is {}/{}; the description must say it was filed "
+                          "directly".format(list_id, space, folder)}
+
+    route = clickup_workspace.route_details(route_from, assignee_id, config)
+    if requested and requested != route["list_id"]:
+        raise ValueError(
+            "refused: route_from chose list {} ({}: {}) but list_id is {}; drop one".format(
+                route["list_id"], route["rule"], route["reason"], requested
+            )
+        )
+
+    if route["rule"] == clickup_workspace.ROUTE_INBOX:
+        description = _replace_marker_line(
+            description, clickup_workspace.FILED_DIRECTLY_PREFIX, None
+        )
+        has_folder_line = any(
+            line.strip().casefold().startswith(clickup_workspace.PROPOSED_FOLDER_PREFIX)
+            for line in description.splitlines()
+        )
+        if not has_folder_line and route["proposal"]:
+            description = _replace_marker_line(
+                description, clickup_workspace.PROPOSED_FOLDER_PREFIX,
+                "Proposed folder: {}".format(route["proposal"]),
+            )
+        return {"list_id": route["list_id"], "filed_in": None,
+                "description": description if operation.get("description") is not None else None,
+                "rule": route["rule"], "reason": route["reason"]}
+
+    description = _replace_marker_line(
+        description, clickup_workspace.FILED_DIRECTLY_PREFIX,
+        "Filed directly: {}/{} ({})".format(route["space"], route["folder"], route["rule"]),
+    )
+    return {"list_id": route["list_id"], "filed_in": (route["space"], route["folder"]),
+            "description": description if operation.get("description") is not None else None,
+            "rule": route["rule"], "reason": route["reason"]}
+
+
 # Status and operation preparation
 
 
@@ -375,22 +466,19 @@ def operation_fields(operation, config):
     command = operation.get("command")
     reject_banned_keys(operation)
 
-    # New tasks go only to the Inbox and must say when they are done.
+    # New tasks go to the Inbox, or straight to a subsystem list when certain.
     if command == "create-task":
         name = operation.get("name")
         if not name:
             raise ValueError("create-task requires name")
 
-        inbox = clickup_workspace.inbox_list_id(config)
-        list_id = str(operation.get("list_id") or inbox)
-        refuse_archived(list_id, config, "create-task")
-        if list_id != inbox:
-            raise ValueError(
-                "refused: create-task may only target the Inbox list {} (got {}); "
-                "put the destination in a 'Proposed folder:' line instead".format(inbox, list_id)
-            )
+        assignee_id = resolve_single_assignee(operation.get("assignee"), config)
+        destination = create_destination(operation, assignee_id, config)
+        list_id = destination["list_id"]
 
-        problems = clickup_workspace.description_problems(operation.get("description"))
+        problems = clickup_workspace.description_problems(
+            destination["description"], filed_in=destination["filed_in"]
+        )
         if problems:
             raise ValueError("refused create-task: " + "; ".join(problems))
 
@@ -402,9 +490,12 @@ def operation_fields(operation, config):
             "task_name": name,
             "audit_event": "clickup_task_create",
             "due_date_followup_required": operation.get("due_date_ms") is None,
-            "assignee_id": resolve_single_assignee(operation.get("assignee"), config),
+            "assignee_id": assignee_id,
             "tags": kept_tags,
             "dropped_tags": dropped_tags,
+            "description": destination["description"],
+            "route_rule": destination["rule"],
+            "route_reason": destination["reason"],
         }
 
     # Tags are only accepted where ClickUp takes them inline: on create.
@@ -487,7 +578,8 @@ def operation_payload(operation, fields, resolution, existing_description=None, 
         return {"comment_text": operation.get("comment_text")}
 
     # A missing Blocked status is recorded on the task instead of being dropped.
-    description = operation.get("description")
+    # A create's description may carry the routing line added by the writer.
+    description = fields.get("description", operation.get("description"))
     if description is None and resolution.get("needs_blocked_status"):
         description = existing_description
 
@@ -616,6 +708,8 @@ def execute_prepared_operation(operation, fields, payload, resolution, token, re
         due_date_followup_required=fields["due_date_followup_required"],
         needs_blocked_status=bool(resolution.get("needs_blocked_status")),
         dropped_tags=fields.get("dropped_tags") or [],
+        route_rule=fields.get("route_rule"),
+        route_reason=fields.get("route_reason"),
     )
 
     # Read due dates back because ClickUp may accept but normalize the value.
@@ -658,6 +752,8 @@ def execute_prepared_operation(operation, fields, payload, resolution, token, re
         "needs_blocked_status": bool(resolution.get("needs_blocked_status")),
         "assignee_change": resolution.get("assignee_change"),
         "dropped_tags": fields.get("dropped_tags") or [],
+        "route_rule": fields.get("route_rule"),
+        "route_reason": fields.get("route_reason"),
     }
 
 
@@ -843,11 +939,12 @@ def operation_from_args(args):
         "evidence": args.evidence,
     }
 
-    # Creation needs the complete initial task shape; the list is the Inbox.
+    # Creation needs the complete initial task shape and its routing evidence.
     if args.command == "create-task":
         return dict(
             common,
             list_id=args.list_id,
+            route_from=args.route_from,
             name=args.name,
             description=args.description,
             status=args.status,
@@ -905,13 +1002,22 @@ def main():
     # Add subparsers
     sub = parser.add_subparsers(dest="command", required=True)
 
-    # Create-Task: Inbox only, with a Done-when line and a proposed folder.
+    # Create-Task: the Inbox, or a subsystem list when the destination is certain.
     create = sub.add_parser("create-task")
     create.add_argument(
         "--list-id",
         help=(
-            "Must be the configured Inbox list (CAPTAIN_INBOX_LIST_ID or "
-            "the private workspace config). Defaults to it; any other list is refused."
+            "The Inbox list (the default) or one of the subsystem folder lists in the "
+            "workspace config's lists map; a subsystem list needs a 'Filed directly: "
+            "<Space>/<Folder>' description line. Projects, OPS, and archived lists are refused."
+        ),
+    )
+    create.add_argument(
+        "--route-from",
+        help=(
+            "Evidence text to route from: files directly into a subsystem list only when "
+            "the product and folder are certain, otherwise the Inbox, and adds the "
+            "matching description line."
         ),
     )
     create.add_argument("--name", required=True)
@@ -1044,6 +1150,9 @@ def main():
                 "payload": payload,
                 "execute": False,
             }
+            if fields.get("route_rule"):
+                preview["route_rule"] = fields["route_rule"]
+                preview["route_reason"] = fields["route_reason"]
             if fields.get("dropped_tags"):
                 preview["dropped_tags"] = fields["dropped_tags"]
             previews.append(preview)

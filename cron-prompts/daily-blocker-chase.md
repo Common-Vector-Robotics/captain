@@ -72,7 +72,7 @@ Hard rules:
    <evidence>` via `--execute comment-task --task-id <id> --text "Cleared: <evidence>"`
    (live audience writes it for real; shadow previews it) — status advancement stays with
    the owner/check-in flow. Task creation from this cron is limited to the ClickUp-home
-   step below (giving an unlinked blocker a task to live on, always in the Inbox) — it
+   step below (giving an unlinked blocker a task to live on, in the Inbox unless its folder is certain) — it
    never creates a separate "blocker" task when an original task already exists, under
    the ownership contract in `TOOLS.md`. Never open or chase a blocker against a
    Milestone task (its dependencies carry the risk; humans add them) or against an Inbox
@@ -143,15 +143,17 @@ Workflow:
         --clickup-task-id <matched task id>` (local state, both audiences), then continue
         into CLEAR CHECK below using that task.
       - No confident match: create a task that represents the actual work the blocker is
-        about — not a "blocker ticket" — in the Inbox, the only list Captain may create in
-        (see "ClickUp workspace structure" in `TOOLS.md`): `scripts/clickup_write.py
-        --execute create-task --list-id 1400460000001206 --name "<the work item itself, not
-        'Blocker: ...'>" --description "<Inbox description>"` (live audience executes for
-        real; shadow emits `SHADOW (would write): <would-be task> create-task in Inbox`
-        instead of executing). The description follows the Inbox template in `TOOLS.md`:
-        first line `Done when: <observable condition>`, then `Proposed folder:
+        about — not a "blocker ticket" — with `scripts/clickup_write.py --execute
+        create-task --route-from "<the evidence text>" --name "<the work item itself, not
+        'Blocker: ...'>" --description "<Inbox description>"`. The writer files it straight
+        into the subsystem folder's list only when the product and folder are certain, and
+        otherwise into the Inbox (see "ClickUp workspace structure" in `TOOLS.md`); say in
+        the Slack summary which `route_rule` fired (live audience executes for real; shadow
+        emits `SHADOW (would write): <would-be task> create-task in <Inbox or Space/Folder>
+        (<route_rule>)` instead of executing). The description follows the Inbox template in
+        `TOOLS.md`: first line `Done when: <observable condition>`, then `Proposed folder:
         <Space>/<Folder>` (name two folders when unsure — `Proposed folder: A or B`),
-        `Proposed owner:`, and the evidence. Humans move the task out of the Inbox. If the
+        `Proposed owner:`, and the evidence. Humans move Inbox tasks to their folder. If the
         blocker's `owner` is in the identity map (the private workspace config at `$CAPTAIN_CLICKUP_WORKSPACE_CONFIG`), add
         exactly one `--assignee <name or id>`; otherwise leave it unassigned and name the
         folder owner as `Proposed owner:`. Never guess a person the writer refuses. No due
