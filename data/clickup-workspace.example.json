@@ -1,9 +1,36 @@
 {
-  "_comment": "Schema example for the private workspace config. Copy it outside the repo, replace the placeholder people, ids, and folder owners with real ones, and set CAPTAIN_CLICKUP_WORKSPACE_CONFIG to its path. The ClickUp writer refuses to run without that file. Space and list ids below are the 2026-09-27 workspace and are not personal. CAPTAIN_INBOX_LIST_ID overrides inbox_list_id; CAPTAIN_ARCHIVED_LIST_IDS adds to archived_list_ids and never removes from it.",
+  "_comment": "Schema example for the private workspace config. Copy it outside the repo, replace the placeholder people, ids, and folder owners with real ones, and set CAPTAIN_CLICKUP_WORKSPACE_CONFIG to its path. The ClickUp writer refuses to run without that file. Space and list ids below are the 2026-09-27 workspace and are not personal, and so is folder_keywords; `lists` maps space then folder to the subsystem lists Captain may file into directly when route_destination is certain. CAPTAIN_INBOX_LIST_ID overrides inbox_list_id; CAPTAIN_ARCHIVED_LIST_IDS adds to archived_list_ids and never removes from it.",
   "team_id": "90132441412",
   "reset_date": "2026-09-27",
   "inbox_list_id": "1400460000001206",
   "inbox_label": "OPS/Inbox",
+  "lists": {
+    "GL-1": {
+      "Structures": "1400460000001188",
+      "Chassis": "1400460000001191",
+      "Power": "1400460000001193",
+      "Battery": "1400460000001195",
+      "Harness": "1400460000001197",
+      "Sensors & Compute": "1400460000001199",
+      "Safety": "1400460000001201",
+      "Autonomy": "1400460000001203",
+      "Firmware": "1400460000001205",
+      "HMI": "1400460000001207",
+      "Integration": "1400460000001208"
+    },
+    "Ghostrunner": {
+      "Structures": "1400460000001186",
+      "Chassis": "1400460000001187",
+      "Power": "1400460000001189",
+      "Battery": "1400460000001190",
+      "Harness": "1400460000001192",
+      "Sensors & Compute": "1400460000001194",
+      "Safety": "1400460000001196",
+      "Autonomy": "1400460000001198",
+      "Firmware": "1400460000001200",
+      "Integration": "1400460000001202"
+    }
+  },
   "archived_list_ids": [
     "901326347060",
     "901327700142",
@@ -63,6 +90,116 @@
     "Autonomy": "10000004",
     "Firmware": "10000004",
     "Integration": "10000005"
+  },
+  "folder_keywords": {
+    "Structures": [
+      "frame",
+      "enclosure",
+      "bracket",
+      "panel",
+      "weldment",
+      "extrusion",
+      "sheet metal",
+      "mounting plate"
+    ],
+    "Chassis": [
+      "suspension",
+      "wheel",
+      "wheels",
+      "tire",
+      "tires",
+      "axle",
+      "drivetrain",
+      "steering",
+      "brake",
+      "brakes",
+      "gearbox"
+    ],
+    "Power": [
+      "dcdc",
+      "dc-dc",
+      "dc/dc",
+      "converter",
+      "contactor",
+      "fuse",
+      "precharge",
+      "power distribution",
+      "pdu",
+      "inverter"
+    ],
+    "Battery": [
+      "bms",
+      "cell",
+      "cells",
+      "pack",
+      "charger",
+      "charging",
+      "state of charge"
+    ],
+    "Harness": [
+      "connector",
+      "connectors",
+      "crimp",
+      "wiring",
+      "wire",
+      "loom",
+      "cable",
+      "cables",
+      "pinout",
+      "continuity"
+    ],
+    "Sensors & Compute": [
+      "lidar",
+      "camera",
+      "cameras",
+      "imu",
+      "gnss",
+      "gps",
+      "radar",
+      "ultrasonic",
+      "jetson",
+      "sensor"
+    ],
+    "Safety": [
+      "e-stop",
+      "estop",
+      "emergency stop",
+      "safety relay",
+      "safety plc",
+      "light curtain"
+    ],
+    "Autonomy": [
+      "navigation",
+      "localization",
+      "planner",
+      "path planning",
+      "perception",
+      "slam",
+      "obstacle avoidance"
+    ],
+    "Firmware": [
+      "bootloader",
+      "flashing",
+      "can bus",
+      "canbus",
+      "mcu",
+      "ota",
+      "embedded"
+    ],
+    "HMI": [
+      "display",
+      "touchscreen",
+      "screen",
+      "pendant"
+    ],
+    "Integration": [
+      "bring-up",
+      "bringup",
+      "system test",
+      "end-to-end",
+      "commissioning",
+      "field test"
+    ]
   },
   "statuses": {
     "product": [

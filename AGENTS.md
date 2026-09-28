@@ -33,9 +33,12 @@ file. In short:
   (`901313619708`) holds the Inbox (`1400460000001206`).
 - Each subsystem folder has one default owner, recorded in the private config's
   `folder_owners`; use it as the `Proposed owner:` when evidence names no one else.
-- Captain creates tasks only in the Inbox. Each description starts with `Done when:` and
-  names a `Proposed folder:`; humans file the task. Updates and comments on existing tasks
-  are allowed anywhere except the archived lists.
+- Captain creates tasks with `create-task --route-from "<the evidence text>"`. The writer
+  files straight into a subsystem folder's list only when the product and folder are
+  certain (rule `named-folder` or `keyword-owner`), otherwise into the Inbox (rule
+  `inbox`), and the Slack summary says which rule fired. Each description starts with
+  `Done when:` and names a `Proposed folder:`; humans file Inbox tasks. Updates and
+  comments on existing tasks are allowed anywhere except the archived lists.
 - Owner means exactly one native ClickUp assignee from the identity map. Reassigning
   replaces the old assignee. Unknown or departed people are held, never guessed.
 - Never create or write custom fields. Tags: only `safety` and `customer-visible`.

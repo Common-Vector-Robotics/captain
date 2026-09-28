@@ -27,7 +27,8 @@ Optional pilot filter:
 Workspace rules (read by `scripts/clickup_workspace.py`; see the next section):
 
 - `CAPTAIN_CLICKUP_WORKSPACE_CONFIG` — path to the private workspace config; when unset, `data/clickup-workspace.json` (gitignored) is used
-  (identity map, folder owners, Inbox, blocklist, statuses, tags). Keep it outside the
+  (identity map, folder owners, Inbox, subsystem `lists`, `folder_keywords`, blocklist,
+  statuses, tags). Keep it outside the
   repo. The ClickUp writer refuses to run, even for a dry run, when it is unset or the
   file is missing; read-only scripts fall back to generic rules. Schema and placeholder
   values: `data/clickup-workspace.example.json`.
@@ -66,9 +67,20 @@ risk from the dependencies. An overdue Milestone is still reported.
 
 Write rules, enforced by `scripts/clickup_write.py`:
 
-1. **Create only in the Inbox.** `create-task` targets the Inbox and refuses any other
-   list. Humans move Inbox items to their folder. Updates and comments on existing tasks
-   are allowed anywhere except the archived lists.
+1. **Create in the Inbox unless the folder is certain.** Create with `create-task
+   --route-from "<the evidence text>"`: `route_destination` in
+   `scripts/clickup_workspace.py` files the task straight into a subsystem folder's list
+   (the config's `lists` map) only when the text names the product (GL-1/GL1, Ghostrunner,
+   or AFS → GL-1, Newlab → Ghostrunner) and either names exactly one folder (rule
+   `named-folder`) or matches exactly one folder in `folder_keywords` while the assignee is
+   that folder's owner (rule `keyword-owner`); anything else goes to the Inbox (rule
+   `inbox`). The result, dry run, and audit carry `route_rule` and `route_reason`; say in
+   the Slack summary which rule fired. A direct filing carries a `Filed directly:
+   <Space>/<Folder> (<rule>)` line (added by `--route-from`, required otherwise). A routed Inbox
+   create with nothing to propose gets `Proposed folder: unresolved (<reason>; owner files
+   at triage)` instead of a refusal; only a missing `Done when:` line refuses it. Projects,
+   OPS, and archived lists are always refused. Humans move Inbox items to their folder.
+   Updates and comments on existing tasks are allowed anywhere except the archived lists.
 2. **Never write archived lists:** `901326347060`, `901327700142`, `901324583541`,
    `901326084934`, `901326085162`, `901326085192`, `901326085207`, `901326085239`,
    `901327546010`. Updates and comments on tasks in those lists are refused.
@@ -120,8 +132,9 @@ timestamped paraphrases as evidence.
 
 - `scripts/captain_db.py init`
 - `scripts/fetch_clickup_tasks.py --out <relative-output-path>`
-- `scripts/clickup_write.py --execute create-task --name <name> --description <Inbox description> [--assignee <person>] [--tag safety]`
-  — Inbox only (`--list-id` defaults to the Inbox and any other list is refused)
+- `scripts/clickup_write.py --execute create-task --route-from "<the evidence text>" --name <name> --description <Inbox description> [--assignee <person>] [--tag safety]`
+  — a subsystem folder list when certain, otherwise the Inbox (`--list-id` accepts only
+  the Inbox or a `lists` entry; batch operations take `route_from`)
 - `scripts/clickup_write.py --execute update-task --task-id <task_id> --status <status> [--assignee <person>]`
 - `scripts/clickup_write.py --execute comment-task --task-id <task_id> --text <comment_text>`
 - `scripts/clickup_write.py --execute batch --operations-file <batch.json>`
@@ -177,7 +190,8 @@ Use one batch command rather than a shell loop. The JSON input is an array (or a
 
 `assignee` is one value (a name, alias, or numeric id); a list with more than one entry is
 refused. The Inbox is an OPS list, so a new task's `status` must be an OPS status
-(`intake` in the example) or omitted to take the list default.
+(`intake` in the example) or omitted to take the list default; with `route_from` the
+destination may be a product list, so omit `status` there.
 
 The writer validates every requested status against the destination list's real statuses,
 exactly (case-insensitive) and without aliases: a status the list does not define is never

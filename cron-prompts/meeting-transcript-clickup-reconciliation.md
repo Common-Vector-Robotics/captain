@@ -193,9 +193,11 @@ addressed by an unaccepted request.
 2. Extract explicit commitments, accepted actions, status changes, blockers,
    dependencies, due dates, and definitions of done from the two-source analysis.
 3. Match each item against current tasks. Prefer updating an existing task over creating
-   a duplicate. Hold the item if more than one existing task is plausible. Every new task
-   is created in the Inbox (`create-task --list-id 1400460000001206`), the only list
-   Captain may create in; humans move it to its folder. Its description follows the Inbox
+   a duplicate. Hold the item if more than one existing task is plausible. Create every new
+   task with `create-task --route-from "<the evidence text>"`: the writer files it straight
+   into the subsystem folder's list only when the product and folder are certain, otherwise
+   into the Inbox, and humans move Inbox tasks to their folder. Say in the Slack summary
+   which `route_rule` fired for each new task. Its description follows the Inbox
    template in `TOOLS.md`: first line `Done when: <observable condition>`, then
    `Proposed folder: <Space>/<Folder>` (or `A or B` when unsure), `Proposed owner:`, and
    the evidence. The writer refuses a create without `Done when:`. Set at most one
