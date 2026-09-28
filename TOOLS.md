@@ -20,10 +20,78 @@ operator-managed symlink; never print it or expose token values.
 
 The ClickUp scripts prefer exported environment variables and otherwise load these keys from `.secrets/clickup.env` automatically. Run the documented commands directly; manual `source`/`set -a` bootstrapping is not required.
 
-Optional pilot filters:
+Optional pilot filter:
 
-- `CAPTAIN_CLICKUP_LIST_IDS` comma-separated list IDs
-- `CAPTAIN_CLICKUP_SPACE_IDS` comma-separated space IDs
+- `CAPTAIN_CLICKUP_LIST_IDS` comma-separated list IDs to read (unset reads the whole team)
+
+Workspace rules (read by `scripts/clickup_workspace.py`; see the next section):
+
+- `CAPTAIN_CLICKUP_WORKSPACE_CONFIG` — **required** path to the private workspace config
+  (identity map, folder owners, Inbox, blocklist, statuses, tags). Keep it outside the
+  repo. The ClickUp writer refuses to run, even for a dry run, when it is unset or the
+  file is missing; read-only scripts fall back to generic rules. Schema and placeholder
+  values: `data/clickup-workspace.example.json`.
+- `CAPTAIN_INBOX_LIST_ID` — overrides the Inbox list id (default `1400460000001206`)
+- `CAPTAIN_ARCHIVED_LIST_IDS` — comma-separated ids added to the archived blocklist
+
+## ClickUp workspace structure (reset 2026-09-27)
+
+Workspace `90132441412` has three spaces:
+
+- **GL-1** (`901313870897`) and **Ghostrunner** (`901313552943`) — product spaces. Each
+  subsystem is a folder with exactly one list: Structures, Chassis, Power, Battery,
+  Harness, Sensors & Compute, Safety, Autonomy, Firmware, HMI (GL-1 only), Integration,
+  Projects.
+- **OPS** (`901313619708`) — operations, including the **Inbox** list
+  (`1400460000001206`).
+
+Folder owners: each subsystem folder has one default owner (the default `Proposed
+owner:`), recorded in the private config's `folder_owners`. Projects has no default
+owner.
+
+Statuses:
+
+- Product spaces: `backlog` (open), `ready`, `in progress`, `blocked`, `in review`
+  (custom), `cancelled` (done type), `done` (closed).
+- OPS: `intake`, `planning`, `in progress`, `blocked`, `in review`, `complete`,
+  `cancelled`.
+- Scripts decide open vs finished from the ClickUp status `type` (`done` and `closed`
+  are finished); status names are only a fallback when an export has no type.
+  "Not started" means type `open` or `backlog`, `ready`, `intake`, `planning`.
+
+Milestones: each release has one Milestone task in its Integration list (for example
+"V1.1 on ground"). Humans create it and add its dependencies. Captain never creates a
+Milestone and never flags one as an owner gap, a blocker, or not-started work; it reads
+risk from the dependencies. An overdue Milestone is still reported.
+
+Write rules, enforced by `scripts/clickup_write.py`:
+
+1. **Create only in the Inbox.** `create-task` targets the Inbox and refuses any other
+   list. Humans move Inbox items to their folder. Updates and comments on existing tasks
+   are allowed anywhere except the archived lists.
+2. **Never write archived lists:** `901326347060`, `901327700142`, `901324583541`,
+   `901326084934`, `901326085162`, `901326085192`, `901326085207`, `901326085239`,
+   `901327546010`. Updates and comments on tasks in those lists are refused.
+3. **Inbox description template.** The writer refuses a create whose description does
+   not start with `Done when:` or lacks a `Proposed folder:` line:
+
+   ```text
+   Done when: <observable completion condition>
+   Proposed folder: <Space>/<Folder>   (or "A or B" when unsure)
+   Proposed owner: <name> (folder owner default)
+   Evidence: <permalink or source>
+   ```
+
+4. **One owner, native assignee only.** At most one `assignee` per task: a name, alias,
+   or numeric id from the identity map in the private workspace config. `update-task
+   --assignee` replaces the current assignee (every other assignee is removed). Unknown
+   or departed people are refused; Captain never guesses. Members marked
+   `"assignable": false` (the agent service account) are never assignees. Inbox tasks may stay unassigned; they are not owner gaps.
+5. **No custom fields.** Captain never creates or writes a custom field, an Owners
+   label, or a task type. Operations carrying `owner`, `owners`, `custom_fields`, or
+   `custom_item_id` are refused.
+6. **Tags:** only `safety` and `customer-visible`, and only on `create-task`. Other tags
+   are dropped and listed in the result's `dropped_tags`; report them.
 
 ## Google meeting ingestion
 
@@ -52,8 +120,9 @@ timestamped paraphrases as evidence.
 
 - `scripts/captain_db.py init`
 - `scripts/fetch_clickup_tasks.py --out <relative-output-path>`
-- `scripts/clickup_write.py --execute create-task --list-id <list_id> --name <name>`
-- `scripts/clickup_write.py --execute update-task --task-id <task_id> --status <status>`
+- `scripts/clickup_write.py --execute create-task --name <name> --description <Inbox description> [--assignee <person>] [--tag safety]`
+  — Inbox only (`--list-id` defaults to the Inbox and any other list is refused)
+- `scripts/clickup_write.py --execute update-task --task-id <task_id> --status <status> [--assignee <person>]`
 - `scripts/clickup_write.py --execute comment-task --task-id <task_id> --text <comment_text>`
 - `scripts/clickup_write.py --execute batch --operations-file <batch.json>`
 - `scripts/blocker_ledger.py add|update|list` — same-cycle blocker ledger (daily loop)
@@ -94,69 +163,28 @@ Use one batch command rather than a shell loop. The JSON input is an array (or a
     {
       "operation_id": "task-1",
       "command": "create-task",
-      "list_id": "901327546010",
+      "list_id": "1400460000001206",
       "name": "Investigate controller fault",
-      "status": "to do",
-      "owner": ["Name"],
+      "description": "Done when: fault root cause is written up and a fix is filed\nProposed folder: GL-1/Firmware\nProposed owner: <name> (folder owner default)\nEvidence: <Slack permalink>",
+      "status": "intake",
+      "assignee": "person-d",
+      "tags": ["safety"],
       "source": "explicit Slack request"
     }
   ]
 }
 ```
 
-Ownership goes through the `owner` key (below), never into `description` prose — that is exactly
-the anti-pattern the Owners custom-field fallback exists to remove. `owner` is a JSON array of
-name strings and is accepted on `create-task` and `update-task` operations the same way `--owner`
-is accepted on the CLI (repeatable becomes a list); it is rejected with a clear error on
-`comment-task`, which has no `list_id` to resolve it against.
+`assignee` is one value (a name, alias, or numeric id); a list with more than one entry is
+refused. The Inbox is an OPS list, so a new task's `status` must be an OPS status
+(`intake` in the example) or omitted to take the list default.
 
-The writer first validates every requested status against the destination list. `intake` maps to `to do`. A requested `blocked` status that the destination list does not support is left unchanged (`needs_blocked_status` is set on the audit record and the operation result, naming the list so it can be flagged for a human to add the status) — the task's status is never silently redirected to `to do`. Other unsupported statuses are returned in `failed` with the allowed values and are never sent to ClickUp.
-
-## Owners custom-field fallback
-
-Ownership should never live only in a task's description or free
-text. `create-task` and `update-task` both accept `--owner "<name>"` (repeatable) as a fallback
-for when the person cannot be a built-in ClickUp assignee: `--assignee` (numeric ClickUp user ID)
-is always preferred, and if both are given, `--assignee` wins and no Owners label is set.
-
-`--owner` resolves against the list's `Owners` custom **labels** field. Three cases:
-
-1. **Owners field missing on the list** → create it with this owner's label as an initial
-   option, then set it. Audited as `clickup_custom_field_create_attempt`.
-2. **Field exists and the owner's label exists** → set it. No create attempted.
-3. **Field exists but the owner's label does not** → the public ClickUp API can create a labels
-   field with initial options and can set an existing option's value, but it cannot append a
-   new option to an *existing* labels field (an open ClickUp feature request, not a gap in this
-   tooling). No ownership write happens and nothing is written into the description — instead
-   the operation result and audit record carry a `needs_owner_label` marker (`{list_id, owner,
-   owners}`), the same shape as `needs_blocked_status` above, so a cron digest can tell a human
-   to add the label option in ClickUp settings. The task/update itself still succeeds — a task
-   created without its owner label is better than no task at all.
-
-**Write shape differs by command.** `create-task`'s `POST /list/{id}/task` accepts inline
-`custom_fields` in the create body — a documented Create Task parameter — so create-task sets
-Owners that way: `custom_fields: [{"id": field_id, "value": [option_id, ...]}]`. `update-task`'s
-`PUT /task/{id}` does **not** support `custom_fields` as an update parameter (ClickUp does not
-document it there), and the actual endpoint for setting a custom field on an existing task —
-`POST /task/{id}/field/{field_id}` with `{"value": [...]}` — **overwrites** whatever option ids
-are already on the field. So update-task always reads the task's current Owners value first (from
-the same task GET already done for status resolution) and writes the **union** of the existing
-option ids and the newly resolved ones, as a second request made after the primary task write
-succeeds. Setting one owner's label never removes another owner's. If the union doesn't add anything new, no
-follow-up request is made at all. If the primary task write succeeds but this follow-up field-value
-call fails, the operation result still reports the task as succeeded (it exists) but carries an
-`owner_field_write: {attempted: true, ok: false, error: {...}}`, and a matching
-`"<operation_id>:owner-field"` entry appears in `failed` too — check `owner_field_write` on any
-`update-task` result that used `owner`, not just top-level `ok`.
-
-A list whose *pre-existing* `Owners` field is some other type (not `labels`) fails that operation
-cleanly (no mutation attempted) rather than risk corrupting the field — this check only applies
-when the field already existed before this call; an Owners field this call just created is never
-treated as wrong-typed (we requested type `labels` ourselves) or as missing one of the labels it
-was just given.
-
-A non-numeric `--assignee` value is still rejected (assignees must be numeric ClickUp user IDs),
-and the error message now points at `--owner` as the fallback.
+The writer validates every requested status against the destination list's real statuses,
+exactly (case-insensitive) and without aliases: a status the list does not define is never
+rewritten to another one. A requested `blocked` status that the destination list does not
+support is left unchanged (`needs_blocked_status` is set on the audit record and the
+operation result so the list can be flagged for a human). Other unsupported statuses are
+returned in `failed` with the allowed values and are never sent to ClickUp.
 
 Completed batches always print `{ok, succeeded, failed}` and exit zero when individual operations are known to have failed. Render that JSON directly, retry only entries in `failed` whose error has `retryable: true`, and never rerun `succeeded`. An unavailable API may leave the active write `unknown` with `retryable: false`; reconcile that task in ClickUp before retrying it.
 

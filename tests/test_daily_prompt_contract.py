@@ -34,7 +34,7 @@ def test_blocker_prompt_retains_same_cycle_contract():
         "scripts/blocker_ledger.py list",
         "scripts/fetch_clickup_tasks.py",
         "scripts/clickup_write.py --execute update-task",
-        "create-task --list-id <most relevant list>",
+        "create-task --list-id 1400460000001206",
         "pings_sent[owner_slack_id]",
         "Same-cycle check",
         "needs_task_match",
@@ -103,3 +103,38 @@ def test_daily_prompts_use_runtime_configuration_not_private_deployment_literals
         "slack_account",
     ):
         assert configured_field in prompts
+
+
+ALL_PROMPTS = (
+    "daily-morning-cycle.md",
+    "daily-blocker-chase.md",
+    "daily-bench-truth-watch.md",
+    "daily-eod-wrap.md",
+    "meeting-transcript-clickup-reconciliation.md",
+)
+INBOX = "1400460000001206"
+
+
+def test_prompts_create_only_in_the_inbox_and_never_write_owner_fields():
+    import re
+
+    for name in ALL_PROMPTS:
+        prompt = _prompt(name)
+        assert "most relevant list" not in prompt, name
+        assert "needs_owner_label" not in prompt, name
+        assert "Owners custom-labels field" not in prompt, name
+        # --owner is only allowed on the local blocker ledger, never on clickup_write.
+        for match in re.finditer(r"create-task[^`]*", prompt):
+            assert "--owner" not in match.group(0), name
+            list_ids = re.findall(r"--list-id (\S+)", match.group(0))
+            assert all(list_id == INBOX for list_id in list_ids), (name, list_ids)
+        if "create-task" in prompt:
+            assert INBOX in prompt, name
+            assert "Done when:" in prompt, name
+            assert "Proposed folder:" in prompt, name
+
+
+def test_bench_truth_selects_in_review_not_legacy_test_statuses():
+    prompt = _prompt("daily-bench-truth-watch.md")
+    assert "status `in review`" in prompt
+    assert '"In Test"' not in prompt

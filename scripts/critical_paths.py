@@ -27,6 +27,7 @@ OVERRIDES_PATH = ROOT / "data" / "critical-path-overrides.json"
 
 sys.path.insert(0, str(ROOT / "scripts"))
 from captain_db import audit  # noqa: E402
+import clickup_workspace  # noqa: E402
 
 
 # Configuration and ClickUp access
@@ -119,22 +120,13 @@ def status_name(task):
     return status.get("status") if isinstance(status, dict) else str(status)
 
 
-def status_type(task):
-    """Return ClickUp's broader status category for a task."""
-    status = task.get("status") or {}
-    return status.get("type") if isinstance(status, dict) else ""
-
-
 def is_open_task(task):
-    """Tell whether a ClickUp task still needs work."""
-    status_category = (status_type(task) or "").lower()
-    status_label = (status_name(task) or "").lower()
+    """Tell whether a ClickUp task still needs work.
 
-    # ClickUp installations can express completion in either status field.
-    return (
-        status_category not in {"closed", "done", "complete"}
-        and status_label not in {"closed", "complete", "completed", "done"}
-    )
+    The status ``type`` decides (``done``/``closed`` are finished, which
+    covers ``cancelled``); names are only a fallback when the type is missing.
+    """
+    return clickup_workspace.is_open(task, clickup_workspace.reader_config())
 
 
 def fetch_clickup_tasks(token, team_id):
@@ -282,7 +274,10 @@ def task_risk_signals(task, now):
     # Ownerless work is risky unless an owner custom field supplies the missing
     # data. Check custom fields only for ownerless tasks, preserving the original
     # short-circuit when an assignee already establishes ownership.
-    if not task.get("assignees"):
+    # Milestones and Inbox items are never owner gaps.
+    if not task.get("assignees") and not clickup_workspace.exempt_from_owner_checks(
+        task, clickup_workspace.reader_config()
+    ):
         has_owner_field = any(
             normalize(field.get("name")) in {"owner", "owners"}
             and field.get("value")

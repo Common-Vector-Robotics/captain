@@ -35,9 +35,9 @@ import daily_cycle  # noqa: E402
 
 # Owner resolution
 
-# The ClickUp custom **labels** field carries owners who cannot be real ClickUp
-# assignees. ``clickup_write.py`` implements the write side through ``--owner``
-# and ``resolve_owner_field``.
+# Legacy read path: tasks from before the 2026-09-27 reset may carry an
+# ``Owners`` custom labels field. Captain no longer writes custom fields
+# (``clickup_write.py`` refuses them); ownership is one native assignee.
 OWNERS_FIELD_NAME = "owners"
 
 
@@ -111,6 +111,11 @@ def group_by_person(tasks):
     for task in tasks:
         # This helper remains safe when callers pass an unfiltered task list.
         if not daily_context.is_open(task):
+            continue
+
+        # A Milestone is not anyone's work item; its dependencies are.
+        if daily_context.clickup_workspace.is_milestone(
+                task, daily_context.clickup_workspace.reader_config()):
             continue
 
         # Real ClickUp assignees are the authoritative ownership source.

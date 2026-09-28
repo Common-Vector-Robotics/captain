@@ -25,12 +25,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from captain_db import DB as DEFAULT_DB  # noqa: E402
 import blocker_ledger  # noqa: E402
+import clickup_workspace  # noqa: E402
 import daily_cycle  # noqa: E402
 
-# ClickUp may describe a finished task by either its display name or its broad
-# status type. Both sets are checked before a task is included in the report.
-CLOSED_NAMES = {"complete", "done", "closed", "rejected", "passed", "hired"}
-CLOSED_TYPES = {"done", "closed"}
+# ClickUp's status ``type`` decides whether a task is finished (``done`` or
+# ``closed``, which includes ``cancelled``). Names from the workspace config
+# (``CAPTAIN_CLICKUP_WORKSPACE_CONFIG``) are only a fallback without a type.
 
 
 def status_of(task):
@@ -52,9 +52,13 @@ def status_of(task):
 
 
 def is_open(task):
-    """Return whether a task is outside every known closed status."""
-    name, typ = status_of(task)
-    return name not in CLOSED_NAMES and typ not in CLOSED_TYPES
+    """Return whether a task still needs work, judged by status type first."""
+    return clickup_workspace.is_open(task, clickup_workspace.reader_config())
+
+
+def is_owner_check_exempt(task):
+    """Milestone tasks and Inbox items are never owner gaps or blockers."""
+    return clickup_workspace.exempt_from_owner_checks(task, clickup_workspace.reader_config())
 
 
 def due_local_date(task):
@@ -129,7 +133,8 @@ def build_context(clickup_path, db_path, date_str, critical_paths_path,
         elif due == today:
             due_today.append(slim_task)
 
-        if not slim_task["assignees"]:
+        # Inbox items wait for a human to file them; Milestones have no owner.
+        if not slim_task["assignees"] and not is_owner_check_exempt(t):
             owner_gaps.append(slim_task)
 
     # Add Captain's local continuity from the previous day.
