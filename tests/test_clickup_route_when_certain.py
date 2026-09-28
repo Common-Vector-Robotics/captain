@@ -218,10 +218,11 @@ def test_cli_dry_run_reports_the_route(monkeypatch, capsys):
         "--description", DONE + "\nProposed folder: Ghostrunner/Safety",
     ])
     assert clickup_write.main() == 0
-    planned = json.loads(capsys.readouterr().out)["planned_request"]
+    out = json.loads(capsys.readouterr().out)
+    planned = out["planned_request"]
     assert planned["path"] == "/list/{}/task".format(GR_SAFETY)
-    assert planned["route_rule"] == "keyword-owner"
-    assert "Safety" in planned["route_reason"]
+    assert out["route_rule"] == "keyword-owner"
+    assert "Safety" in out["route_reason"]
     assert "Filed directly: Ghostrunner/Safety (keyword-owner)" in planned["payload"]["description"]
 
 
@@ -231,7 +232,80 @@ def test_cli_dry_run_reports_the_inbox_rule(monkeypatch, capsys):
         "HMI scaling on Ghostrunner", "--description", DONE + "\nProposed folder: GL-1/HMI",
     ])
     assert clickup_write.main() == 0
-    planned = json.loads(capsys.readouterr().out)["planned_request"]
-    assert planned["path"] == "/list/{}/task".format(INBOX)
-    assert planned["route_rule"] == "inbox"
-    assert "GL-1" in planned["route_reason"]
+    out = json.loads(capsys.readouterr().out)
+    assert out["planned_request"]["path"] == "/list/{}/task".format(INBOX)
+    assert out["route_rule"] == "inbox"
+    assert "GL-1" in out["route_reason"]
+
+
+# A routed Inbox create is refused only for a missing Done-when line
+
+
+@pytest.mark.parametrize("text,assignee,why", [
+    ("HMI scaling on Ghostrunner", "person-a", "HMI exists only in GL-1"),
+    ("look into the odd noise on GL-1", "person-b", "no folder keyword matches"),
+    ("look into the odd noise", None, "names no product"),
+])
+def test_routed_inbox_create_without_a_proposal_is_unresolved_not_refused(text, assignee, why,
+                                                                          config):
+    result, fake, audits = run([create(route_from=text, assignee=assignee,
+                                       description="Done when: x")], config)
+    assert result["ok"] is True, result
+    (_, path, payload), = [call for call in fake.calls if call[0] == "POST"]
+    assert path == "/list/{}/task".format(INBOX)
+    first, second = payload["description"].splitlines()[:2]
+    assert first == "Done when: x"
+    assert second.startswith("Proposed folder: unresolved (")
+    assert why in second and second.endswith("owner files at triage)")
+    assert result["succeeded"][0]["route_rule"] == "inbox"
+    assert audits[0][1]["route_rule"] == "inbox"
+    assert why in audits[0][1]["route_reason"]
+
+
+def test_routed_create_without_done_when_is_refused_and_reports_the_route(config):
+    result, fake, audits = run([create(route_from="HMI scaling on Ghostrunner",
+                                       description="Proposed folder: GL-1/HMI")], config)
+    assert result["ok"] is False
+    failed, = result["failed"]
+    assert "Done when" in failed["error"]["message"]
+    assert failed["route_rule"] == "inbox"
+    assert "HMI" in failed["route_reason"]
+    assert fake.calls == [] and audits == []
+
+
+def test_cli_dry_run_unresolved_inbox_route_is_at_the_top_level(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", [
+        "clickup_write.py", "create-task", "--name", "HMI", "--assignee", "person-a",
+        "--route-from", "HMI scaling on Ghostrunner", "--description", "Done when: x",
+    ])
+    assert clickup_write.main() == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["route_rule"] == "inbox"
+    assert "HMI exists only in GL-1" in out["route_reason"]
+    assert out["planned_request"]["path"] == "/list/{}/task".format(INBOX)
+    assert "Proposed folder: unresolved (" in out["planned_request"]["payload"]["description"]
+
+
+def test_cli_dry_run_refusal_reports_the_route(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", [
+        "clickup_write.py", "create-task", "--name", "X", "--route-from",
+        "HMI scaling on Ghostrunner", "--description", "no done-when line",
+    ])
+    assert clickup_write.main() == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert out["route_rule"] == "inbox"
+
+
+def test_batch_dry_run_items_carry_the_route(monkeypatch, tmp_path, capsys):
+    ops = tmp_path / "ops.json"
+    ops.write_text(json.dumps([
+        create(operation_id="a", route_from="check the DCDC grounding on GL-1",
+               assignee="person-b"),
+        create(operation_id="b", route_from="HMI scaling on Ghostrunner", description="nope"),
+    ]))
+    monkeypatch.setattr(sys, "argv", ["clickup_write.py", "batch", "--operations-file", str(ops)])
+    assert clickup_write.main() == 0
+    first, second = json.loads(capsys.readouterr().out)["operations"]
+    assert first["route_rule"] == "keyword-owner"
+    assert second["ok"] is False and second["route_rule"] == "inbox"

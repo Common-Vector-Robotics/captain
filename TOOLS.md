@@ -76,7 +76,9 @@ Write rules, enforced by `scripts/clickup_write.py`:
    that folder's owner (rule `keyword-owner`); anything else goes to the Inbox (rule
    `inbox`). The result, dry run, and audit carry `route_rule` and `route_reason`; say in
    the Slack summary which rule fired. A direct filing carries a `Filed directly:
-   <Space>/<Folder> (<rule>)` line (added by `--route-from`, required otherwise). Projects,
+   <Space>/<Folder> (<rule>)` line (added by `--route-from`, required otherwise). A routed Inbox
+   create with nothing to propose gets `Proposed folder: unresolved (<reason>; owner files
+   at triage)` instead of a refusal; only a missing `Done when:` line refuses it. Projects,
    OPS, and archived lists are always refused. Humans move Inbox items to their folder.
    Updates and comments on existing tasks are allowed anywhere except the archived lists.
 2. **Never write archived lists:** `901326347060`, `901327700142`, `901324583541`,

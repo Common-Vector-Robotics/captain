@@ -330,6 +330,23 @@ def _replace_marker_line(description, prefix, line):
     return "\n".join(lines)
 
 
+class CreateRefused(ValueError):
+    """A create-task refusal that still reports the route it computed."""
+
+    def __init__(self, message, route_rule=None, route_reason=None):
+        super().__init__(message)
+        self.route_rule = route_rule
+        self.route_reason = route_reason
+
+
+def route_fields(source):
+    """Return ``{"route_rule", "route_reason"}`` from fields or a refusal, else ``{}``."""
+    get = source.get if isinstance(source, dict) else lambda key: getattr(source, key, None)
+    if not get("route_rule"):
+        return {}
+    return {"route_rule": get("route_rule"), "route_reason": get("route_reason")}
+
+
 def create_destination(operation, assignee_id, config):
     """Choose and check a create-task destination list.
 
@@ -367,10 +384,11 @@ def create_destination(operation, assignee_id, config):
 
     route = clickup_workspace.route_details(route_from, assignee_id, config)
     if requested and requested != route["list_id"]:
-        raise ValueError(
+        raise CreateRefused(
             "refused: route_from chose list {} ({}: {}) but list_id is {}; drop one".format(
                 route["list_id"], route["rule"], route["reason"], requested
-            )
+            ),
+            route["rule"], route["reason"],
         )
 
     if route["rule"] == clickup_workspace.ROUTE_INBOX:
@@ -381,10 +399,14 @@ def create_destination(operation, assignee_id, config):
             line.strip().casefold().startswith(clickup_workspace.PROPOSED_FOLDER_PREFIX)
             for line in description.splitlines()
         )
-        if not has_folder_line and route["proposal"]:
+        if not has_folder_line:
+            # A routed Inbox create is never refused for want of a folder: when
+            # nothing can be proposed, say so and let the owner file it at triage.
+            proposal = route["proposal"] or "unresolved ({}; owner files at triage)".format(
+                route["reason"])
             description = _replace_marker_line(
                 description, clickup_workspace.PROPOSED_FOLDER_PREFIX,
-                "Proposed folder: {}".format(route["proposal"]),
+                "Proposed folder: {}".format(proposal),
             )
         return {"list_id": route["list_id"], "filed_in": None,
                 "description": description if operation.get("description") is not None else None,
@@ -480,7 +502,8 @@ def operation_fields(operation, config):
             destination["description"], filed_in=destination["filed_in"]
         )
         if problems:
-            raise ValueError("refused create-task: " + "; ".join(problems))
+            raise CreateRefused("refused create-task: " + "; ".join(problems),
+                                destination["rule"], destination["reason"])
 
         kept_tags, dropped_tags = clickup_workspace.filter_tags(operation.get("tags"), config)
         return {
@@ -834,20 +857,20 @@ def execute_batch(operations, token, request_fn=request, audit_fn=audit, config=
                 "unavailable": error.as_error(),
             }
         except ValueError as error:
-            failed.append({
+            failed.append(dict({
                 "operation_id": operation["operation_id"],
                 "task_name": operation.get("name"),
                 "error": {"message": str(error)},
-            })
+            }, **route_fields(error)))
             continue
 
         if validation_error:
             validation_error["retryable"] = True
-            failed.append({
+            failed.append(dict({
                 "operation_id": operation["operation_id"],
                 "task_name": fields["task_name"],
                 "error": validation_error,
-            })
+            }, **route_fields(fields)))
             continue
 
         prepared.append((operation, fields, payload, resolution))
@@ -867,24 +890,24 @@ def execute_batch(operations, token, request_fn=request, audit_fn=audit, config=
         except ClickUpRequestError as error:
             error_data = error.as_error(fields["task_name"])
             error_data["retryable"] = True
-            failed.append({
+            failed.append(dict({
                 "operation_id": operation["operation_id"],
                 "task_name": fields["task_name"],
                 "error": error_data,
-            })
+            }, **route_fields(fields)))
             continue
         except ClickUpUnavailableError as error:
             error_data = error.as_error()
             error_data.update({"unavailable": True, "unknown": True, "retryable": False})
-            failed.append({
+            failed.append(dict({
                 "operation_id": operation["operation_id"],
                 "task_name": fields["task_name"],
                 "error": error_data,
-            })
+            }, **route_fields(fields)))
 
             # Stop primary writes after an outage and retain all pending IDs.
             for pending_operation, pending_fields, _, _ in prepared[index + 1:]:
-                failed.append({
+                failed.append(dict({
                     "operation_id": pending_operation["operation_id"],
                     "task_name": pending_fields["task_name"],
                     "error": {
@@ -892,7 +915,7 @@ def execute_batch(operations, token, request_fn=request, audit_fn=audit, config=
                         "unavailable": True,
                         "retryable": True,
                     },
-                })
+                }, **route_fields(pending_fields)))
 
             return {
                 "ok": False,
@@ -1136,11 +1159,11 @@ def main():
             except ValueError as error:
                 # Treat CLI mistakes as normal validation failures. Letting one
                 # reach the telemetry guard would incorrectly page on a typo.
-                previews.append({
+                previews.append(dict({
                     "operation_id": operation.get("operation_id"),
                     "ok": False,
                     "error": {"message": str(error)},
-                })
+                }, **route_fields(error)))
                 continue
 
             preview = {
@@ -1160,11 +1183,13 @@ def main():
         if args.command != "batch":
             only = previews[0]
             if only.get("ok") is False:
-                print(json.dumps({"ok": False, "error": only["error"]}, indent=2))
+                print(json.dumps(dict({"ok": False, "error": only["error"]},
+                                      **route_fields(only)), indent=2))
                 return 2
             only.pop("operation_id", None)
             dropped = only.pop("dropped_tags", None)
-            result = {"dry_run": True, "planned_request": only}
+            route = {key: only.pop(key) for key in ("route_rule", "route_reason") if key in only}
+            result = dict({"dry_run": True, "planned_request": only}, **route)
             if dropped:
                 result["dropped_tags"] = dropped
             print(json.dumps(result, indent=2))
