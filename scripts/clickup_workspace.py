@@ -29,6 +29,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_CONFIG_PATH = ROOT / "data" / "clickup-workspace.example.json"
+DEFAULT_CONFIG_PATH = ROOT / "data" / "clickup-workspace.json"
 CONFIG_ENV = "CAPTAIN_CLICKUP_WORKSPACE_CONFIG"
 INBOX_ENV = "CAPTAIN_INBOX_LIST_ID"
 ARCHIVED_ENV = "CAPTAIN_ARCHIVED_LIST_IDS"
@@ -50,18 +51,23 @@ class IdentityResolutionError(ValueError):
 
 
 def config_path():
-    """Return the private config path from ``CAPTAIN_CLICKUP_WORKSPACE_CONFIG``.
+    """Return the private config path.
 
-    There is no default: an unset variable is a configuration error, so no
+    ``CAPTAIN_CLICKUP_WORKSPACE_CONFIG`` wins when set. Otherwise the host's
+    private copy at ``data/clickup-workspace.json`` is used, the same place the
+    other private data files live next to their ``.example.json``. That file is
+    gitignored. With neither present this is a configuration error, so no
     ClickUp write runs without the host's real identity map and rules.
     """
     value = os.environ.get(CONFIG_ENV, "").strip()
-    if not value:
-        raise WorkspaceConfigError(
-            "{} is not set; point it at the private ClickUp workspace config "
-            "(schema: data/clickup-workspace.example.json)".format(CONFIG_ENV)
-        )
-    return Path(value).expanduser()
+    if value:
+        return Path(value).expanduser()
+    if DEFAULT_CONFIG_PATH.is_file():
+        return DEFAULT_CONFIG_PATH
+    raise WorkspaceConfigError(
+        "no ClickUp workspace config: set {} or install the private file at {} "
+        "(schema: data/clickup-workspace.example.json)".format(CONFIG_ENV, DEFAULT_CONFIG_PATH)
+    )
 
 
 def load_workspace(path=None):
