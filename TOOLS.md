@@ -26,7 +26,7 @@ Optional pilot filter:
 
 Workspace rules (read by `scripts/clickup_workspace.py`; see the next section):
 
-- `CAPTAIN_CLICKUP_WORKSPACE_CONFIG` — **required** path to the private workspace config
+- `CAPTAIN_CLICKUP_WORKSPACE_CONFIG` — path to the private workspace config; when unset, `data/clickup-workspace.json` (gitignored) is used
   (identity map, folder owners, Inbox, blocklist, statuses, tags). Keep it outside the
   repo. The ClickUp writer refuses to run, even for a dry run, when it is unset or the
   file is missing; read-only scripts fall back to generic rules. Schema and placeholder
